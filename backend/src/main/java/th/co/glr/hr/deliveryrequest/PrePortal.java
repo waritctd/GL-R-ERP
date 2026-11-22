@@ -65,7 +65,7 @@ public class PrePortal {
 
     /** True when this call confirmed the order. */
     private boolean confirmIfNeeded(long ticketId, Long quotationId, UserPrincipal actor) {
-        if (tickets.hasPromotionFromQuotationEvent(ticketId)) {
+        if (tickets.hasPromotionFromQuotationEvent(ticketId) || rounds.isConfirmedPricingOrder(ticketId)) {
             return false;
         }
         Long chosen = quotationId;

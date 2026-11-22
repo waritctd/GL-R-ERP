@@ -29,7 +29,7 @@ public class LineNotDeliveredService {
         tickets.requireNotDeliveredRole(actor);
         List<IrLock> irs = rounds.lockTicketIrs(ticketId);
         tickets.markLineNotDelivered(ticketId, itemId, request, actor);
-        rounds.rederiveAfterNotDelivered(irs, actor);
+        rounds.rederiveAfterNotDelivered(irs, itemId, actor);
         return tickets.completeDeliveryIfDone(ticketId, actor);
     }
 
@@ -38,7 +38,7 @@ public class LineNotDeliveredService {
         tickets.requireNotDeliveredRole(actor);
         List<IrLock> irs = rounds.lockTicketIrs(ticketId);
         TicketDto after = tickets.clearLineNotDelivered(ticketId, itemId, actor);
-        rounds.rederiveAfterNotDelivered(irs, actor);
+        rounds.rederiveAfterNotDelivered(irs, itemId, actor);
         return after;
     }
 

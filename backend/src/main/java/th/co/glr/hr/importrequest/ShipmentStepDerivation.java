@@ -67,7 +67,8 @@ public final class ShipmentStepDerivation {
         String step = chosen == null ? ir.importStep() : chosen.roundStep();
         if ((unplaced || !allReceived) && (step == null
             || ImportRequestStep.indexOf(step) > ImportRequestStep.indexOf(ImportRequestStep.AWAITING_CUSTOMS))) {
-            step = step == null ? ImportRequestStep.CONTACTED : ImportRequestStep.AWAITING_CUSTOMS;
+            // no lot at all never shipped: it cannot be at customs
+            step = step == null || chosen == null ? ImportRequestStep.CONTACTED : ImportRequestStep.AWAITING_CUSTOMS;
         }
         if (ImportRequestStep.CONTACTED.equals(step)) {
             LocalDate at = ir.importStepAt() != null && ImportRequestStep.CONTACTED.equals(ir.importStep()) ? ir.importStepAt() : ir.firstIssuedDate();

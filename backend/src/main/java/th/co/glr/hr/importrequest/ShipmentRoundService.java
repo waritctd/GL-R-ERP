@@ -130,16 +130,13 @@ public class ShipmentRoundService {
             requireNotBeforeFirstIssue(e.getValue(), locked);
         }
         List<IrLock> irs = endUndoWindow(id);
+        // only the IRs whose receipt really changes: a save on a shared round must not roll up a neighbouring deal
+        Set<Long> changed = rounds.lotsByRound(List.of(id)).getOrDefault(id, List.of()).stream()
+            .filter(l -> receipts.containsKey(l.lotId())
+                && receipts.get(l.lotId()).compareTo(l.receivedQty() != null ? l.receivedQty() : l.qty()) != 0)
+            .map(ShipmentRoundDtos.ShipmentLotDto::importRequestId).collect(Collectors.toSet());
         applyReceipts(id, receipts);
-        if (!receipts.isEmpty()) {
-            // a receipt raised above 0 may be the one that completes a deal: the normal rollup and notice run once (ACTIVE deals)
-            java.util.Set<Long> done = new java.util.HashSet<>();
-            irs.stream().filter(i -> i.ticketId() != null).sorted(Comparator.comparingLong(IrLock::ticketId)).forEach(i -> {
-                if (done.add(i.ticketId()) && th.co.glr.hr.ticket.DealLifecycle.ACTIVE.equals(tickets.lockTicketForUpdate(i.ticketId()))) {
-                    irService.receiptCorrected(i.ticketId(), i.docNumber(), i.factoryName(), actor);
-                }
-            });
-        }
+        rollUpAfterReceiptChange(irs.stream().filter(i -> changed.contains(i.id())).toList(), actor); // a receipt raised above 0 may complete a deal
         if (facts != null) {
             rounds.applyFacts(id, facts, true);
         }
@@ -377,11 +374,22 @@ public class ShipmentRoundService {
         List<StepChange> changes = recomputeIrSteps(stillPlaced, actor, null).stream()
             .filter(c -> ImportRequestStep.indexOf(c.to()) > ImportRequestStep.indexOf(c.from())).toList(); // a move back is silent
         applyAftermath(onActiveDeals(changes, irs), actor, null);
+        rollUpAfterReceiptChange(irs.stream().filter(i -> i.id() == lot.importRequestId()).toList(), actor); // the 0 this lot held may have been the last wait
         if (last && !rounds.hasOwnData(id)) {
             rounds.deleteRound(id);
             return null;
         }
         return roundOrNullIfHidden(id, actor);
+    }
+
+    /** The normal rollup and notice, once per ACTIVE deal, when a receipt change may have completed it with no step change. */
+    private void rollUpAfterReceiptChange(List<IrLock> irs, UserPrincipal actor) {
+        java.util.Set<Long> done = new java.util.HashSet<>();
+        irs.stream().filter(i -> i.ticketId() != null).sorted(Comparator.comparingLong(IrLock::ticketId)).forEach(i -> {
+            if (done.add(i.ticketId()) && th.co.glr.hr.ticket.DealLifecycle.ACTIVE.equals(tickets.lockTicketForUpdate(i.ticketId()))) {
+                irService.receiptCorrected(i.ticketId(), i.docNumber(), i.factoryName(), actor);
+            }
+        });
     }
 
     /** Locks the rounds, then the import requests, of a deal's ISSUED IRs (the order every writer here uses: rounds, IRs, tickets);
@@ -396,8 +404,11 @@ public class ShipmentRoundService {
     /** After a line was marked not delivered (or cleared): the deal's IRs re-derive (an IR with nothing left to receive is done);
      * the normal rollup and its one notice follow when that completes the deal. Locks as lockTicketIrs returned. */
     @Transactional
-    public void rederiveAfterNotDelivered(List<IrLock> irs, UserPrincipal actor) {
-        applyAftermath(onActiveDeals(recomputeIrSteps(irs, actor, null), irs), actor, null);
+    public void rederiveAfterNotDelivered(List<IrLock> irs, long ticketItemId, UserPrincipal actor) {
+        // an IR with no lots holds its own step: only the IR of the marked line moves, never a neighbour on the deal
+        Set<Long> affected = rounds.irsWithLotsOrLine(irs.stream().map(IrLock::id).toList(), ticketItemId);
+        List<IrLock> mine = irs.stream().filter(i -> affected.contains(i.id())).toList();
+        applyAftermath(onActiveDeals(recomputeIrSteps(mine, actor, null), mine), actor, null);
     }
 
     /** The round for the closing read, or null when it is now held only by finished deals (hidden): the change stays

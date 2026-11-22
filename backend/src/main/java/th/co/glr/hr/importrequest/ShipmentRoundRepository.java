@@ -75,6 +75,19 @@ public class ShipmentRoundRepository {
             Map.of("t", ticketId), Long.class);
     }
 
+    /** Of these IRs, the ones that have a lot or carry this deal line. */
+    public java.util.Set<Long> irsWithLotsOrLine(List<Long> irIds, long ticketItemId) {
+        if (irIds.isEmpty()) {
+            return java.util.Set.of();
+        }
+        return new java.util.HashSet<>(jdbc.queryForList("""
+            SELECT DISTINCT i.import_request_id FROM sales.import_request_item i
+             WHERE i.import_request_id IN (:ids)
+               AND (i.ticket_item_id = :item
+                    OR EXISTS (SELECT 1 FROM sales.shipment_lot l WHERE l.import_request_id = i.import_request_id))
+            """, Map.of("ids", irIds, "item", ticketItemId), Long.class));
+    }
+
     /** Per ISSUED import-request line of the deal: how much is still wanted (the quantity marked not delivered is taken off). */
     public Map<Long, BigDecimal> wantedByItem(long ticketId) {
         Map<Long, BigDecimal> out = new java.util.HashMap<>();
@@ -102,28 +115,22 @@ public class ShipmentRoundRepository {
         }
     }
 
+    /** What the all-received notice reports: the IR lines as ordered against what physically arrived. A line with no lot on a
+     * RECEIVED round (tracked before rounds) counts as arrived, less what was marked not delivered. */
     public ReceiptTotals receiptTotals(long ticketId) {
         return jdbc.queryForObject("""
-            WITH base AS (
-                SELECT i.ticket_item_id AS item, NULLIF(btrim(i.unit), '') AS unit, l.qty, COALESCE(l.received_qty, l.qty) AS got
-                  FROM sales.shipment_lot l
-                  JOIN sales.import_request_item i ON i.import_request_item_id = l.import_request_item_id
-                  JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
-                  JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
-                 WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND r.import_step = 'RECEIVED'
-                UNION ALL -- a marked line counts even with no lot left
-                SELECT mi.ticket_item_id, NULLIF(btrim(mi.unit), ''), 0, 0
-                  FROM sales.import_request_item mi
-                  JOIN sales.import_request mr ON mr.import_request_id = mi.import_request_id AND mr.status = 'ISSUED'
-                  JOIN sales.ticket_item mt ON mt.item_id = mi.ticket_item_id
-                 WHERE mr.ticket_id = :t AND mt.qty_not_delivered > 0
-            ), per AS (SELECT item, SUM(qty) AS qty, SUM(got) AS got FROM base GROUP BY item)
-            -- per line: the mark covers what did not arrive, so it adds to what was ordered only beyond the lots
-            SELECT COALESCE(SUM(GREATEST(p.qty, p.got + COALESCE(t.qty_not_delivered, 0))), 0) AS planned,
-                   COALESCE(SUM(p.got), 0) AS received,
-                   (SELECT COUNT(DISTINCT COALESCE(unit, '')) FROM base) AS units, -- NULL and blank are the same "no unit"
-                   (SELECT MIN(unit) FROM base) AS unit
-              FROM per p LEFT JOIN sales.ticket_item t ON t.item_id = p.item
+            SELECT COALESCE(SUM(i.qty), 0) AS planned,
+                   COALESCE(SUM(COALESCE(g.got, GREATEST(i.qty - COALESCE(t.qty_not_delivered, 0), 0))), 0) AS received,
+                   COUNT(DISTINCT COALESCE(NULLIF(btrim(i.unit), ''), '')) AS units, -- NULL and blank are the same "no unit"
+                   MIN(NULLIF(btrim(i.unit), '')) AS unit
+              FROM sales.import_request_item i
+              JOIN sales.import_request ir ON ir.import_request_id = i.import_request_id
+              LEFT JOIN sales.ticket_item t ON t.item_id = i.ticket_item_id
+              LEFT JOIN LATERAL (SELECT SUM(COALESCE(l.received_qty, l.qty)) AS got
+                                   FROM sales.shipment_lot l
+                                   JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
+                                  WHERE l.import_request_item_id = i.import_request_item_id AND r.import_step = 'RECEIVED') g ON true
+             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED'
             """, Map.of("t", ticketId), (rs, n) -> new ReceiptTotals(rs.getBigDecimal("planned"), rs.getBigDecimal("received"), rs.getString("unit"),
                 rs.getInt("units") <= 1));
     }

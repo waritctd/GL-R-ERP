@@ -320,14 +320,50 @@ public class DeliveryRequestRepository {
             });
     }
 
-    /** The order's quotations from APPROVED on (approved, issued, sent or accepted), oldest first. */
+    /** Recording ACCEPTED moves only the pricing request: the deal itself is an order from ORDER_RECEIVED on. */
+    private static final String ACCEPTED_PRICING = "((origin = 'PRICING_REQUEST' OR (origin IS NULL AND pricing_request_id IS NOT NULL))"
+        + " AND doc_status = 'ACCEPTED')"; // both writers of a pricing-request quotation; a NULL origin is CustomerQuotationService's
+
+    private static final String PRICING_ORDER = "(" + ACCEPTED_PRICING + " AND ticket_id IN"
+        + " (SELECT ticket_id FROM sales.ticket WHERE sales_stage IN ('"
+        + String.join("','", th.co.glr.hr.ticket.DealStage.ORDER.subList(
+            th.co.glr.hr.ticket.DealStage.indexOf(th.co.glr.hr.ticket.DealStage.ORDER_RECEIVED), th.co.glr.hr.ticket.DealStage.ORDER.size()))
+        + "')))";
+
+    /** A quotation an order can be delivered against: a direct one from APPROVED on, or the accepted pricing-request one of a confirmed order. */
+    private static final String ORDER_QUOTATION = "((origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED','ISSUED','SENT','ACCEPTED'))"
+        + " OR " + PRICING_ORDER + ")";
+
+    /** The order came through a pricing request, the customer accepted it and the deal is an order: nothing is left to confirm. */
+    public boolean isConfirmedPricingOrder(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM sales.quotation WHERE ticket_id = :t AND " + PRICING_ORDER + ")",
+            Map.of("t", ticketId), Boolean.class));
+    }
+
+    /** The customer accepted a pricing-request quotation, whatever stage the deal is at. */
+    public boolean hasAcceptedPricingQuotation(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM sales.quotation WHERE ticket_id = :t AND " + ACCEPTED_PRICING + ")",
+            Map.of("t", ticketId), Boolean.class));
+    }
+
+    /** A pricing-request quotation of the older writer: its PDF comes from CustomerQuotationService. */
+    public boolean isLegacyPricingQuotation(long quotationId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.quotation
+                            WHERE quotation_id = :q AND origin IS NULL AND pricing_request_id IS NOT NULL)
+            """, Map.of("q", quotationId), Boolean.class));
+    }
+
+    /** The order's quotations ({@link #ORDER_QUOTATION}), oldest first. */
     public List<ApprovedQuotationDto> approvedQuotations(long ticketId) {
         return jdbc.query("""
-            SELECT quotation_id, number, doc_status, total_amount, document_language, deposit_percent
+            SELECT quotation_id, number, doc_status, total_amount, document_language, deposit_percent, origin IS NULL AS legacy
               FROM sales.quotation
-             WHERE ticket_id = :t AND origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED','ISSUED','SENT','ACCEPTED')
+             WHERE ticket_id = :t AND %s
              ORDER BY quotation_id
-            """, Map.of("t", ticketId), (rs, n) -> {
+            """.formatted(ORDER_QUOTATION), Map.of("t", ticketId), (rs, n) -> {
                 BigDecimal sub = rs.getBigDecimal("total_amount") == null ? BigDecimal.ZERO : rs.getBigDecimal("total_amount");
                 BigDecimal total = WastageCalculator.grandTotal(sub, WastageCalculator.vat(sub, rs.getString("document_language")));
                 String status = rs.getString("doc_status");
@@ -336,15 +372,14 @@ public class DeliveryRequestRepository {
                     ? "ใบเสนอราคานี้ส่งลูกค้าแล้ว ใช้ออกใบแจ้งยอดเงินรับมัดจำไม่ได้"
                     : depositPercent != null && depositPercent == 0
                         ? "ใบเสนอราคานี้ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้" : null;
-                return new ApprovedQuotationDto(rs.getLong("quotation_id"), rs.getString("number"), total, status, blocked, null);
+                return new ApprovedQuotationDto(rs.getLong("quotation_id"), rs.getString("number"), total, status, blocked, null, rs.getBoolean("legacy"));
             });
     }
 
     /** The document number when {@code id} is an issued or approved document of this deal of that kind, else empty. */
     public java.util.Optional<String> systemDocNumber(long ticketId, String kind, long id) {
         String sql = switch (kind) {
-            case "QUOTATION" -> "SELECT number FROM sales.quotation WHERE quotation_id = :id AND ticket_id = :t"
-                + " AND origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED','ISSUED','SENT','ACCEPTED')";
+            case "QUOTATION" -> "SELECT number FROM sales.quotation WHERE quotation_id = :id AND ticket_id = :t AND " + ORDER_QUOTATION;
             case "DEPOSIT_NOTICE" -> "SELECT doc_number FROM sales.deposit_notice WHERE deposit_notice_id = :id"
                 + " AND ticket_id = :t AND status = 'ISSUED'";
             case "REMAINING_INVOICE" -> "SELECT doc_number FROM sales.remaining_invoice WHERE id = :id"
@@ -364,8 +399,7 @@ public class DeliveryRequestRepository {
     public java.util.Set<String> candidateDocKeys(long ticketId) {
         java.util.Set<String> keys = new java.util.LinkedHashSet<>();
         String[][] sources = {
-            {"QUOTATION", "SELECT quotation_id FROM sales.quotation WHERE ticket_id = :t AND origin = 'DEAL_DIRECT'"
-                + " AND doc_status IN ('APPROVED','ISSUED','SENT','ACCEPTED')"},
+            {"QUOTATION", "SELECT quotation_id FROM sales.quotation WHERE ticket_id = :t AND " + ORDER_QUOTATION},
             {"DEPOSIT_NOTICE", "SELECT deposit_notice_id FROM sales.deposit_notice WHERE ticket_id = :t AND status = 'ISSUED'"},
             {"REMAINING_INVOICE", "SELECT id FROM sales.remaining_invoice WHERE ticket_id = :t AND status = 'ISSUED'"},
             {"IMPORT_REQUEST", "SELECT import_request_id FROM sales.import_request WHERE ticket_id = :t AND status = 'ISSUED'"},

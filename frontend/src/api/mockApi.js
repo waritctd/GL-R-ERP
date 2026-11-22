@@ -3261,7 +3261,7 @@ function mockIncomingForIr(ir) {
     const product = [[item.brand, item.model].filter(Boolean).join(' ') || item.code, item.size].filter(Boolean).join(' ');
     mine.forEach(({ l, r }, i) => lots.push({
       lotId: l.lotId, product, unit: item.unit ?? null, qty: l.qty, receivedQty: r.importStep === 'RECEIVED' ? (l.receivedQty ?? l.qty) : null,
-      lotNo: i + 1, lotCount: remaining > 0 ? mine.length + 1 : mine.length, step: r.importStep,
+      lotNo: i + 1, lotCount: Number(item.qty) > mockSumQty(mine.map(({ l: x }) => x.qty)) ? mine.length + 1 : mine.length, step: r.importStep,
       expectedOn: r.facts.etaOn ?? mockImportRequestDto(ir).expectedArrivalTo ?? null, roundLabel: r.facts.label, transportMode: r.facts.transportMode,
       vessel: r.facts.vessel, voyage: r.facts.voyage, port: r.facts.port, etdActualOn: r.facts.etdActualOn, etaOn: r.facts.etaOn,
       arrivedOn: r.facts.arrivedOn, customsReleasedOn: r.facts.customsReleasedOn, contactedOn: r.contactedOn, orderedOn: r.orderedOn,
@@ -3347,7 +3347,7 @@ function mockDeriveIr(ir) {
   // ShipmentStepDerivation: unplaced quantity or a lot on a round not yet received stops short of RECEIVED (the rest is still on its
   // way); no lots keeps the IR's own step (never RECEIVED by this path); a fresh IR stays CONTACTED with its own stamp.
   let step = chosen ? chosen.x.importStep : (ir.importStep ?? 'CONTACTED');
-  if ((waiting || !allReceived) && mockImportRequestStepIndex(step) > mockImportRequestStepIndex('AWAITING_CUSTOMS')) step = 'AWAITING_CUSTOMS';
+  if ((waiting || !allReceived) && mockImportRequestStepIndex(step) > mockImportRequestStepIndex('AWAITING_CUSTOMS')) step = lots.length === 0 ? 'CONTACTED' : 'AWAITING_CUSTOMS'; // no lot at all never shipped
   let at;
   if (step === 'CONTACTED') at = ir.importStep === 'CONTACTED' && ir.importStepAt ? ir.importStepAt : (ir.firstIssuedDate ?? null);
   else at = chosen ? (chosen.x[MOCK_ROUND_DATE_KEY[chosen.x.importStep]] ?? ir.importStepAt) : ir.importStepAt;
@@ -4166,13 +4166,16 @@ function mockRoundsWrite(ticket) {
   return user;
 }
 
+const mockIsOrderStage = (ticketId) => dealStageIndex(findTicketRaw(ticketId)?.salesStage) >= dealStageIndex('ORDER_RECEIVED');
 function mockApprovedQuotationsOf(ticketId) {
   return mockDealQuotations
-    .filter((q) => q.ticketId === ticketId && (q.origin ?? 'DEAL_DIRECT') === 'DEAL_DIRECT'
+    // DeliveryRequestRepository#ORDER_QUOTATION: a direct one from APPROVED on, or the pricing-request one the customer accepted
+    .filter((q) => q.ticketId === ticketId && (((q.origin ?? 'DEAL_DIRECT') === 'DEAL_DIRECT'
       && ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'].includes(q.docStatus))
+      || (q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED' && mockIsOrderStage(ticketId))))
     .sort((a, b) => a.id - b.id)
     .map((q) => ({
-      id: q.id, number: q.number, total: q.grandTotal ?? 0, docStatus: q.docStatus,
+      id: q.id, number: q.number, total: q.grandTotal ?? 0, docStatus: q.docStatus, legacy: false,
       // DepositNoticeRepository#findGoverningQuotation: a DEAL_DIRECT quotation sources a notice when ACCEPTED, ISSUED or
       // APPROVED (not SENT); a 0% one is refused by the service.
       depositBlockedReason: !['ACCEPTED', 'ISSUED', 'APPROVED'].includes(q.docStatus)
@@ -4364,9 +4367,11 @@ function mockConfirmAndMark(ticket, quotationId, deposit, receivedOn, user) {
 }
 
 // DeliveryRequestService#unconfirmed: an old or pre-portal deal whose first send confirms the order (its lines, if any, are preliminary and the confirm replaces them).
+const mockHasAcceptedPricingQuotation = (ticketId) => mockDealQuotations.some((q) => q.ticketId === ticketId
+  && q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED');
 function mockRoundUnconfirmed(ticket) {
   const old = ticket.prePortal || dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED');
-  return Boolean(old && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE'
+  return Boolean(old && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && !(mockHasAcceptedPricingQuotation(ticket.id) && mockIsOrderStage(ticket.id))
     && !ticket.events.some((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION'));
 }
 
@@ -4388,6 +4393,7 @@ function mockApprovedWithMax(ticket) {
 function mockRoundBlockedReason(ticket, user) {
   if (!mockRoundsCanWrite(ticket, user)) return 'ฝ่ายขายเจ้าของงานเป็นผู้ขอออกใบกำกับ';
   if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return 'งานนี้ไม่ได้เปิดอยู่ ขอออกใบกำกับไม่ได้';
+  if (mockApprovedQuotationsOf(ticket.id).length === 0 && mockHasAcceptedPricingQuotation(ticket.id)) return 'ลูกค้าตอบรับใบเสนอราคาแล้ว ต้องยืนยันออเดอร์ก่อนจึงจะขอออกใบกำกับได้';
   if (mockApprovedQuotationsOf(ticket.id).length === 0) return 'ต้องมีใบเสนอราคาที่อนุมัติแล้ว';
   // An old deal is confirmed by its first send, so it has no lines to cover yet.
   if (mockRoundUnconfirmed(ticket)) return null;
@@ -11471,7 +11477,8 @@ export const api = {
           importRequestId: ir.id, docNumber: ir.docNumber, factoryName: ir.factoryName, importStep: ir.importStep,
           expectedFrom: mockImportRequestDto(ir).expectedArrivalFrom, expectedTo: mockImportRequestDto(ir).expectedArrivalTo,
           unit: oneUnit ? ((ir.items[0].unit ?? '').trim() || null) : null,
-          ordered: oneUnit ? ir.items.reduce((sum, i) => sum + mockWantedQty(i), 0) : null,
+          ordered: oneUnit ? ir.items.reduce((sum, i) => sum + Number(i.qty), 0) : null, // IncomingService: the IR as ordered
+          notDelivered: ir.items.reduce((sum, i) => sum + Number(i.qty) - mockWantedQty(i), 0),
           received: oneUnit ? lots.reduce((sum, l) => sum + (l.receivedQty ?? 0), 0) : null, lots, waiting,
         };
       });
