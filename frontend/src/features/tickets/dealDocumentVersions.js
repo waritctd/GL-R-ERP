@@ -87,17 +87,24 @@ function directBaseNumber(r) {
  * DealDocumentRegister's own note), and those rows must group with each other rather than each
  * becoming a singleton — but must not merge with a row that states a recipient.
  */
-export const groupDirectQuotations = (rows, { orderConfirmedQuotationId = null } = {}) => groupVersions(rows, {
+export const groupDirectQuotations = (rows, { orderConfirmedQuotationId = null } = {}) => {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  // A sample is never a version of a real quotation or of another sample: only its own revisions join it.
+  const sampleRootId = (r) => {
+    const parent = byId.get(r.parentQuotationId);
+    return parent?.isSample ? sampleRootId(parent) : r.id;
+  };
+  return groupVersions(rows, {
   keyOf: (r) => {
+    if (r.isSample) return `direct:sample-${sampleRootId(r)}`;
     const base = directBaseNumber(r);
     const recipient = r.recipientType || 'UNKNOWN';
-    // A sample is never a version of a real quotation, even when they share a number family.
-    const purpose = r.isSample ? ':sample' : '';
-    return base ? `direct:${base}:${recipient}${purpose}` : `direct:id-${r.id}`;
+    return base ? `direct:${base}:${recipient}` : `direct:id-${r.id}`;
   },
   versionOf: (r) => r.revisionNo,
   dateOf: (r) => r.approvedAt ?? r.createdAt,
 }).map((g) => ({ ...g, versions: inForceFirst(g.versions, orderConfirmedQuotationId) }));
+};
 
 // Head-row rank inside one direct group: lower leads. The head row is the version that governs the deal, never
 // merely the newest: confirming an order cancels the deal's open drafts, so ordering by revision alone put a

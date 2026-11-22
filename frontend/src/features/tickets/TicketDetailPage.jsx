@@ -1140,15 +1140,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const confirmedRow = dealQuotationRows.find((q) => q.id === confirm?.quotationId);
   // What confirming from `quotationId` cancels (DealQuotationRepository#cancelOtherOpenDirectQuotations).
   const openDirectRowsOtherThan = (quotationId) => dealQuotationRows.filter(
-    (q) => q.origin === 'DEAL_DIRECT' && q.id !== quotationId && (q.docStatus === 'DRAFT' || q.docStatus === 'PENDING_APPROVAL'),
+    (q) => q.origin === 'DEAL_DIRECT' && !q.isSample && q.id !== quotationId && (q.docStatus === 'DRAFT' || q.docStatus === 'PENDING_APPROVAL'),
   );
   const reviseCandidate = dealQuotationRows
-    .filter((q) => canReviseDealQuotation(user, q, orderConfirmationOf(ticket?.events)))
+    .filter((q) => !q.isSample && canReviseDealQuotation(user, q, orderConfirmationOf(ticket?.events)))
     // The server refuses a revise on a SUPERSEDED/CANCELLED request's quotation (409).
     .filter((q) => !DEAD_PRICING_REQUEST_STATUSES.has(pricingRequests.find((pr) => pr.id === q.pricingRequestId)?.status))
     .reduce((best, q) => (best == null || q.id > best.id ? q : best), null);
   const openRevisionDraft = reviseCandidate
-    ? dealQuotationRows.find((q) => q.docStatus === 'DRAFT' && q.parentQuotationId === reviseCandidate.id)
+    ? dealQuotationRows.find((q) => q.docStatus === 'DRAFT' && !q.isSample && q.parentQuotationId === reviseCandidate.id)
     : null;
   const reviseTarget = reviseCandidate
     ? { quotationId: reviseCandidate.id, number: reviseCandidate.number, openDraftId: openRevisionDraft?.id }

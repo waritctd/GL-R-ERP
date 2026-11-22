@@ -30,8 +30,10 @@ describe('dealDocumentVersions', () => {
     const groups = realBeforeSamples(groupDirectQuotations([
       { id: 1, number: 'QT-2026-0002-1', revisionNo: 1, recipientType: 'BUYER', docStatus: 'DRAFT', createdAt: '2026-11-22T01:00:00Z' },
       { id: 2, number: 'QT-2026-0002-2', revisionNo: 2, recipientType: 'BUYER', docStatus: 'DRAFT', isSample: true, createdAt: '2026-11-23T01:00:00Z' },
+      { id: 3, number: 'QT-2026-0002-3', revisionNo: 3, recipientType: 'BUYER', docStatus: 'DRAFT', isSample: true, createdAt: '2026-11-22T12:00:00Z' },
+      { id: 4, number: 'QT-2026-0002-4', revisionNo: 4, parentQuotationId: 2, recipientType: 'BUYER', docStatus: 'DRAFT', isSample: true, createdAt: '2026-11-23T02:00:00Z' },
     ]));
-    expect(groups.map((g) => g.versions.map((v) => v.id))).toEqual([[1], [2]]);
+    expect(groups.map((g) => g.versions.map((v) => v.id))).toEqual([[1], [4, 2], [3]]);
   });
 
   // Why: see groupDirectQuotations — the base is deal-wide, so the recipient identifies a document.

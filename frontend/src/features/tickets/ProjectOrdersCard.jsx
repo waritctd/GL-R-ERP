@@ -155,7 +155,7 @@ export function ProjectQuotationsByOrder({ orders, currentId, currentContent, us
         const rows = [
           ...(direct?.data ?? []).map((q) => ({ ...q, href: `/quotations/${q.id}` })),
           ...(detail?.data?.quotations ?? []).filter((q) => !seen.has(q.number)).map((q) => ({ ...q, href: null })),
-        ];
+        ].sort((a, b) => Number(a.isSample === true) - Number(b.isSample === true));
         return (
           <section key={order.ticketId} className="flex flex-col gap-2" data-testid={`order-quotations-${order.orderNo}`}>
             {heading}

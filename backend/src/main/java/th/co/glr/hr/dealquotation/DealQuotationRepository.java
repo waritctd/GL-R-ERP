@@ -114,6 +114,8 @@ public class DealQuotationRepository {
                  WHERE parent_quotation_id = :parentId
                    AND origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')
                    AND doc_status IN ('DRAFT', 'PENDING_APPROVAL')
+                   -- A sample child does not hold up a real parent's revision, or the other way round.
+                   AND is_sample = (SELECT p.is_sample FROM sales.quotation p WHERE p.quotation_id = :parentId)
             )
             """, Map.of("parentId", parentQuotationId), Boolean.class);
         return Boolean.TRUE.equals(found);

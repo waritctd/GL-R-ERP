@@ -1287,7 +1287,7 @@ export function QuotationEditorPage({ user, showToast }) {
     : (ticket?.liveDirectQuotation ?? null);
   // V204: with the parties read, only THIS party's live quotation can block (the server's lock is per party);
   // before that, every live row on the deal (the server checks all of them) as the route rule needs.
-  const dealLiveRows = [ticket?.liveDirectQuotation, ...(dealRowsQuery.data ?? []).filter((q) => q.origin === 'DEAL_DIRECT')].filter(Boolean);
+  const dealLiveRows = [ticket?.liveDirectQuotation, ...(dealRowsQuery.data ?? []).filter((q) => q.origin === 'DEAL_DIRECT' && !q.isSample)].filter(Boolean);
   const checklistLiveRows = dealParties !== undefined && (targetParty || partyParam)
     ? [pickedDealLiveQuotation].filter(Boolean)
     : dealLiveRows;

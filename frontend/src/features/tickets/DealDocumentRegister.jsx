@@ -359,7 +359,8 @@ export function DealDocumentRegister({
     // DealQuotationDto#recipientType (Round 8). An older backend omits it: undefined -> no chip (never a wrong
     // one) — the frontend deploys before the backend image.
     recipient: q.recipientType ? quotationRecipientLabel(q.recipientType).label : null,
-    meta: `ครั้งที่ ${q.revisionNo ?? 1}`,
+    // A sample shares the number family but is not a version of the real quotation.
+    meta: q.isSample ? null : `ครั้งที่ ${q.revisionNo ?? 1}`,
     // The version the order was confirmed from says so, and every row states its deposit terms in the PDF's own
     // wording, so "มัดจำเท่าไร" is answered without opening a file.
     flag: orderConfirmedQuotationId != null && Number(q.id) === Number(orderConfirmedQuotationId) ? 'ใช้ยืนยันคำสั่งซื้อ' : null,
@@ -367,7 +368,9 @@ export function DealDocumentRegister({
     sample: (
       <>
         <QuotationSampleTag quotation={q} user={user} summary={summary} showToast={showToast} />
-        <QuotationSampleMarkButton quotation={q} user={user} summary={summary} showToast={showToast} />
+        {Number(q.id) === Number(orderConfirmedQuotationId) ? null : (
+          <QuotationSampleMarkButton quotation={q} user={user} summary={summary} showToast={showToast} />
+        )}
       </>
     ),
     // Mirrors DealDirectQuotationPanel: PDF + Excel for every status.
