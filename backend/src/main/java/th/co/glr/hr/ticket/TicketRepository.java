@@ -2737,7 +2737,7 @@ public class TicketRepository {
 
     /** Per deal line an ISSUED IR line points at: the IR quantity and how much of it sits on RECEIVED rounds (lot
      * quantities as planned; a short arrival is NOT subtracted, so it can never stop a deal from being delivered). */
-    public record LineReceipt(BigDecimal irQty, BigDecimal onRounds, long receivedLots, boolean lotReturned) {}
+    public record LineReceipt(BigDecimal irQty, BigDecimal onRounds, BigDecimal arrived, long receivedLots, boolean lotReturned, boolean sameUnit) {}
     // receivedLots: the line's lots on RECEIVED rounds, INCLUDING ones that received 0 (the GOODS_RECEIVED bypass is for lines with none)
 
     /** {@code dealHasLots}: any ISSUED IR of the deal has a lot at all; without it nothing is capped (pre-portal, stock-only
@@ -2754,13 +2754,22 @@ public class TicketRepository {
                                   WHERE l.import_request_item_id = iri.import_request_item_id
                                     AND r.import_step = 'RECEIVED'
                                     AND COALESCE(l.received_qty, l.qty) > 0)), 0) AS on_rounds, -- a lot that received 0 holds nothing to deliver
+                   COALESCE(SUM((SELECT SUM(COALESCE(l4.received_qty, l4.qty)) FROM sales.shipment_lot l4
+                                   JOIN sales.shipment_round r4 ON r4.shipment_round_id = l4.shipment_round_id
+                                  WHERE l4.import_request_item_id = iri.import_request_item_id
+                                    AND r4.import_step = 'RECEIVED')), 0) AS arrived,
                    COALESCE(SUM((SELECT COUNT(*) FROM sales.shipment_lot l3
                                    JOIN sales.shipment_round r3 ON r3.shipment_round_id = l3.shipment_round_id
                                   WHERE l3.import_request_item_id = iri.import_request_item_id
                                     AND r3.import_step = 'RECEIVED')), 0) AS received_lots,
                    COALESCE(SUM((SELECT COUNT(*) FROM sales.shipment_lot l2
                                   WHERE l2.import_request_item_id = iri.import_request_item_id)), 0) AS lots,
-                   COALESCE(BOOL_OR(ti.had_returned_lot), false) AS lot_returned
+                   COALESCE(BOOL_OR(ti.had_returned_lot), false) AS lot_returned,
+                   -- a blank IR unit is the deal line's own (a portal IR copies ti.unit, usually NULL)
+                   COALESCE(BOOL_AND(COALESCE(NULLIF(btrim(iri.unit), '') IS NULL
+                                             OR regexp_replace(lower(btrim(iri.unit)), '^(pcs?|pieces?)$', 'แผ่น')
+                                                IN (regexp_replace(lower(btrim(ti.unit)), '^(pcs?|pieces?)$', 'แผ่น'),
+                                                    regexp_replace(lower(btrim(ti.raw_unit)), '^(pcs?|pieces?)$', 'แผ่น')), false)), false) AS same_unit
               FROM sales.import_request ir
               JOIN sales.import_request_item iri ON iri.import_request_id = ir.import_request_id
               LEFT JOIN sales.ticket_item ti ON ti.item_id = iri.ticket_item_id
@@ -2768,7 +2777,7 @@ public class TicketRepository {
              GROUP BY iri.ticket_item_id
             """, Map.of("t", ticketId), rs -> {
                 if (rs.getObject("item_id") != null) { // an unlinked line still counts toward dealHasLots
-                    byItem.put(rs.getLong("item_id"), new LineReceipt(rs.getBigDecimal("ir_qty"), rs.getBigDecimal("on_rounds"), rs.getLong("received_lots"), rs.getBoolean("lot_returned")));
+                    byItem.put(rs.getLong("item_id"), new LineReceipt(rs.getBigDecimal("ir_qty"), rs.getBigDecimal("on_rounds"), rs.getBigDecimal("arrived"), rs.getLong("received_lots"), rs.getBoolean("lot_returned"), rs.getBoolean("same_unit")));
                 }
                 if (rs.getLong("lots") > 0 || rs.getBoolean("lot_returned")) { // a returned last lot keeps the deal capped
                     anyLots[0] = true;

@@ -2704,8 +2704,10 @@ public class TicketService {
      * stock-only and lot-less deals behave as before). A GOODS_RECEIVED event means the goods arrived, so a line with no lot on
      * a RECEIVED round is uncapped; a line with one is capped by its received share. Without the event, a line with no receipt
      * row has no imported part available. Stock coverage counts only once the deposit is settled (the STOCK path says the
-     * same). Capped: {@code allowed = stock + max(qty - qtyFromStock, 0) * min(1, onRounds / irQty)}, to 2 places. A short
-     * arrival does not cap (planned quantity counts), or the deal could never reach FULLY_DELIVERED.
+     * same). Capped: {@code allowed = stock + max(qty - qtyFromStock, 0) * min(1, onRounds / irQty)}, to 2 places. While an IR
+     * that ordered more than the line's imported part, in the line's own unit, still has lots to come, what really arrived fills
+     * the line first: {@code stock + min(importQty, arrived)}. Once every lot is in, a short arrival does not cap (planned
+     * quantity counts), or the deal could never reach FULLY_DELIVERED.
      */
     private static BigDecimal warehouseAllowance(TicketSummaryDto s, TicketItemDto item, TicketRepository.LotReceipts receipts,
                                                  boolean goodsEvent) {
@@ -2725,6 +2727,10 @@ public class TicketService {
         }
         // the share is of the whole line (the IR still holds the marked part); the mark only lowers the ceiling
         BigDecimal importQty = nullToZero(item.qty()).subtract(declared).max(BigDecimal.ZERO);
+        if (r.sameUnit() && r.irQty().compareTo(importQty) > 0 && r.onRounds().compareTo(r.irQty()) < 0) {
+            // the extra ordered for stock is the last to arrive, not a share of every lot
+            return stock.add(r.arrived().min(importQty)).min(qty).setScale(2, java.math.RoundingMode.HALF_UP);
+        }
         BigDecimal ratio = r.irQty().signum() <= 0 ? BigDecimal.ONE
             : r.onRounds().divide(r.irQty(), 10, java.math.RoundingMode.HALF_UP).min(BigDecimal.ONE);
         return stock.add(importQty.multiply(ratio)).min(qty).setScale(2, java.math.RoundingMode.HALF_UP);

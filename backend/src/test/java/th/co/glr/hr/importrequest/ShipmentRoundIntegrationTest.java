@@ -384,6 +384,19 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         deliverFromWarehouse(ticketB, "60");
         assertThat(jdbc.queryForObject("SELECT fulfillment_status FROM sales.ticket WHERE ticket_id = :t", Map.of("t", ticketB), String.class))
             .isEqualTo("FULLY_DELIVERED");
+
+        // C: the IR orders 100 for a line of 40. Of a 50 lot only 30 arrived and 50 are still coming: what arrived fills the line.
+        long ticketC = deal(owner.id(), "RND-OVER");
+        long irC = issuedIr(ticketC, irService, "over");
+        jdbc.update("UPDATE sales.import_request_item SET qty = 100, unit = 'pcs' WHERE import_request_id = :ir", Map.of("ir", irC));
+        long in = round("RECEIVED");
+        lot(in, irC, 50);
+        jdbc.update("UPDATE sales.shipment_lot SET received_qty = 30 WHERE shipment_round_id = :r", Map.of("r", in));
+        lot(round("ORDERED"), irC, 50);
+        long itemC = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketC), Long.class);
+        assertThat(ticketService.warehouseRemaining(ticketC, owner).get(itemC)).isEqualByComparingTo("30");
+        jdbc.update("UPDATE sales.import_request_item SET unit = 'ตร.ม.' WHERE import_request_id = :ir", Map.of("ir", irC));
+        assertThat(ticketService.warehouseRemaining(ticketC, owner).get(itemC)).isEqualByComparingTo("20"); // another unit: 40 * 50 / 100
     }
 
     @Test
@@ -592,11 +605,11 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_NOTICE_ISSUED' WHERE ticket_id = :t", Map.of("t", ticketA));
         long r1 = round("RECEIVED");
         lot(r1, irA, 10);
-        assertThat(ticketService.warehouseRemaining(ticketA, owner).values()).containsExactly(new BigDecimal("5.00")); // what the dialog defaults to
-        assertRefused(() -> deliverFromWarehouse(ticketA, "6"), HttpStatus.CONFLICT); // imported part: 20 * 10 / 40 = 5
-        deliverFromWarehouse(ticketA, "5");
+        assertThat(ticketService.warehouseRemaining(ticketA, owner).values()).containsExactly(new BigDecimal("10.00")); // what the dialog defaults to
+        assertRefused(() -> deliverFromWarehouse(ticketA, "11"), HttpStatus.CONFLICT); // the IR over-orders the imported 20: the 10 that arrived fill it first
+        deliverFromWarehouse(ticketA, "10");
         jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_PAID' WHERE ticket_id = :t", Map.of("t", ticketA));
-        deliverFromWarehouse(ticketA, "20"); // settled: 20 stock + 5 imported = 25 in all
+        deliverFromWarehouse(ticketA, "20"); // settled: 20 stock + 10 imported = 30 in all
         assertRefused(() -> deliverFromWarehouse(ticketA, "1"), HttpStatus.CONFLICT);
 
         // B: a second line no IR line points at, while the first line's lot is in: nothing of it arrived

@@ -4872,9 +4872,15 @@ function mockWarehouseAllowance(ticket, item) {
   const declared = Number(item.qtyFromStock ?? 0);
   const stock = depositSettled(ticket) ? declared : 0;
   if (mine.length === 0) return Math.round(Math.min(stock, qty) * 100) / 100;
-  const ratio = irQty <= 0 ? 1 : Math.min(1, onRounds / irQty);
   // the share is of the whole line (the IR still holds the marked part); the mark only lowers the ceiling
-  return Math.round(Math.min(qty, stock + Math.max(Number(item.qty ?? 0) - declared, 0) * ratio) * 100) / 100;
+  const importQty = Math.max(Number(item.qty ?? 0) - declared, 0);
+  const unitKey = (u) => String(u ?? '').trim().toLowerCase().replace(/^(pcs?|pieces?)$/, 'แผ่น');
+  const sameUnit = mine.every((it) => unitKey(it.unit) === '' || [unitKey(item.unit), unitKey(item.rawUnit)].includes(unitKey(it.unit))); // a blank IR unit is the line's
+  const arrived = mockSumQty(receivedLotsOf.map((l) => l.receivedQty ?? l.qty));
+  const imported = sameUnit && irQty > importQty && onRounds < irQty // an over-order fills the line first
+    ? Math.min(importQty, arrived)
+    : importQty * (irQty <= 0 ? 1 : Math.min(1, onRounds / irQty));
+  return Math.round(Math.min(qty, stock + imported) * 100) / 100;
 }
 
 // TicketService#notDeliveredAllowed: what has not arrived and is not on its way (the mark replaces an earlier mark).
