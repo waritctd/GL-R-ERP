@@ -1,3 +1,4 @@
+import { LinkIrLineSheet } from './LinkIrLineSheet.jsx';
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
@@ -70,6 +71,7 @@ export function ImportRequestFactoryCard({
   // COALESCE kept the OLD value with a 200 OK and no error anywhere.
   const [emailDraft, setEmailDraft] = useState({ emailTo: row.emailTo ?? '', emailSubject: row.emailSubject ?? '', emailBody: row.emailBody ?? '' });
   const [footerOpen, setFooterOpen] = useState(false);
+  const [linking, setLinking] = useState(null);
   const [footerDraft, setFooterDraft] = useState(() => footerDraftOf(row));
   // Nit: window.confirm() replaced with the app's own ConfirmDialog pattern (see that component's own
   // Javadoc-style header — "Replaces window.confirm/window.prompt call sites").
@@ -402,11 +404,19 @@ export function ImportRequestFactoryCard({
             {it.size ? <span>{it.size}</span> : null}
             <span>{Number(it.qty).toLocaleString('en-US')} {it.unit ?? ''}</span>
             {it.note ? <span>· {it.note}</span> : null}
+            {isIssued && it.ticketItemId == null ? (
+              <span className="flex items-center gap-2 text-warning-dark" data-testid={`ir-unlinked-${it.id}`}>
+                ยังไม่อยู่ในรายการของงาน
+                {canSetLeadTime ? <Button type="button" size="sm" variant="secondary" onClick={() => setLinking(it)} data-testid={`ir-link-${it.id}`}>ผูกกับรายการของงาน</Button> : <span>· ให้ฝ่ายนำเข้าหรือ CEO ผูกให้</span>}
+              </span>
+            ) : null}
           </div>
         ))}
       </div>
 
       {documentDetails}
+
+      {linking ? <LinkIrLineSheet ticketId={ticketId} line={linking} showToast={showToast} onClose={() => setLinking(null)} onLinked={invalidate} /> : null}
 
       {emailOpen && showOrderEmail ? (
         <Modal

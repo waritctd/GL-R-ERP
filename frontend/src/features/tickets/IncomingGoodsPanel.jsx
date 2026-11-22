@@ -143,7 +143,7 @@ export function IncomingGoodsPanel({ ticketId, canMessage = false, showToast }) 
           <ul className="my-1 pl-5">
             {data.unlinked.map((g, i) => <li key={i}>{g.product} {formatQty(g.qty)}{g.unit ? ` ${g.unit}` : ''} ({g.docNumber})</li>)}
           </ul>
-          ให้แก้ใบเสนอราคาให้มีสินค้านี้ในงาน แล้วแจ้งฝ่ายนำเข้า
+          ฝ่ายนำเข้าหรือ CEO ผูกรายการเหล่านี้กับรายการของงานได้ที่การ์ดใบขอซื้อ (ถ้าไม่มีสินค้านี้ในงาน ให้แก้ใบเสนอราคาก่อน) — ฝ่ายขายดูได้อย่างเดียว
         </div>
       )}
       <div className="flex flex-col gap-4">

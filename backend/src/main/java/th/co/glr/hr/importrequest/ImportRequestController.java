@@ -188,6 +188,15 @@ public class ImportRequestController {
     /** Sets lead time on an ISSUED row (owner decision 09-18 #2) — import/CEO only. The DRAFT-stage edit for the
      * owning rep/CEO goes through PATCH .../import-requests/{id} instead
      * (UpdateImportRequestRequest#leadTimeMinDays/MaxDays). */
+    /** Import/CEO: an IR line that points at no deal line gets its deal line (the stuck-deal exit). */
+    @PostMapping("/import-requests/lines/{lineId}/link")
+    Map<String, Boolean> linkLine(@PathVariable long lineId, @RequestBody LinkLineRequest request, HttpSession session) {
+        service.linkLine(lineId, request.ticketItemId(), sessions.requireUser(session));
+        return Map.of("linked", true);
+    }
+
+    record LinkLineRequest(long ticketItemId) {}
+
     @PostMapping("/import-requests/{id}/lead-time")
     Map<String, ImportRequestDto> setLeadTime(@PathVariable long id,
             @Valid @RequestBody SetLeadTimeRequest request, HttpSession session) {

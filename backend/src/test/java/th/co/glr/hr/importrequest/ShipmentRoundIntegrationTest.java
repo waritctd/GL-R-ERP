@@ -1318,6 +1318,49 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(fulfilment(dropped.ticket)).isEqualTo("FULLY_DELIVERED");
     }
 
+    @Test
+    void linkingAnUnlinkedIrLine_releasesTheHeldDealOnce() {
+        Line l = line("LK-1");
+        receive(l, 100, 100);
+        long loose = jdbc.queryForObject("""
+            INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model)
+            VALUES (:ir, NULL, 2, 'LOOSE', '20x20', 10, 'pcs', 'Round Factory', 'Raku') RETURNING import_request_item_id""",
+            Map.of("ir", l.ir), Long.class);
+        deliverItemFromWarehouse(l.ticket, l.item, "100");
+        assertThat(fulfilment(l.ticket)).isEqualTo("PARTIALLY_DELIVERED"); // held by the unlinked line
+        assertThat(ticketService.completeDeliveryIfDone(l.ticket, importUser).summary().fulfillmentStatus()).isEqualTo("PARTIALLY_DELIVERED");
+
+        assertRefused(() -> irService.linkLine(loose, l.item, owner), HttpStatus.FORBIDDEN); // the rep cannot
+        assertRefused(() -> irService.linkLine(loose, l.item, salesManager), HttpStatus.FORBIDDEN);
+        Line other = line("LK-2"); // another deal's line
+        assertRefused(() -> irService.linkLine(loose, other.item, importUser), HttpStatus.BAD_REQUEST);
+        jdbc.update("UPDATE sales.ticket_item SET size = '60x60' WHERE item_id = :i", Map.of("i", l.item));
+        assertRefused(() -> irService.linkLine(loose, l.item, importUser), HttpStatus.CONFLICT); // another product
+        jdbc.update("UPDATE sales.ticket_item SET size = '20x20' WHERE item_id = :i", Map.of("i", l.item));
+
+        irService.linkLine(loose, l.item, importUser);
+        irService.linkLine(loose, l.item, importUser); // double submit: nothing more happens
+        assertThat(fulfilment(l.ticket)).isEqualTo("FULLY_DELIVERED");
+        assertThat(events(l.ticket, "DELIVERY_COMPLETED")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.ticket_event WHERE ticket_id = :t AND message LIKE 'ผูกรายการ%'", Map.of("t", l.ticket), Integer.class)).isEqualTo(1);
+        assertRefused(() -> irService.linkLine(loose, other.item, importUser), HttpStatus.CONFLICT); // already linked elsewhere
+
+        Line closed = line("LK-3");
+        long stray = jdbc.queryForObject("""
+            INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model)
+            VALUES (:ir, NULL, 2, 'LOOSE', '20x20', 10, 'pcs', 'Round Factory', 'Raku') RETURNING import_request_item_id""", Map.of("ir", closed.ir), Long.class);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :t", Map.of("t", closed.ticket));
+        assertRefused(() -> irService.linkLine(stray, closed.item, importUser), HttpStatus.CONFLICT);
+
+        // the legacy close path respects the hold too
+        Line legacy = line("LK-4");
+        jdbc.update("INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit) VALUES (:ir, NULL, 2, 'LOOSE', '20x20', 10, 'pcs')", Map.of("ir", legacy.ir));
+        jdbc.update("UPDATE sales.ticket SET status = 'document_issued', payment_status = NULL WHERE ticket_id = :t", Map.of("t", legacy.ticket));
+        jdbc.update("UPDATE sales.ticket SET close_confirmed_at = now() WHERE ticket_id = :t", Map.of("t", legacy.ticket));
+        assertThatThrownBy(() -> ticketService.verifyClose(legacy.ticket, ceoUser))
+            .isInstanceOf(ApiException.class).hasMessageContaining("ปิดงานไม่ได้: ยังส่งมอบครบไม่ได้");
+    }
+
     private void unlink(long irItem) {
         jdbc.update("UPDATE sales.import_request_item SET ticket_item_id = NULL WHERE import_request_item_id = :i", Map.of("i", irItem));
     }

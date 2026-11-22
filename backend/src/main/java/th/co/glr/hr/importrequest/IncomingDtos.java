@@ -32,5 +32,5 @@ public final class IncomingDtos {
                                    List<IncomingIr> irs, List<IncomingUnlinked> unlinked) {}
 
     /** An ISSUED IR line on no deal line: the deal cannot complete delivery until it is sorted out. */
-    public record IncomingUnlinked(String docNumber, String product, String unit, BigDecimal qty) {}
+    public record IncomingUnlinked(long importRequestId, long itemId, String docNumber, String product, String unit, BigDecimal qty) {}
 }

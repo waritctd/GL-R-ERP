@@ -4858,7 +4858,7 @@ function mockHasReceivedLot(ticketId) {
 function mockUnlinkedIrGoods(ticketId) {
   return mockImportRequests.filter((r) => r.ticketId === ticketId && r.status === 'ISSUED')
     .flatMap((ir) => ir.items.filter((i) => i.ticketItemId == null).map((i) => ({
-      docNumber: ir.docNumber, product: [i.brand, i.model].filter(Boolean).join(' ') || i.code,
+      importRequestId: ir.id, itemId: i.id, docNumber: ir.docNumber, product: [i.brand, i.model].filter(Boolean).join(' ') || i.code,
       unit: (i.unit ?? '').trim() || null, qty: Number(i.qty),
     })));
 }
@@ -16021,6 +16021,27 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     },
   },
   storedImportRequests: {
+    // ImportRequestService#linkLine: import/CEO give an unlinked IR line its deal line; a second identical call changes nothing.
+    async linkLine(lineId, ticketItemId) {
+      const user = requireSession();
+      if (!['import', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const ir = mockImportRequests.find((r) => r.items.some((i) => String(i.id) === String(lineId)));
+      const line = ir?.items.find((i) => String(i.id) === String(lineId));
+      if (!line || ir.ticketId == null) fail('ไม่พบรายการในใบขอซื้อของงาน', 404);
+      if (line.ticketItemId != null) {
+        if (line.ticketItemId === Number(ticketItemId)) return delay({ linked: true });
+        fail('รายการนี้ผูกกับรายการอื่นของงานแล้ว', 409);
+      }
+      const ticket = findTicketRaw(ir.ticketId);
+      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('งานนี้ไม่ได้อยู่ในสถานะที่ดำเนินการได้', 409);
+      const target = (ticket.items ?? []).find((i) => i.id === Number(ticketItemId));
+      if (!target) fail('รายการนี้ไม่ใช่รายการของงานเดียวกัน', 400);
+      const norm = (v) => String(v ?? '').toLowerCase().replace(/[\s×*]/g, '');
+      if (norm(line.size) && norm(target.size) && norm(line.size) !== norm(target.size)) fail('ขนาดไม่ตรงกัน — เลือกรายการของสินค้าเดียวกัน', 409);
+      line.ticketItemId = target.id;
+      mockCompleteDeliveryIfDone(ticket, user);
+      return delay({ linked: true });
+    },
     async createDrafts(ticketId, request) {
       const ticket = findTicketRaw(Number(ticketId));
       const user = requireOwningRepOrCeo(ticket);

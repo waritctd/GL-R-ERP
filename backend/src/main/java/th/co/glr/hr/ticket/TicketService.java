@@ -916,6 +916,11 @@ public class TicketService {
      * if the deal is not ready; returns quietly if it is. */
     private void requireClosePrerequisites(TicketSummaryDto s) {
         String st = s.status();
+        // IR goods on no deal line hold the deal open on every path, the legacy one included (it has no delivery gate of its own)
+        List<TicketRepository.UnlinkedGoods> unlinked = tickets.unlinkedGoods(s.id());
+        if (!unlinked.isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, "ปิดงานไม่ได้: " + unlinkedGoodsMessage(unlinked), Map.of("code", "UNLINKED_IR_GOODS"));
+        }
         // Legacy path: status=DOCUMENT_ISSUED — only for pre-dual-track tickets
         // (paymentStatus never set) or fully-paid ones. A mid-track ticket that
         // reached document_issued must NOT close unpaid;
@@ -2887,11 +2892,11 @@ public class TicketService {
         return completeDeliveryIfDone(ticketId, actor, "ส่งมอบครบ: ส่วนที่ไม่ได้รับของถูกบันทึกแล้ว", " (มีรายการที่ไม่ได้รับของ)");
     }
 
-    /** A revised IR dropped the goods that held the deal open: an already delivered deal completes now. */
+    /** The IR goods that held the deal open were linked or dropped: an already delivered deal completes now. */
     @Transactional
     public void completeDeliveryAfterIrRevision(long ticketId, UserPrincipal actor) {
         requireTicketLocked(ticketId);
-        completeDeliveryIfDone(ticketId, actor, "ส่งมอบครบ: IR ฉบับแก้ไขไม่มีสินค้าค้างแล้ว", "");
+        completeDeliveryIfDone(ticketId, actor, "ส่งมอบครบ: ไม่มีสินค้าใน IR ที่ค้างนอกรายการของงานแล้ว", "");
     }
 
     private TicketDto completeDeliveryIfDone(long ticketId, UserPrincipal actor, String eventNote, String noticeNote) {
@@ -2951,7 +2956,7 @@ public class TicketService {
         return "ยังส่งมอบครบไม่ได้ เพราะสินค้าใน IR ยังไม่อยู่ในรายการของงาน: "
             + goods.stream().map(g -> g.product() + " " + qtyText(g.qty()) + (g.unit() == null ? "" : " " + g.unit()) + " (" + g.docNumber() + ")")
                 .collect(java.util.stream.Collectors.joining(", "))
-            + " · ให้แก้ใบเสนอราคาให้มีสินค้านี้ในงาน แล้วแจ้งฝ่ายนำเข้า";
+            + " · ให้ฝ่ายนำเข้าหรือ CEO ผูกรายการนี้กับรายการของงานที่การ์ดใบขอซื้อ (ถ้าไม่มีสินค้านี้ในงาน ให้แก้ใบเสนอราคาก่อน)";
     }
 
     /** Whether the warehouse can still deliver something under the cap: some line has room. */
