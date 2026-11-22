@@ -1458,7 +1458,8 @@ function mockDepositNoticeHeaderAutofill(ticket, payload) {
     if (customer) {
       if (customerTaxId == null) customerTaxId = blankToNull(customer.taxId);
       if (customerAddress == null) {
-        customerAddress = blankToNull([customer.address, customer.branch].filter(Boolean).join(' '));
+        // CustomerPrintRule: a branch prints only with a tax id
+        customerAddress = blankToNull([customer.address, customerTaxId ? customer.branch : null].filter(Boolean).join(' '));
       }
     }
   }
@@ -18502,7 +18503,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         cancelReason: null, cancelledById: null, cancelledByName: null, cancelledAt: null,
         billDate: payload.billDate ?? null, paymentDueNote: payload.paymentDueNote ?? null,
         paymentAppointmentDate: null, receivedByName: null, receivedAt: null, note: payload.note ?? null,
-        customerName: customer.name, customerTaxId: customer.taxId, customerBranch: customer.branch,
+        customerName: customer.name, customerTaxId: customer.taxId, customerBranch: customer.taxId ? customer.branch : null, // CustomerPrintRule
         customerAddress: customer.address,
         totalAmount: 0,
         createdById: user.id, createdByName: user.name, createdAt: now, updatedAt: now,
@@ -18540,7 +18541,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const customer = mockCustomers.find((c) => c.id === row.customerId);
       if (customer) {
         row.customerName = customer.name; row.customerTaxId = customer.taxId;
-        row.customerBranch = customer.branch; row.customerAddress = customer.address;
+        row.customerBranch = customer.taxId ? customer.branch : null; row.customerAddress = customer.address;
       }
       if (payload.lines != null) mockWriteBillingNoteLines(row, payload.lines);
       row.updatedAt = new Date().toISOString();
