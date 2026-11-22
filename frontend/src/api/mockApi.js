@@ -3560,9 +3560,9 @@ function mockRequireFreeJobNumber(raw) {
 }
 
 /** After a job's quantities changed: its steps follow its rounds, and any undo on those rounds is reset (the shared lot path). */
-function mockSettleJob(row, user) {
+function mockSettleJob(row, user, alsoRounds = []) {
   const touched = mockShipmentRounds.filter((r) => r.lots.some((l) => l.importRequestId === row.id));
-  mockFinishLots(touched, [row.id], user);
+  mockFinishLots([...new Set([...touched, ...alsoRounds])], [row.id], user);
 }
 
 function mockJobHistory(row, user, action, before, after) {
@@ -15937,7 +15937,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       emptied.filter((r) => { try { mockRequireDeletable(r); return true; } catch { return false; } })
         .forEach((r) => mockShipmentRounds.splice(mockShipmentRounds.indexOf(r), 1)); // a round holding a document or typed facts stays
       row.items = row.items.filter((i) => i !== item);
-      mockSettleJob(row, user);
+      mockSettleJob(row, user, holding); // a shared round the removal changed loses its undo even when this job has no lot left on it
       mockJobHistory(row, user, 'IMPORT_JOB_ITEM_REMOVED', { item: item.code, qty: String(item.qty), unit: item.unit }, null);
       return delay(mockImportJobDto(row, user));
     },

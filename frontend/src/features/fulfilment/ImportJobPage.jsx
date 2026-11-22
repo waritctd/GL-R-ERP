@@ -188,7 +188,7 @@ function ImportJobPageBody({ id, showToast }) {
   const itemActions = (item) => (job.canEdit ? (
     <span className="flex flex-wrap justify-end gap-2">
       <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => startEdit(item)} data-testid={`item-edit-${item.id}`}>แก้ไข</Button>
-      {!item.locked && job.items.length > 1 ? <Button type="button" size="sm" variant="text" disabled={busy} onClick={() => setRemoving(item)}>ลบ</Button> : null}
+      {!item.locked && job.items.length > 1 ? <Button type="button" size="sm" variant="text" disabled={busy || (editItem != null && editItem !== item.id)} onClick={() => setRemoving(item)}>ลบ</Button> : null}
     </span>
   ) : null);
 

@@ -24,6 +24,20 @@ class ImportSheetParserTest {
     }
 
     @Test
+    void aContinuationRowNamingAnotherBrandMakesAMixedBlock_andACancelledGrInARemarkIsNoReceipt() throws IOException {
+        SheetBlock mixed = parse(new ImportSheetTestBook()
+            .row("IR NO.", 69461, "ยี่ห้อ", "Bode", "รายชื่อสินค้าและจำนวน", "x = 1 pcs")
+            .row("ยี่ห้อ", "Vola", "รายชื่อสินค้าและจำนวน", "y = 2 pcs")).blocks().get(0);
+        assertThat(mixed.brands()).containsExactly("Bode", "Vola");
+
+        SheetBlock cancelled = parse(new ImportSheetTestBook()
+            .row("IR NO.", 69462, "ยี่ห้อ", "Bode", "รายชื่อสินค้าและจำนวน", "x = 1 pcs", "วันที่ของถึงจริง", LocalDate.of(2026, 10, 1),
+                "หมายเหตุ", "ยกเลิก GR-2601-0001")).blocks().get(0);
+        assertThat(cancelled.facts().columns()).doesNotContainKey("gr_number");
+        assertThat(cancelled.facts().step()).isNotEqualTo(ImportRequestStep.RECEIVED);
+    }
+
+    @Test
     void aBlockIsOneShipment_withContinuationLines_mergedCells_aBanner_andNoCostRead() throws IOException {
         ParsedSheet sheet = parse(new ImportSheetTestBook()
             .row("Proforma invoice no", "September (35/40)")

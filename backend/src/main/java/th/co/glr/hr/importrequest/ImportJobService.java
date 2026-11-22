@@ -293,7 +293,8 @@ public class ImportJobService {
         }
 
         String purpose = request.purpose() == null ? meta.purpose() : requirePurpose(request.purpose());
-        String note = request.purposeNote() == null ? meta.purposeNote() : requireNote(request.purposeNote());
+        String note = request.purposeNote() == null || request.purposeNote().trim().equals(meta.purposeNote()) ? meta.purposeNote()
+            : requireNote(request.purposeNote()); // a longer note from the sheet is kept as it is; a changed one follows the printed limit
 
         Long requester = clear.contains("requesterId") ? null : request.requesterId() != null ? request.requesterId() : jobs.requesterOf(id);
         String requesterName = row.requestedByName();
@@ -490,8 +491,8 @@ public class ImportJobService {
         if (note.isEmpty()) {
             throw bad("ระบุโครงการหรือลูกค้า");
         }
-        if (note.length() > 255) {
-            throw bad("โครงการ / ลูกค้า ยาวเกิน 255 ตัวอักษร");
+        if (note.length() > 200) { // the same width the printed สั่งมาให้ field holds, so nothing is cut silently
+            throw bad("โครงการ / ลูกค้า ยาวเกิน 200 ตัวอักษร");
         }
         return note;
     }

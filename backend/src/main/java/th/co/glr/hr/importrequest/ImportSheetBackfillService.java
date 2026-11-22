@@ -149,6 +149,7 @@ class ImportSheetBackfillService {
         final List<Long> createdIrIds = new ArrayList<>();
         final List<Map<String, Object>> adopted = new ArrayList<>();
         final List<Map<String, Object>> filledInPlace = new ArrayList<>();
+        final List<Map<String, Object>> updatedRounds = new ArrayList<>();
         final List<Map<String, Object>> dealsMoved = new ArrayList<>();
         final List<Long> createdDocumentIds = new ArrayList<>();
         final List<String> sequenceBumps = new ArrayList<>();
@@ -165,6 +166,7 @@ class ImportSheetBackfillService {
             t.createdIrIds.addAll(createdIrIds);
             t.adopted.addAll(adopted);
             t.filledInPlace.addAll(filledInPlace);
+            t.updatedRounds.addAll(updatedRounds);
             t.dealsMoved.addAll(dealsMoved);
             t.createdDocumentIds.addAll(createdDocumentIds);
             t.sequenceBumps.addAll(sequenceBumps);
@@ -312,6 +314,10 @@ class ImportSheetBackfillService {
             t.roundsCreated++;
             t.createdRoundIds.add(blockRound);
         } else if (blockRound != null) {
+            Map<String, Object> was = new LinkedHashMap<>();
+            was.put("roundId", blockRound);
+            was.put("before", sheet.roundSnapshot(blockRound)); // for a rollback: the step and facts as they were before this run
+            t.updatedRounds.add(was);
             sheet.fillRound(blockRound, block.facts(), actor.id(), actor.name());
             t.roundsUpdated++;
         }
@@ -473,6 +479,7 @@ class ImportSheetBackfillService {
         s.put("createdDocumentIds", t.createdDocumentIds);
         s.put("adopted", t.adopted);
         s.put("filledInPlace", t.filledInPlace);
+        s.put("updatedRounds", t.updatedRounds);
         s.put("dealsAdvanced", t.dealsMoved);
         s.put("sequenceBumps", t.sequenceBumps);
         s.put("skipped", plan.skipped());

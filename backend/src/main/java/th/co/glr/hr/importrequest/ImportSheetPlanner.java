@@ -74,8 +74,11 @@ class ImportSheetPlanner {
     Plan plan(ParsedSheet parsed, Choices choices) {
         Map<String, FactoryConfigDto> byName = new HashMap<>();
         Map<String, List<FactoryConfigDto>> byCanonical = new HashMap<>();
+        Set<String> ambiguousExact = new HashSet<>();
         factories.findAll().forEach(f -> {
-            byName.putIfAbsent(ImportRequestService.normalizeFactoryName(f.factoryName()), f);
+            if (byName.putIfAbsent(ImportRequestService.normalizeFactoryName(f.factoryName()), f) != null) {
+                ambiguousExact.add(ImportRequestService.normalizeFactoryName(f.factoryName())); // two masters read the same: no silent pick
+            }
             byCanonical.computeIfAbsent(ImportRequestService.normalizeFactoryName(canonicalBrand(f.factoryName())), k -> new ArrayList<>()).add(f);
         });
 
@@ -96,7 +99,7 @@ class ImportSheetPlanner {
             } else if (b.brands().stream().map(x -> ImportRequestService.normalizeFactoryName(canonicalBrand(x))).distinct().count() > 1) {
                 excluded.add(new Excluded(b.firstRow(), blockName(b), "แถวในกลุ่มนี้ระบุหลายยี่ห้อ: " + String.join(", ", b.brands())));
             } else {
-                ResolvedFactory f = resolveFactory(b, byName, byCanonical, choices);
+                ResolvedFactory f = resolveFactory(b, byName, byCanonical, ambiguousExact, choices);
                 if (f == null) {
                     String label = b.brands().isEmpty() ? "block:" + b.irs().get(0).docNumber() : b.brands().get(0);
                     excluded.add(new Excluded(b.firstRow(), blockName(b), b.brands().isEmpty()
@@ -226,13 +229,16 @@ class ImportSheetPlanner {
                 } else if (!anchor.isEmpty() && !codes.isEmpty() && anchor.stream().noneMatch(codes::contains)) {
                     String base = ir.docNumber().replaceAll("-\\d{1,2}$", "");
                     String fresh = null;
+                    // a number an earlier run gave this very block is reused, so a repeat load adds nothing: look for it first
                     for (int n = 90; n <= 99 && fresh == null; n++) {
                         String candidate = base + "-" + n;
-                        if (taken.contains(candidate)) {
-                            continue;
+                        if (!taken.contains(candidate) && portal.exists(candidate) && portal.tiedTo(candidate, b.backfillKey())) {
+                            fresh = candidate;
                         }
-                        // a number an earlier run gave this very block is reused, so a repeat load adds nothing
-                        if (!portal.exists(candidate) || portal.tiedTo(candidate, b.backfillKey())) {
+                    }
+                    for (int n = 90; n <= 99 && fresh == null; n++) {
+                        String candidate = base + "-" + n;
+                        if (!taken.contains(candidate) && !portal.exists(candidate)) {
                             fresh = candidate;
                         }
                     }
@@ -281,7 +287,7 @@ class ImportSheetPlanner {
     }
 
     private ResolvedFactory resolveFactory(SheetBlock b, Map<String, FactoryConfigDto> byName,
-                                           Map<String, List<FactoryConfigDto>> byCanonical, Choices choices) {
+                                           Map<String, List<FactoryConfigDto>> byCanonical, Set<String> ambiguousExact, Choices choices) {
         String brand = b.brands().isEmpty() ? null : b.brands().get(0);
         FactoryChoice choice = choices.factoryChoices().get(brand == null ? "block:" + b.irs().get(0).docNumber() : brand);
         if (choice == null && brand != null) {
@@ -306,6 +312,9 @@ class ImportSheetPlanner {
         }
         String canonical = canonicalBrand(brand);
         // an exact name first, then the same name with or without "Group" on either side; two candidates is not a guess to make
+        if (ambiguousExact.contains(ImportRequestService.normalizeFactoryName(brand))) {
+            return null;
+        }
         FactoryConfigDto known = byName.get(ImportRequestService.normalizeFactoryName(brand));
         if (known == null) {
             List<FactoryConfigDto> same = byCanonical.getOrDefault(ImportRequestService.normalizeFactoryName(canonical), List.of());
@@ -386,7 +395,10 @@ class ImportSheetPlanner {
             return plan(ir, here ? ON_ROUND : OTHER_ROUND, null, p.id(), p.ticketId(), p.ticketCode(), null, choices);
         }
         boolean untouched = ImportRequestStep.CONTACTED.equals(lot.roundStep()) && !rounds.hasOwnData(lot.roundId());
-        return plan(ir, untouched ? ADOPT : FILL_IN_PLACE, null, p.id(), p.ticketId(), p.ticketCode(), lot.roundId(), choices);
+        IrPlan moved = plan(ir, untouched ? ADOPT : FILL_IN_PLACE, null, p.id(), p.ticketId(), p.ticketCode(), lot.roundId(), choices);
+        // the lots an ADOPT will move are part of what was reviewed: a lot that changed since is refused
+        return untouched ? withAllocation(moved, lots.stream().map(l -> l.lotId() + ":" + l.qty().stripTrailingZeros().toPlainString())
+            .sorted().collect(Collectors.joining(","))) : moved;
     }
 
     private boolean repIsSomeoneElse(SheetIr ir, PortalIr p, Choices choices) {

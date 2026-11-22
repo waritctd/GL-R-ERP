@@ -134,7 +134,7 @@ export function ImportJobSheet({ job, onClose, onSaved, showToast }) {
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field id="job-note" label="โครงการ / ลูกค้า *">
-            <input id="job-note" type="text" maxLength={255} className="min-h-11 w-full text-base" value={note} onChange={(e) => setNote(e.target.value)} />
+            <input id="job-note" type="text" maxLength={200} className="min-h-11 w-full text-base" value={note} onChange={(e) => setNote(e.target.value)} />
           </Field>
           <Field id="job-rep" label="ฝ่ายขายผู้ขอ (ไม่บังคับ)">
             <select id="job-rep" className="min-h-11 w-full text-base" value={requesterId} onChange={(e) => setRequesterId(e.target.value)}>

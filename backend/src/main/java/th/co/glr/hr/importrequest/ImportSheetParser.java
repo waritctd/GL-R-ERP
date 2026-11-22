@@ -68,6 +68,7 @@ final class ImportSheetParser {
     private static final int NOTE_LIMIT = 1000;
     private static final Pattern IR_NUMBER = Pattern.compile("^\\d{5,6}(-\\d{1,2})?$");
     private static final Pattern DATE_TOKEN = Pattern.compile("(?<!\\d)(\\d{1,2})/(\\d{1,2})/(\\d{2,4})(?!\\d)");
+    private static final Pattern CANCEL_WORDS = Pattern.compile("ยกเลิก|cancel|void|ไม่ใช้", Pattern.CASE_INSENSITIVE);
     private static final Pattern GR_NUMBER = Pattern.compile("GR-\\d{4}-\\d+", Pattern.CASE_INSENSITIVE);
     private static final Pattern QTY_AFTER_EQUALS = Pattern.compile("^\\s*([\\d,]+(?:\\.\\d+)?)\\s*(.*)$", Pattern.DOTALL);
     private static final Pattern QTY_AT_END = Pattern.compile("^(.+?)\\s+([\\d,]+(?:\\.\\d+)?)\\s+([^\\d\\s=]+)\\s*$");
@@ -353,8 +354,8 @@ final class ImportSheetParser {
                 }
             }
             String brand = text(row, BRAND);
-            if (brand != null && (no != null || brands.isEmpty())) {
-                brands.add(clean(brand));
+            if (brand != null) {
+                brands.add(clean(brand)); // a continuation row naming another brand makes a mixed block, which stays out
             }
             splitInto(proformas, text(row, PROFORMA));
             splitInto(invoices, text(row, INVOICE));
@@ -424,7 +425,9 @@ final class ImportSheetParser {
         } else {
             // a remark can only mention a GR number (for example a cancelled one): it counts when a customs or arrival date backs it
             Matcher inRemark = GR_NUMBER.matcher(String.join(" ", remarks));
-            if ((d.get(RELEASED) != null || d.get(ARRIVED) != null) && inRemark.find()) {
+            String remarkText = String.join(" ", remarks);
+            boolean cancelled = CANCEL_WORDS.matcher(remarkText).find();
+            if (!cancelled && (d.get(RELEASED) != null || d.get(ARRIVED) != null) && inRemark.find()) {
                 grNumber = inRemark.group().toUpperCase(Locale.ROOT);
             }
         }
