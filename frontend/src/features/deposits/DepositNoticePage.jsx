@@ -28,6 +28,9 @@ import {
 import { DocumentPreparerSelect } from './DocumentPreparerSelect.jsx';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
+// CustomerPrintRule#addressWithBranch: a branch prints only for a customer with a tax id (feedback #72).
+const printedCustomerAddress = (address, branch, taxId) => [address, String(taxId ?? '').trim() ? branch : null].filter(Boolean).join(' ');
+
 function money(v) {
   if (v == null) return '—';
   return Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -375,7 +378,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
       );
       if (match) {
         taxId   = taxId   || match.taxId   || '';
-        address = address || [match.address, match.branch].filter(Boolean).join(' ');
+        address = address || printedCustomerAddress(match.address, match.branch, taxId);
       }
     }
     const seeded = {
@@ -543,7 +546,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
       ...f,
       customerName:    c.name,
       customerTaxId:   c.taxId ?? '',
-      customerAddress: [c.address, c.branch].filter(Boolean).join(' '),
+      customerAddress: printedCustomerAddress(c.address, c.branch, c.taxId),
     }));
     setCsSearch('');
     clearFieldError('customerName');

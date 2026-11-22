@@ -1604,16 +1604,14 @@ public class DepositNoticeService {
         if ((customerTaxId == null || customerAddress == null) && customerId != null) {
             CustomerDto customer = customers.findById(customerId).orElse(null);
             if (customer != null) {
-                branch = blankToNull(customer.branch());
                 addressOnly = blankToNull(customer.address());
                 if (customerTaxId == null) {
                     customerTaxId = blankToNull(customer.taxId());
                 }
+                branch = th.co.glr.hr.customer.CustomerPrintRule.branch(customer.branch(), customerTaxId);
                 if (customerAddress == null) {
-                    customerAddress = List.of(customer.address(), customer.branch()).stream()
-                        .filter(v -> v != null && !v.isBlank())
-                        .reduce((a, b) -> a + " " + b)
-                        .orElse(null);
+                    customerAddress = th.co.glr.hr.customer.CustomerPrintRule.addressWithBranch(
+                        customer.address(), customer.branch(), customerTaxId);
                 }
             }
         }

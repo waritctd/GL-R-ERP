@@ -109,8 +109,8 @@ public class DepositNoticeRepository {
                    d.issue_date, d.status,
                    CASE WHEN qc.name IS NOT NULL THEN qc.name ELSE d.customer_name END AS customer_name,
                    CASE WHEN qc.name IS NOT NULL THEN qc.tax_id ELSE d.customer_tax_id END AS customer_tax_id,
-                   CASE WHEN qc.name IS NOT NULL THEN NULLIF(concat_ws(' ', NULLIF(qc.address, ''), NULLIF(qc.branch, '')), '')
-                        ELSE d.customer_address END AS customer_address,
+                   CASE WHEN qc.name IS NOT NULL THEN qc.address ELSE d.customer_address END AS customer_address,
+                   qc.branch AS quotation_customer_branch,
                    d.project_name, d.reference, d.currency,
                    d.deposit_percent, d.subtotal, d.deposit_amount,
                    d.vat_percent, d.vat_amount, d.total_payable,
@@ -137,8 +137,8 @@ public class DepositNoticeRepository {
                    d.issue_date, d.status,
                    CASE WHEN qc.name IS NOT NULL THEN qc.name ELSE d.customer_name END AS customer_name,
                    CASE WHEN qc.name IS NOT NULL THEN qc.tax_id ELSE d.customer_tax_id END AS customer_tax_id,
-                   CASE WHEN qc.name IS NOT NULL THEN NULLIF(concat_ws(' ', NULLIF(qc.address, ''), NULLIF(qc.branch, '')), '')
-                        ELSE d.customer_address END AS customer_address,
+                   CASE WHEN qc.name IS NOT NULL THEN qc.address ELSE d.customer_address END AS customer_address,
+                   qc.branch AS quotation_customer_branch,
                    d.project_name, d.reference, d.currency,
                    d.deposit_percent, d.subtotal, d.deposit_amount,
                    d.vat_percent, d.vat_amount, d.total_payable,
@@ -668,6 +668,15 @@ public class DepositNoticeRepository {
         );
     }
 
+    /** The quotation customer's address and branch, or the stored address, under the one print rule (feedback #72). */
+    private static String printedAddress(ResultSet rs) throws SQLException {
+        String address = rs.getString("customer_address");
+        String taxId = rs.getString("customer_tax_id");
+        return rs.getBoolean("customer_from_quotation")
+            ? th.co.glr.hr.customer.CustomerPrintRule.addressWithBranch(address, rs.getString("quotation_customer_branch"), taxId)
+            : th.co.glr.hr.customer.CustomerPrintRule.storedAddress(address, taxId);
+    }
+
     private DepositNoticeDto mapDoc(ResultSet rs) throws SQLException {
         Array notesArr = rs.getArray("notes");
         List<String> notes = notesArr != null
@@ -684,7 +693,7 @@ public class DepositNoticeRepository {
             rs.getString("status"),
             rs.getString("customer_name"),
             rs.getString("customer_tax_id"),
-            rs.getString("customer_address"),
+            printedAddress(rs),
             rs.getString("project_name"),
             rs.getString("reference"),
             rs.getString("currency"),
