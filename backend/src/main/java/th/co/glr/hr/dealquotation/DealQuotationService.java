@@ -2073,7 +2073,7 @@ public class DealQuotationService {
 
         // Before the replay check: a sample on an already confirmed deal must be refused, not answered as a success.
         if (requireQuotation(quotationId).isSample()) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาตัวอย่างยืนยันคำสั่งซื้อไม่ได้ เอาเครื่องหมายตัวอย่างออกก่อน");
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาสำหรับสั่งตัวอย่างยืนยันคำสั่งซื้อไม่ได้ เอาเครื่องหมายสั่งตัวอย่างออกก่อน");
         }
         if (tickets.hasPromotionFromQuotationEvent(ticketId)) {
             return promotionResult(ticketId, quotationId); // idempotent replay: no writes
@@ -2562,10 +2562,10 @@ public class DealQuotationService {
         quotations.lockTicket(ticketId);
         DealQuotationDto quotation = requireQuotation(id);
         if (isSample && !DealQuotationRepository.ORIGIN_DEAL_DIRECT.equals(quotation.origin())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ใบตัวอย่างต้องเป็นใบเสนอราคาที่สร้างจากงานโดยตรงเท่านั้น");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ใบเสนอราคาสำหรับสั่งตัวอย่างต้องเป็นใบเสนอราคาที่สร้างจากงานโดยตรงเท่านั้น");
         }
         if (QuotationStatus.SUPERSEDED.equals(quotation.docStatus()) || QuotationStatus.CANCELLED.equals(quotation.docStatus())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้ถูกแทนที่หรือยกเลิกแล้ว จึงเปลี่ยนเครื่องหมายตัวอย่างไม่ได้");
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้ถูกแทนที่หรือยกเลิกแล้ว จึงเปลี่ยนเครื่องหมายสั่งตัวอย่างไม่ได้");
         }
         if (quotation.isSample() == isSample) {
             return;
@@ -2579,7 +2579,7 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.EDITED, null, null,
-            (isSample ? "ทำเครื่องหมายใบตัวอย่าง " : "เอาเครื่องหมายใบตัวอย่างออก ") + quotation.number(),
+            (isSample ? "ทำเครื่องหมายใบเสนอราคาสำหรับสั่งตัวอย่าง " : "เอาเครื่องหมายใบเสนอราคาสำหรับสั่งตัวอย่างออก ") + quotation.number(),
             RelatedDocumentType.QUOTATION, id);
         if (!isSample) {
             // Now a real quotation: it does what a real one did when it was created or approved.
@@ -2597,14 +2597,14 @@ public class DealQuotationService {
 
     private void requireCanBecomeSample(DealQuotationDto quotation) {
         if (tickets.isOrderConfirmedFromQuotation(quotation.ticketId(), quotation.id())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงเป็นใบตัวอย่างไม่ได้");
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงเป็นใบเสนอราคาสำหรับสั่งตัวอย่างไม่ได้");
         }
         if (quotations.isUsedByBillingOrDelivery(quotation.ticketId(), quotation.id(), quotation.number())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้มีใบแจ้งมัดจำ ใบแจ้งยอดคงเหลือ หรือรอบส่งของแล้ว จึงเป็นใบตัวอย่างไม่ได้");
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้มีใบแจ้งมัดจำ ใบแจ้งยอดคงเหลือ หรือรอบส่งของแล้ว จึงเป็นใบเสนอราคาสำหรับสั่งตัวอย่างไม่ได้");
         }
         // The reused quotation prints the approver of its price source, which must stay a real quotation.
         if (quotations.isPriceSourceOfLiveQuotation(quotation.number())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้เป็นแหล่งราคาของใบเสนอราคาอื่นที่อนุมัติแล้ว จึงเป็นใบตัวอย่างไม่ได้");
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้เป็นแหล่งราคาของใบเสนอราคาอื่นที่อนุมัติแล้ว จึงเป็นใบเสนอราคาสำหรับสั่งตัวอย่างไม่ได้");
         }
     }
 
@@ -2619,10 +2619,10 @@ public class DealQuotationService {
         }
         quotations.findOtherLiveRealQuotationNumber(quotation.ticketId(), quotation.partyId(), excluded)
             .ifPresent(number -> {
-                throw new ApiException(HttpStatus.CONFLICT, "เอาเครื่องหมายตัวอย่างออกไม่ได้ เพราะมีใบเสนอราคาจริง " + number + " อยู่แล้ว");
+                throw new ApiException(HttpStatus.CONFLICT, "เอาเครื่องหมายสั่งตัวอย่างออกไม่ได้ เพราะมีใบเสนอราคาจริง " + number + " อยู่แล้ว");
             });
         if (tickets.hasPromotionFromQuotationEvent(quotation.ticketId())) {
-            throw new ApiException(HttpStatus.CONFLICT, "เอาเครื่องหมายตัวอย่างออกไม่ได้ เพราะงานนี้ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว");
+            throw new ApiException(HttpStatus.CONFLICT, "เอาเครื่องหมายสั่งตัวอย่างออกไม่ได้ เพราะงานนี้ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว");
         }
         // A real direct quotation may not sit beside a live pricing request (one pricing route per deal).
         th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLivePricingRequest(tickets, quotation.ticketId());

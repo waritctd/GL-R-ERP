@@ -81,7 +81,7 @@ class DealQuotationSampleIntegrationTest extends AbstractDealDirectQuotationInte
         DealQuotationDto sample = approvedSample(ticketId);
         assertThat(refusal(() -> quotationService.confirmOrderFromDirectQuotation(sample.id(), salesActor),
             HttpStatus.CONFLICT).getMessage())
-            .isEqualTo("ใบเสนอราคาตัวอย่างยืนยันคำสั่งซื้อไม่ได้ เอาเครื่องหมายตัวอย่างออกก่อน");
+            .isEqualTo("ใบเสนอราคาสำหรับสั่งตัวอย่างยืนยันคำสั่งซื้อไม่ได้ เอาเครื่องหมายสั่งตัวอย่างออกก่อน");
 
         DealQuotationDto real = approved(ticketId, salesActor);
         quotationService.confirmOrderFromDirectQuotation(real.id(), salesActor);

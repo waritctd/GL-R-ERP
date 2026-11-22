@@ -346,7 +346,7 @@ export function QuotationEditorPage({ user, showToast }) {
   // user; ownerEmployeeId is sent only when it names someone else.
   const [dealOwnerId, setDealOwnerId] = useState('');
   const effectiveDealOwnerId = dealOwnerId || (user?.id != null ? String(user.id) : '');
-  // A new quotation's ใบตัวอย่าง choice, sent on its first save. A saved one changes through PATCH .../sample.
+  // A new quotation's ใบเสนอราคาสำหรับสั่งตัวอย่าง choice, sent on its first save. A saved one changes through PATCH .../sample.
   const [newIsSample, setNewIsSample] = useState(false);
   // A new quotation may be a sample only for someone the server lets write the mark on this deal.
   const canMarkNewSample = !id && canManageQuotationSample(user, ticket ?? { createdById: Number(effectiveDealOwnerId) });

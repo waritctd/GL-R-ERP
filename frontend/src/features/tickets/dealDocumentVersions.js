@@ -37,6 +37,12 @@ export function sortGroupsNewestFirst(groups) {
   return [...groups].sort((a, b) => (b.sortTime - a.sortTime) || (b.sortId - a.sortId));
 }
 
+/** Real documents first, then samples, each keeping its order. */
+export function realBeforeSamples(groups) {
+  const isSample = (g) => g.versions[0]?.isSample === true;
+  return [...groups.filter((g) => !isSample(g)), ...groups.filter(isSample)];
+}
+
 /** Legacy ticket rows that are ALSO in the customer-quotation chain (same id) render once, as the chain row. */
 export function dropLegacyDuplicatedByChain(legacyRows, chainRows) {
   const chainIds = new Set(chainRows.map((r) => r.id));
@@ -85,7 +91,9 @@ export const groupDirectQuotations = (rows, { orderConfirmedQuotationId = null }
   keyOf: (r) => {
     const base = directBaseNumber(r);
     const recipient = r.recipientType || 'UNKNOWN';
-    return base ? `direct:${base}:${recipient}` : `direct:id-${r.id}`;
+    // A sample is never a version of a real quotation, even when they share a number family.
+    const purpose = r.isSample ? ':sample' : '';
+    return base ? `direct:${base}:${recipient}${purpose}` : `direct:id-${r.id}`;
   },
   versionOf: (r) => r.revisionNo,
   dateOf: (r) => r.approvedAt ?? r.createdAt,

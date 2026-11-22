@@ -22216,13 +22216,13 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const ticket = findTicketRaw(row.ticketId);
       if (user.role !== 'ceo' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (isSample && (row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT') {
-        fail('ใบตัวอย่างต้องเป็นใบเสนอราคาที่สร้างจากงานโดยตรงเท่านั้น', 400);
+        fail('ใบเสนอราคาสำหรับสั่งตัวอย่างต้องเป็นใบเสนอราคาที่สร้างจากงานโดยตรงเท่านั้น', 400);
       }
       if (['SUPERSEDED', 'CANCELLED'].includes(row.docStatus)) {
-        fail('ใบเสนอราคานี้ถูกแทนที่หรือยกเลิกแล้ว จึงเปลี่ยนเครื่องหมายตัวอย่างไม่ได้', 409);
+        fail('ใบเสนอราคานี้ถูกแทนที่หรือยกเลิกแล้ว จึงเปลี่ยนเครื่องหมายสั่งตัวอย่างไม่ได้', 409);
       }
       if (isSample && ticket.orderConfirmedQuotationId === row.id) {
-        fail('ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงเป็นใบตัวอย่างไม่ได้', 409);
+        fail('ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงเป็นใบเสนอราคาสำหรับสั่งตัวอย่างไม่ได้', 409);
       }
       row.isSample = isSample === true;
       return delay({ quotation: buildDealQuotationDto(row) });
@@ -22247,7 +22247,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if ((row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT') {
         fail('ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคา (ไม่ผ่านคำขอราคา) เท่านั้น', 409);
       }
-      if (row.isSample) fail('ใบเสนอราคาตัวอย่างยืนยันคำสั่งซื้อไม่ได้ เอาเครื่องหมายตัวอย่างออกก่อน', 409);
+      if (row.isSample) fail('ใบเสนอราคาสำหรับสั่งตัวอย่างยืนยันคำสั่งซื้อไม่ได้ เอาเครื่องหมายสั่งตัวอย่างออกก่อน', 409);
       const result = () => delay({
         result: { ticketId: ticket.id, ticket: buildTicketDetail(ticket).summary, quotation: buildDealQuotationDto(row) },
       });

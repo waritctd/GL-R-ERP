@@ -28,9 +28,9 @@ function useSetSample(quotation, showToast) {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(quotation.id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
-      showToast?.('success', res.quotation.isSample ? 'ทำเป็นใบตัวอย่างแล้ว' : 'เอาเครื่องหมายตัวอย่างออกแล้ว');
+      showToast?.('success', res.quotation.isSample ? 'ตั้งเป็นใบเสนอราคาสำหรับสั่งตัวอย่างแล้ว' : 'เอาเครื่องหมายสั่งตัวอย่างออกแล้ว');
     },
-    onError: (error) => showToast?.('error', error.message || 'เปลี่ยนเครื่องหมายตัวอย่างไม่สำเร็จ'),
+    onError: (error) => showToast?.('error', error.message || 'เปลี่ยนเครื่องหมายสั่งตัวอย่างไม่สำเร็จ'),
   });
 }
 
@@ -39,17 +39,17 @@ export function QuotationSampleTag({ quotation, user, summary, showToast }) {
   const [confirming, setConfirming] = useState(false);
   const setSample = useSetSample(quotation, showToast);
   if (!quotation.isSample) return null;
-  const tag = <StatusBadge tone="warning">ตัวอย่าง</StatusBadge>;
+  const tag = <StatusBadge tone="warning">สำหรับสั่งตัวอย่าง</StatusBadge>;
   if (!canChangeQuotationSample(user, quotation, summary)) return tag;
   return (
     <>
       <button type="button" className={TAP_TARGET} data-testid={`quotation-sample-tag-${quotation.id}`}
-        aria-label={`ใบตัวอย่าง ${quotation.number ?? ''} แตะเพื่อเอาเครื่องหมายออก`} onClick={() => setConfirming(true)}>
+        aria-label={`ใบเสนอราคาสำหรับสั่งตัวอย่าง ${quotation.number ?? ''} แตะเพื่อเอาเครื่องหมายออก`} onClick={() => setConfirming(true)}>
         {tag}
       </button>
       <ConfirmDialog
         open={confirming}
-        title="เอาเครื่องหมายตัวอย่างออก?"
+        title="เอาเครื่องหมายสั่งตัวอย่างออก?"
         message={`${quotation.number ?? 'ใบเสนอราคานี้'} จะกลับมานับเป็นใบเสนอราคาจริงของงาน`}
         confirmLabel="เอาออก"
         busy={setSample.isPending}
@@ -67,13 +67,13 @@ export function QuotationSampleMarkButton({ quotation, user, summary, showToast 
   return (
     <button type="button" className={`${TAP_TARGET} text-xs font-bold text-link`} disabled={setSample.isPending}
       data-testid={`quotation-sample-mark-${quotation.id}`} onClick={() => setSample.mutate(true)}>
-      ทำเป็นใบตัวอย่าง
+      ใช้สำหรับสั่งตัวอย่าง
     </button>
   );
 }
 
 /**
- * The editor's one line ใบตัวอย่าง switch. A saved quotation changes at once through PATCH .../sample, so it
+ * The editor's one line ใบเสนอราคาสำหรับสั่งตัวอย่าง switch. A saved quotation changes at once through PATCH .../sample, so it
  * never waits for a draft save. A new one holds the choice in `newValue` until its first save.
  */
 export function QuotationSampleSwitch({ quotation, newValue, onNewChange, canMarkNew, user, summary, showToast }) {
@@ -96,12 +96,12 @@ export function QuotationSampleSwitch({ quotation, newValue, onNewChange, canMar
       <label htmlFor="quotationIsSample" className="flex min-h-11 cursor-pointer items-center gap-2 text-sm font-bold">
         <input id="quotationIsSample" type="checkbox" role="switch" className="h-4 w-4 shrink-0" checked={checked}
           disabled={!canChange || setSample.isPending} onChange={(e) => change(e.target.checked)} />
-        ใบตัวอย่าง
+        ใบเสนอราคาสำหรับสั่งตัวอย่าง
       </label>
       {saved && quotation.looksLikeSample && !checked && canChange ? (
         <button type="button" className={`${TAP_TARGET} text-xs font-bold text-link`} disabled={setSample.isPending}
           data-testid="quotation-sample-hint" onClick={() => change(true)}>
-          นี่เป็นใบตัวอย่างไหม
+          นี่เป็นใบเสนอราคาสำหรับสั่งตัวอย่างไหม
         </button>
       ) : null}
     </div>

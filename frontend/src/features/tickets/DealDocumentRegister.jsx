@@ -26,7 +26,7 @@ import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { attachTypeLabel } from './dealTrackingMeta.js';
 import {
   dropLegacyDuplicatedByChain, groupChainQuotations, groupDepositNotices,
-  groupDirectQuotations, groupLegacyQuotations, groupRemainingInvoices, sortGroupsNewestFirst,
+  groupDirectQuotations, groupLegacyQuotations, groupRemainingInvoices, realBeforeSamples, sortGroupsNewestFirst,
 } from './dealDocumentVersions.js';
 import { isOversightReader, isSalesOwner } from './dealOwnership.js';
 
@@ -418,11 +418,11 @@ export function DealDocumentRegister({
     <DocumentGroup key={g.key} items={g.versions.map(toItem)} />
   ));
   // One list across the three quotation families, ordered by each document's newest version.
-  const quotationGroups = sortGroupsNewestFirst([
+  const quotationGroups = realBeforeSamples(sortGroupsNewestFirst([
     ...chainGroups.map((g) => ({ ...g, toItem: chainItem })),
     ...legacyGroups.map((g) => ({ ...g, toItem: legacyItem })),
     ...directGroups.map((g) => ({ ...g, toItem: directItem })),
-  ]);
+  ]));
 
   return (
     <Panel flush className="flex flex-col" title={panelTitle} actions={quotationsOnly ? quotationsAction : null} data-testid={panelTestId}>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   groupChainQuotations,
-  groupDirectQuotations, groupRemainingInvoices,
+  groupDirectQuotations, groupRemainingInvoices, realBeforeSamples,
 } from './dealDocumentVersions.js';
 
 describe('dealDocumentVersions', () => {
@@ -26,6 +26,14 @@ describe('dealDocumentVersions', () => {
   });
 
   // ── grouping is per RECIPIENT, not per base (owner ruling 2026-10-17) ──────────────────────
+  it('keeps a sample out of the real quotation\'s versions and lists it after real documents', () => {
+    const groups = realBeforeSamples(groupDirectQuotations([
+      { id: 1, number: 'QT-2026-0002-1', revisionNo: 1, recipientType: 'BUYER', docStatus: 'DRAFT', createdAt: '2026-11-22T01:00:00Z' },
+      { id: 2, number: 'QT-2026-0002-2', revisionNo: 2, recipientType: 'BUYER', docStatus: 'DRAFT', isSample: true, createdAt: '2026-11-23T01:00:00Z' },
+    ]));
+    expect(groups.map((g) => g.versions.map((v) => v.id))).toEqual([[1], [2]]);
+  });
+
   // Why: see groupDirectQuotations — the base is deal-wide, so the recipient identifies a document.
   it('splits two recipients sharing one deal family into separate documents', () => {
     const groups = groupDirectQuotations([
