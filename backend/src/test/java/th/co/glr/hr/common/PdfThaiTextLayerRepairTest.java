@@ -3,7 +3,6 @@ package th.co.glr.hr.common;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -143,9 +142,87 @@ class PdfThaiTextLayerRepairTest {
             xls = out.toByteArray();
         }
 
-        String extracted = plainReaderText(LibreOfficePdfConverter.convert(xls));
+        byte[] raw = LibreOfficePdfConverter.convert(xls);
+        String extracted = plainReaderText(raw);
 
-        assertTrue(extracted.contains(text.replaceAll("\\s", "")), extracted);
+        if (!extracted.contains(text.replaceAll("\\s", ""))) {
+            org.junit.jupiter.api.Assertions.fail(extracted + "\n" + dumpRuns(raw));
+        }
+    }
+
+    /** One line per /ActualText span: font, the span's code points, the glyph codes drawn, and each font's labels. */
+    private static String dumpRuns(byte[] pdf) throws IOException {
+        StringBuilder out = new StringBuilder();
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            for (PDPage page : doc.getPages()) {
+                COSDictionary fonts = page.getResources().getCOSObject().getCOSDictionary(COSName.FONT);
+                java.util.Set<COSName> described = new java.util.HashSet<>();
+                java.util.ArrayDeque<Boolean> sections = new java.util.ArrayDeque<>();
+                String base = "";
+                String span = null;
+                StringBuilder glyphs = new StringBuilder();
+                List<Object> tokens = new PDFStreamParser(page).parse();
+                for (int i = 0; i < tokens.size(); i++) {
+                    if (!(tokens.get(i) instanceof Operator operator)) continue;
+                    switch (operator.getName()) {
+                        case "Tf" -> {
+                            COSName name = (COSName) tokens.get(i - 2);
+                            COSDictionary font = fonts.getCOSDictionary(name);
+                            base = font.getNameAsString(COSName.BASE_FONT);
+                            if (described.add(name)) {
+                                out.append("FONT ").append(base).append(" labels:");
+                                COSStream stream = (COSStream) font.getDictionaryObject(COSName.TO_UNICODE);
+                                try (InputStream in = stream.createInputStream()) {
+                                    CMap cmap = new CMapParser().parse(new RandomAccessReadBuffer(in.readAllBytes()));
+                                    for (int code = 0; code <= 0xff; code++) {
+                                        String label = cmap.toUnicode(code);
+                                        if (label == null) continue;
+                                        out.append(String.format(" %02X=", code));
+                                        label.codePoints().forEach(cp -> out.append(String.format("%04X.", cp)));
+                                    }
+                                }
+                                out.append('\n');
+                            }
+                        }
+                        case "BMC" -> sections.push(false);
+                        case "BDC" -> {
+                            boolean actual = tokens.get(i - 1) instanceof COSDictionary properties
+                                && properties.getDictionaryObject(COSName.getPDFName("ActualText")) instanceof COSString;
+                            sections.push(actual);
+                            if (actual) {
+                                span = ((COSString) ((COSDictionary) tokens.get(i - 1))
+                                    .getDictionaryObject(COSName.getPDFName("ActualText"))).getString();
+                                glyphs.setLength(0);
+                            }
+                        }
+                        case "EMC" -> {
+                            if (!sections.isEmpty() && sections.pop() && span != null) {
+                                out.append(base).append(" span=");
+                                span.codePoints().forEach(cp -> out.append(String.format("%04X.", cp)));
+                                out.append(" glyphs=").append(glyphs).append('\n');
+                                span = null;
+                            }
+                        }
+                        case "Tj", "TJ" -> {
+                            Object operand = tokens.get(i - 1);
+                            List<COSString> strings = new java.util.ArrayList<>();
+                            if (operand instanceof COSString s) strings.add(s);
+                            if (operand instanceof COSArray array) {
+                                for (COSBase item : array) if (item instanceof COSString s) strings.add(s);
+                            }
+                            for (COSString s : strings) {
+                                for (byte code : s.getBytes()) {
+                                    if (span != null) glyphs.append(String.format("%02X.", code & 0xff));
+                                    else out.append(base).append(String.format(" plain=%02X%n", code & 0xff));
+                                }
+                            }
+                        }
+                        default -> { /* not text */ }
+                    }
+                }
+            }
+        }
+        return out.toString();
     }
 
     // ── a minimal PDF shaped like LibreOffice's output ────────────────────────────────────────
