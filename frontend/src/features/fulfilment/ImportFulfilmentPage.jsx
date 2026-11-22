@@ -225,11 +225,14 @@ export function ImportFulfilmentPage({ user, showToast }) {
       />
 
       {run ? (
-        <Panel className="flex flex-wrap items-center justify-between gap-3 border-info-border bg-info-bg" data-testid="sheet-run-banner">
+        <Panel className={cn('flex flex-wrap items-center justify-between gap-3', run.blocksFailed > 0 ? 'border-warning-border bg-warning-bg' : 'border-info-border bg-info-bg')} data-testid="sheet-run-banner">
           <span className="flex min-w-0 flex-col gap-0.5">
-            <b className="text-sm">นำสถานะจากตารางของเข้ามาไว้ในระบบแล้ว</b>
+            <b className="text-sm">{run.blocksFailed > 0 ? 'นำสถานะจากตารางของเข้ามาไว้ในระบบแล้วบางส่วน' : 'นำสถานะจากตารางของเข้ามาไว้ในระบบแล้ว'}</b>
             <span className="text-xs text-text-secondary">
-              เมื่อ {formatThaiDate(run.finishedAt)} · {run.roundsCreated} รอบขนส่ง · {run.irsCreated} งานนำเข้าที่ยังไม่มีงานขาย · ตั้งแต่นี้แก้ไขและสร้างงานนำเข้าในระบบได้เลย ไม่ต้องกลับไปแก้ในตาราง
+              เมื่อ {formatThaiDate(run.finishedAt)} · {run.roundsCreated} รอบขนส่ง · {run.irsCreated} งานนำเข้าที่ยังไม่มีงานขาย
+              {run.blocksFailed > 0
+                ? ` · ${run.blocksFailed} กลุ่มแถวบันทึกไม่สำเร็จ ยังไม่อยู่ในระบบ ดูรายการที่ต้องตรวจ`
+                : ' · ตั้งแต่นี้แก้ไขและสร้างงานนำเข้าในระบบได้เลย ไม่ต้องกลับไปแก้ในตาราง'}
             </span>
           </span>
           {run.needsCheck?.length > 0 ? (

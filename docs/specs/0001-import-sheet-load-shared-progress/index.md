@@ -383,19 +383,19 @@ Two threads share one migration and can run side by side after task 1: the backf
 15. Company wide list: `GET /api/incoming/all`, the new `MyLine` columns, `repName` and `canOpen`, with a real database auth test and a mutation check, satisfies **AC-27**, **AC-28**, **AC-29**, **AC-30**, **AC-31**.
 16. The ของฉัน and ทั้งบริษัท switch with the type chip, search and step filter on `/my-orders`, and its visibility rule, satisfies **AC-26**, **AC-27**, **AC-31**.
 17. Add the new endpoints to `e2e-real/api-authz.spec.js`, satisfies **AC-23**, **AC-29**.
-18. Hand the merged commit to the deployer session with the migration number and the note that backend and frontend ship together, then follow *Migration plan*. Satisfies **AC-4** (in production).
+18. Hand the merged commit to the deployer session with the migration number, the V241 before or with V242 note, and the order backend first, reviewed and approved production run, frontend last, then follow *Migration plan*. Satisfies **AC-4** (in production).
 
 ## Migration plan
 
 **Strategy**: release first, then one supervised backfill run. The release alone changes nothing visible except the new button for import and the switch for sales.
 
 **Phases**:
-1. Release the backend image and the frontend together. The migration only adds columns, one table, one index and two relaxed checks, so existing rows stay valid.
+1. Release the backend image first, with V241 applied before or together with V242 (production skips a lower version merged after a higher one without failing). The migration only adds columns, one table, one index and two relaxed checks, so existing rows stay valid. The frontend waits for step 5.
 2. The deployer copies the sheet and an empty choices file to the server, outside the repo, and starts a `DRY_RUN`.
 3. Review the report with the owner and the import team: totals, the excluded and skipped lists, the note text, the brands and sales codes that need a choice, and the list of jobs that will move forward. Fill in the choices file and run the dry run again until the plan is the one the owner wants.
 4. Tell sales and account which jobs will move, since boards and the account queue change with no notice.
 5. Take a database backup. With the owner's go, run `COMMIT` outside working hours with the reviewed plan's hash.
-6. Check ของที่ฉันสั่ง as a sales rep, and three rounds on การขนส่ง against the sheet. Import works through the "needs a check" list.
+6. Release the frontend to `main`. Check ของที่ฉันสั่ง as a sales rep, and three rounds on การขนส่ง against the sheet. Import works through the "needs a check" list.
 7. Import updates the portal from then on and stops keeping the sheet. A later run on a newer file is possible and follows AC-9, but is not planned.
 8. Delete the sheet, the choices file and the reports from the server once the owner is satisfied.
 

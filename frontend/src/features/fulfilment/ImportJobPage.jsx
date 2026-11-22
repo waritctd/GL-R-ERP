@@ -120,8 +120,13 @@ function RoundCard({ round }) {
 }
 
 /** งานนำเข้า (ID3 / IM3): one import request with no sales job. Import and the CEO correct it here; the steps stay on the round page. */
-export function ImportJobPage({ showToast }) {
+export function ImportJobPage(props) {
   const { id } = useParams();
+  // keyed by the job, so moving to another job never carries an open editor or a draft along
+  return <ImportJobPageBody key={id} id={id} {...props} />;
+}
+
+function ImportJobPageBody({ id, showToast }) {
   const queryClient = useQueryClient();
   const [editingJob, setEditingJob] = useState(false);
   const [editItem, setEditItem] = useState(null);
@@ -179,10 +184,11 @@ export function ImportJobPage({ showToast }) {
     return r ? [r.factoryName, r.label].filter(Boolean).join(' · ') : null;
   };
   const stepOf = (item) => (item.lots.length === 0 ? <StatusBadge tone="warning">รอจัดรอบ</StatusBadge> : <StatusBadge tone={stepTone(item.lots[0].step)}>{stepLabel(item.lots[0].step)}</StatusBadge>);
+  const busy = saveItem.isPending || removeItem.isPending;
   const itemActions = (item) => (job.canEdit ? (
     <span className="flex flex-wrap justify-end gap-2">
-      <Button type="button" size="sm" variant="secondary" onClick={() => startEdit(item)} data-testid={`item-edit-${item.id}`}>แก้ไข</Button>
-      {!item.locked && job.items.length > 1 ? <Button type="button" size="sm" variant="text" onClick={() => setRemoving(item)}>ลบ</Button> : null}
+      <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => startEdit(item)} data-testid={`item-edit-${item.id}`}>แก้ไข</Button>
+      {!item.locked && job.items.length > 1 ? <Button type="button" size="sm" variant="text" disabled={busy} onClick={() => setRemoving(item)}>ลบ</Button> : null}
     </span>
   ) : null);
 
@@ -249,7 +255,7 @@ export function ImportJobPage({ showToast }) {
               {editorActions}
             </Panel>
           ) : null}
-          {job.canEdit && editItem !== 'new' ? <Button type="button" variant="secondary" className="w-full sm:w-auto sm:self-start" onClick={startAdd} data-testid="item-add">+ เพิ่มสินค้า</Button> : null}
+          {job.canEdit && editItem !== 'new' ? <Button type="button" variant="secondary" className="w-full sm:w-auto sm:self-start" disabled={busy} onClick={startAdd} data-testid="item-add">+ เพิ่มสินค้า</Button> : null}
 
           <h2 className="m-0 mt-2 flex items-baseline gap-2 text-base font-bold">รอบขนส่งของงานนี้
             <span className="text-2xs font-normal text-text-muted">เลื่อนขั้นตอนและแก้วันที่ที่หน้ารอบขนส่ง</span>

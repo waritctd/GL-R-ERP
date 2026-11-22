@@ -17,7 +17,7 @@
 --   3. ALTER TABLE sales.import_request DROP CONSTRAINT chk_import_request_project_or_order,
 --        DROP CONSTRAINT chk_import_request_order_purpose, DROP COLUMN source;
 --   4. Re-add the two checks exactly as V239 declared them.
---   5. DELETE FROM hr.flyway_schema_history WHERE version = '242';
+--   Flyway history keeps version 242: a rollback is a new migration that does steps 1 to 4, or a restore from the backup.
 
 ALTER TABLE sales.import_request
     ADD COLUMN source VARCHAR(10) NOT NULL DEFAULT 'PORTAL'

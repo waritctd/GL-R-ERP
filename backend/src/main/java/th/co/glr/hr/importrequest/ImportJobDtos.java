@@ -51,5 +51,5 @@ public final class ImportJobDtos {
     public record NeedsCheck(int row, String what, String reason) {}
 
     public record BackfillRunSummary(Instant finishedAt, int roundsCreated, int irsCreated, int irsAdopted, int irsSkipped,
-                                     int blocksExcluded, int dealsAdvanced, List<NeedsCheck> needsCheck) {}
+                                     int blocksExcluded, int blocksFailed, int dealsAdvanced, List<NeedsCheck> needsCheck) {}
 }

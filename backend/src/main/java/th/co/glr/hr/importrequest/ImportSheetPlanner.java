@@ -120,13 +120,16 @@ class ImportSheetPlanner {
         Map<String, Long> roundByKey = sheet.roundIdsByKey(usable.stream().map(SheetBlock::backfillKey).toList());
 
         Set<String> newSeen = new HashSet<>();
+        Map<String, String> docFactory = new HashMap<>();
         List<BlockPlan> blocks = new ArrayList<>();
         List<Skipped> skipped = new ArrayList<>();
         List<Difference> differences = new ArrayList<>();
         for (SheetBlock b : usable) {
             ResolvedFactory f = factoryOf.get(b.firstRow());
             Long blockRound = roundByKey.get(b.backfillKey());
-            List<IrPlan> irs = classify(b, f.id(), blockRound, choices, blocksPerDoc, portal, lots, newSeen, Map.of());
+            String factoryKey = f.id() != null ? "id:" + f.id() : "name:" + ImportRequestService.normalizeFactoryName(f.name());
+            List<IrPlan> irs = rejectForeignFactory(classify(b, f.id(), blockRound, choices, blocksPerDoc, portal, lots, newSeen, Map.of()),
+                factoryKey, docFactory);
             irs.stream().filter(p -> SKIP.equals(p.action()))
                 .forEach(p -> skipped.add(new Skipped(p.firstRow(), p.docNumber(), p.reason())));
             String action = blockRound != null ? "UPDATE"
@@ -147,9 +150,30 @@ class ImportSheetPlanner {
         List<DealToAdvance> deals = dealsToAdvance(blocks, portal);
         excluded.sort(java.util.Comparator.comparingInt(Excluded::row));
         Totals totals = totals(blocks, excluded.size(), deals.size());
-        String hash = planHash(blocks, excluded, skipped);
+        String hash = planHash(blocks, excluded, skipped, deals);
         return new Plan(parsed.sheetName(), parsed.rowCount(), blocks, excluded, skipped, differences,
             List.copyOf(unresolvedBrands), List.copyOf(unresolvedCodes), deals, totals, hash);
+    }
+
+    /** An IR this run creates cannot be extended by a block of another factory: its lines would sit on that block's round. */
+    private static List<IrPlan> rejectForeignFactory(List<IrPlan> irs, String factoryKey, Map<String, String> docFactory) {
+        List<IrPlan> out = new ArrayList<>();
+        for (IrPlan p : irs) {
+            if (CREATE.equals(p.action())) {
+                docFactory.put(p.docNumber(), factoryKey);
+            } else if (CREATE_MORE.equals(p.action()) && docFactory.containsKey(p.docNumber())
+                && !factoryKey.equals(docFactory.get(p.docNumber()))) {
+                p = asSkip(p, "เลขเดียวกันอยู่กลุ่มแถวของโรงงานอื่น ตรวจเลขใบขอซื้อ");
+            }
+            out.add(p);
+        }
+        return out;
+    }
+
+    static IrPlan asSkip(IrPlan p, String reason) {
+        return new IrPlan(p.docNumber(), p.firstRow(), SKIP, reason, p.importRequestId(), p.ticketId(), p.jobCode(), p.projectText(),
+            p.saleText(), p.purpose(), p.requesterId(), p.requesterName(), p.fromRoundId(), p.lines(), p.receivedOn(), p.depositOn(),
+            p.wantedBy(), p.wantedText());
     }
 
     /** Marks a block warning the run summary lists for import to check. */
@@ -344,7 +368,7 @@ class ImportSheetPlanner {
         List<String> codes = splitCodes(ir.saleText());
         Long requester = codes.stream().map(choices.repChoices()::get).filter(Objects::nonNull).findFirst().orElse(null);
         return new IrPlan(ir.docNumber(), ir.firstRow(), action, reason, irId, ticketId, jobCode, ir.projectText(), ir.saleText(),
-            purpose, requester, ir.saleText(), fromRound, ir.lines());
+            purpose, requester, ir.saleText(), fromRound, ir.lines(), ir.receivedOn(), ir.depositOn(), ir.wantedBy(), ir.wantedText());
     }
 
     static List<String> splitCodes(String saleText) {
@@ -437,12 +461,13 @@ class ImportSheetPlanner {
         return new Totals(create, update, irCreate, adopt, fill, skip, excluded, deals);
     }
 
-    private String planHash(List<BlockPlan> blocks, List<Excluded> excluded, List<Skipped> skipped) {
+    private String planHash(List<BlockPlan> blocks, List<Excluded> excluded, List<Skipped> skipped, List<DealToAdvance> deals) {
         try {
             Map<String, Object> canon = new LinkedHashMap<>();
             canon.put("blocks", blocks);
             canon.put("excluded", excluded);
             canon.put("skipped", skipped);
+            canon.put("dealsToAdvance", deals);
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(json.writeValueAsString(canon).getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest);
         } catch (JsonProcessingException | NoSuchAlgorithmException e) {

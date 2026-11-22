@@ -268,6 +268,22 @@ class ImportSheetBackfillIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     @Test
+    void anIrThisRunCreatedIsNotExtendedByABlockOfAnotherFactory() throws IOException {
+        Path file = file(new ImportSheetTestBook()
+            .row("IR NO.", "69941", "ยี่ห้อ", "Round Factory", "Sale", "S1", "PROJECT", "งานเดียว", "รายชื่อสินค้าและจำนวน", "x = 1 pcs")
+            .blank()
+            .row("IR NO.", "69941", "ยี่ห้อ", "Other Maker", "Sale", "S1", "PROJECT", "งานเดียว", "รายชื่อสินค้าและจำนวน", "y = 2 pcs"));
+
+        Result dry = service.dryRun(file, null, dir.resolve("r1"));
+        assertThat(dry.totals().irsSkipped()).isEqualTo(1);
+        Result done = service.commit(file, null, dir.resolve("r2"), actorId, dry.planSha256());
+
+        assertThat(done.failed()).isEmpty();
+        assertThat(count("SELECT count(*) FROM sales.import_request_item i JOIN sales.import_request r USING (import_request_id) WHERE r.doc_number = 'IR69941'")).isEqualTo(1);
+        assertThat(count("SELECT count(DISTINCT shipment_round_id) FROM sales.shipment_lot l JOIN sales.import_request r USING (import_request_id) WHERE r.doc_number = 'IR69941'")).isEqualTo(1);
+    }
+
+    @Test
     void anIrInTwoBlocksIsOneIrWithLotsOnBothRounds() throws IOException {
         Path file = file(new ImportSheetTestBook()
             .row("IR NO.", "69921", "ยี่ห้อ", "Round Factory", "Sale", "S7", "PROJECT", "งานสองรอบ", "รายชื่อสินค้าและจำนวน", "A = 1 pcs")

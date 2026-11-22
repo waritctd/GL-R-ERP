@@ -45,7 +45,8 @@ final class ImportSheetModels {
      * ON_ROUND, OTHER_ROUND or SKIP. {@code fromRoundId} is the round an ADOPT empties, or the round a FILL_IN_PLACE fills. */
     record IrPlan(String docNumber, int firstRow, String action, String reason, Long importRequestId, Long ticketId,
                   String jobCode, String projectText, String saleText, String purpose, Long requesterId,
-                  String requesterName, Long fromRoundId, List<SheetLine> lines) {}
+                  String requesterName, Long fromRoundId, List<SheetLine> lines, LocalDate receivedOn, LocalDate depositOn,
+                  LocalDate wantedBy, String wantedText) {}
 
     /** {@code action}: CREATE or UPDATE a round, or NONE when no IR of the block rides on a backfilled round. */
     record BlockPlan(int firstRow, String backfillKey, String factoryText, Long factoryId, String factoryName, String action,

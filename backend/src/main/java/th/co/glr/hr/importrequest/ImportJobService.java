@@ -142,8 +142,10 @@ public class ImportJobService {
         requireWrite(actor);
         return sheetRuns.latestFinishedRun().map(r -> {
             List<NeedsCheck> check = new ArrayList<>();
+            int failed = 0;
             try {
                 JsonNode s = json.readTree(r.summaryJson());
+                failed = s.path("failed").size();
                 for (JsonNode f : s.path("newFactories")) {
                     check.add(new NeedsCheck(0, f.asText(), "สร้างโรงงานใหม่จากชื่อยี่ห้อนี้ ประเทศยังไม่ระบุ ตรวจชื่อและประเทศที่หน้าโรงงาน"));
                 }
@@ -158,7 +160,7 @@ public class ImportJobService {
             }
             check.sort(java.util.Comparator.comparingInt(NeedsCheck::row));
             return new BackfillRunSummary(r.finishedAt(), r.roundsCreated(), r.irsCreated(), r.irsAdopted(), r.irsSkipped(),
-                r.blocksExcluded(), r.dealsAdvanced(), check);
+                r.blocksExcluded(), failed, r.dealsAdvanced(), check);
         });
     }
 
@@ -250,6 +252,10 @@ public class ImportJobService {
         List<Long> roundIds = rounds.roundIdsOf(id);
         rounds.lockRounds(roundIds);
         List<IrLock> irs = rounds.lockImportRequests(roundIds, List.of(id));
+        // a lot can land on this IR between the first read and its lock: the rounds read now are the true ones
+        if (!new java.util.HashSet<>(rounds.roundIdsOf(id)).equals(new java.util.HashSet<>(roundIds))) {
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้เพิ่งถูกจัดรอบ กรุณาเปิดหน้านี้ใหม่แล้วลองอีกครั้ง");
+        }
         ImportRequestDto row = stored.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนำเข้านี้"));
         if (row.ticketId() != null) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบขอซื้อนี้อยู่ในงานขาย แก้ไขในรายละเอียดของงานนั้น");

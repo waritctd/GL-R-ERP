@@ -3450,7 +3450,7 @@ function mockRequireNotLeft(round) {
 function mockRequireDeletable(round) {
   const f = round.facts;
   const typed = ['vessel', 'voyage', 'forwarder', 'containerNos', 'port', 'grNumber', 'note', 'completeNote', 'goodsReadyOn',
-    'etdPlannedOn', 'etdActualOn', 'etaOn', 'arrivedOn', 'customsReleasedOn'].some((k) => String(f[k] ?? '').trim()) || f.completePerInvoice === false;
+    'etdPlannedOn', 'etdActualOn', 'etaOn', 'arrivedOn', 'customsReleasedOn', 'transshipEtaOn', 'insuredOn'].some((k) => String(f[k] ?? '').trim()) || f.completePerInvoice === false;
   if (round.documents.length > 0 || typed) {
     fail('ล็อตนี้เป็นล็อตสุดท้ายของรอบ และรอบนี้มีเอกสารหรือข้อมูลที่กรอกไว้ (เรือ เที่ยว ตัวแทน ตู้ วันที่ ฯลฯ) กรุณาลบข้อมูลเหล่านั้นหรือย้ายไปรอบใหม่ก่อน', 409);
   }
@@ -3545,6 +3545,12 @@ function mockRequireFreeJobNumber(raw) {
   if (!/^IR\d{5,6}(-\d{1,2})?$/.test(doc)) fail('เลขที่ใบขอซื้อต้องเป็นรูปแบบ IR69412 หรือ IR69412-1', 400);
   if (mockImportRequests.some((r) => r.docNumber === doc)) fail('เลขที่ใบขอซื้อนี้ถูกใช้แล้ว', 409);
   return doc;
+}
+
+/** After a job's quantities changed: its steps follow its rounds, and any undo on those rounds is reset (the shared lot path). */
+function mockSettleJob(row, user) {
+  const touched = mockShipmentRounds.filter((r) => r.lots.some((l) => l.importRequestId === row.id));
+  mockFinishLots(touched, [row.id], user);
 }
 
 function mockJobHistory(row, user, action, before, after) {
@@ -15792,6 +15798,13 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (!request.receivedOn) fail('ระบุวันที่ได้รับใบขอซื้อ', 400);
       if (request.receivedOn > mockTodayIso()) fail('วันที่ได้รับใบขอซื้อต้องไม่เป็นวันในอนาคต', 400);
       if (!(request.lines ?? []).length) fail('ใส่สินค้าอย่างน้อย 1 รายการ', 400);
+      // every refusal comes before anything is stored, so a rejected request leaves the mock as it was
+      let existingRound = null;
+      if (request.round?.mode === 'EXISTING') {
+        existingRound = mockFindShipment(request.round.roundId);
+        if (existingRound.importStep === 'RECEIVED') fail('รอบนี้ถึงโกดังแล้ว เลือกรอบอื่นหรือสร้างรอบใหม่', 409);
+        if (existingRound.factoryId !== factory.factoryId) fail('รอบนี้เป็นของโรงงานอื่น', 409);
+      }
       const doc = request.docNumber ? mockRequireFreeJobNumber(request.docNumber) : mockAllocateNoProjectDocNumber();
       const id = mockImportRequestSeq++;
       const now = new Date().toISOString();
@@ -15811,12 +15824,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       mockImportRequests.push(row);
       const lots = row.items.map((it) => ({ importRequestId: id, itemId: it.id, qty: it.qty }));
       if (request.round?.mode === 'NEW') await api.shipmentRounds.createRound({ factoryId: factory.factoryId, lots });
-      if (request.round?.mode === 'EXISTING') {
-        const round = mockFindShipment(request.round.roundId);
-        if (round.importStep === 'RECEIVED') fail('รอบนี้ถึงโกดังแล้ว เลือกรอบอื่นหรือสร้างรอบใหม่', 409);
-        if (round.factoryId !== factory.factoryId) fail('รอบนี้เป็นของโรงงานอื่น', 409);
-        mockPlaceLots(round, lots);
-        mockFinishLots([round], [id], user);
+      if (existingRound) {
+        mockPlaceLots(existingRound, lots);
+        mockFinishLots([existingRound], [id], user);
       }
       return delay(mockImportJobDto(row, user));
     },
@@ -15829,37 +15839,43 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async update(id, request) {
       const user = mockShipmentWrite();
       const row = mockFindImportJob(id);
+      const draft = { ...row }; // changes land on a copy, so a later refusal leaves the job as it was
       const clear = request?.clear ?? [];
       const before = {};
       const after = {};
       const set = (field, key, value) => {
-        if (value === undefined || value === null || row[key] === value) return;
-        before[field] = row[key] ?? null;
+        if (value === undefined || value === null || draft[key] === value) return;
+        before[field] = draft[key] ?? null;
         after[field] = value;
-        row[key] = value;
+        draft[key] = value;
       };
       if (request.purpose) {
         if (!Object.hasOwn(MOCK_IMPORT_JOB_LABELS, request.purpose)) fail('เลือกประเภทงานนำเข้า', 400);
         set('purpose', 'orderPurpose', request.purpose);
-        row.projectName = MOCK_IMPORT_JOB_LABELS[request.purpose];
+        draft.projectName = MOCK_IMPORT_JOB_LABELS[request.purpose];
       }
-      if (request.purposeNote) { set('purposeNote', 'purposeNote', request.purposeNote.trim()); row.customerName = row.purposeNote; }
+      if (request.purposeNote) { set('purposeNote', 'purposeNote', request.purposeNote.trim()); draft.customerName = draft.purposeNote; }
       if (request.docNumber && request.docNumber.trim().toUpperCase() !== row.docNumber) set('docNumber', 'docNumber', mockRequireFreeJobNumber(request.docNumber));
-      if (request.receivedOn) { set('receivedOn', 'firstIssuedDate', request.receivedOn); row.issueDate = request.receivedOn; }
+      if (request.receivedOn && request.receivedOn !== row.firstIssuedDate) {
+        if (request.receivedOn > mockTodayIso()) fail('วันที่ได้รับใบขอซื้อต้องไม่เป็นวันในอนาคต', 400);
+        set('receivedOn', 'firstIssuedDate', request.receivedOn);
+        draft.issueDate = request.receivedOn;
+      }
       set('depositReceivedOn', 'depositReceivedDate', request.depositReceivedOn);
       set('wantedBy', 'wantedBy', request.wantedBy);
-      if (request.requesterId) { set('requester', 'requesterId', request.requesterId); row.requestedByName = mockJobRepName(request.requesterId); }
-      if (clear.includes('requesterId')) { row.requesterId = null; row.requestedByName = null; }
-      if (clear.includes('depositReceivedOn')) row.depositReceivedDate = null;
-      if (clear.includes('wantedBy')) row.wantedBy = null;
+      if (request.requesterId) { set('requester', 'requesterId', request.requesterId); draft.requestedByName = mockJobRepName(request.requesterId); }
+      if (clear.includes('requesterId')) { draft.requesterId = null; draft.requestedByName = null; }
+      if (clear.includes('depositReceivedOn')) draft.depositReceivedDate = null;
+      if (clear.includes('wantedBy')) draft.wantedBy = null;
       if (request.factoryId && request.factoryId !== row.factoryId) {
         if (mockShipmentRounds.some((r) => r.lots.some((l) => l.importRequestId === row.id))) fail('งานนี้อยู่ในรอบขนส่งแล้ว เอาออกจากรอบก่อนจึงเปลี่ยนโรงงานได้', 409);
         const factory = mockPriceImportFactories.find((f) => f.factoryId === Number(request.factoryId));
         if (!factory) fail('เลือกโรงงาน', 400);
         set('factory', 'factoryName', factory.name);
-        row.factoryId = factory.factoryId;
-        row.brand = factory.name;
+        draft.factoryId = factory.factoryId;
+        draft.brand = factory.name;
       }
+      Object.assign(row, draft);
       mockJobHistory(row, user, 'IMPORT_JOB_UPDATED', before, after);
       return delay(mockImportJobDto(row, user));
     },
@@ -15868,6 +15884,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const row = mockFindImportJob(id);
       const seq = Math.max(0, ...row.items.map((i) => i.seq)) + 1;
       row.items.push({ id: `${row.id}-${seq}`, importRequestId: row.id, ticketItemId: null, seq, code: String(request.code).trim(), size: request.size?.trim() || null, qty: Number(request.qty), unit: String(request.unit).trim() });
+      mockSettleJob(row, user); // the new quantity is on no round yet, so the step may fall back
       mockJobHistory(row, user, 'IMPORT_JOB_ITEM_ADDED', null, { item: request.code, qty: String(request.qty), unit: request.unit });
       return delay(mockImportJobDto(row, user));
     },
@@ -15877,7 +15894,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const item = row.items.find((i) => String(i.id) === String(itemId));
       if (!item) fail('ไม่พบรายการสินค้านี้', 404);
       const lots = mockShipmentRounds.flatMap((r) => r.lots.filter((l) => l.itemId === item.id).map((l) => ({ l, r })));
-      if (request.qty != null && Number(request.qty) !== Number(item.qty)) {
+      const qtyChanged = request.qty != null && Number(request.qty) !== Number(item.qty);
+      if (qtyChanged) {
         if (lots.some(({ r }) => r.importStep === 'RECEIVED')) fail('ของรายการนี้ถึงโกดังแล้ว แก้จำนวนไม่ได้', 409);
         const placed = mockSumQty(lots.map(({ l }) => l.qty));
         if (lots.length === 1 && Number(lots[0].l.qty) === Number(item.qty)) lots[0].l.qty = Number(request.qty);
@@ -15888,6 +15906,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (request.code) item.code = request.code.trim();
       if (request.size != null) item.size = request.size.trim() || null;
       if (request.unit) item.unit = request.unit.trim();
+      if (qtyChanged) mockSettleJob(row, user);
       return delay(mockImportJobDto(row, user));
     },
     async removeItem(id, itemId) {
@@ -15895,10 +15914,16 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const row = mockFindImportJob(id);
       const item = row.items.find((i) => String(i.id) === String(itemId));
       if (!item) fail('ไม่พบรายการสินค้านี้', 404);
-      if (mockShipmentRounds.some((r) => r.importStep === 'RECEIVED' && r.lots.some((l) => l.itemId === item.id))) fail('ของรายการนี้ถึงโกดังแล้ว ลบไม่ได้', 409);
+      const holding = mockShipmentRounds.filter((r) => r.lots.some((l) => l.itemId === item.id));
+      if (holding.some((r) => r.importStep === 'RECEIVED')) fail('ของรายการนี้ถึงโกดังแล้ว ลบไม่ได้', 409);
       if (row.items.length <= 1) fail('งานนำเข้าต้องมีสินค้าอย่างน้อย 1 รายการ', 409);
-      mockShipmentRounds.forEach((r) => { r.lots = r.lots.filter((l) => l.itemId !== item.id); });
+      // a round this empties is checked like removeLot does: one holding a document or typed facts is never dropped silently
+      const emptied = holding.filter((r) => r.lots.every((l) => l.itemId === item.id));
+      emptied.forEach((r) => mockRequireDeletable(r));
+      holding.forEach((r) => { r.lots = r.lots.filter((l) => l.itemId !== item.id); });
+      emptied.forEach((r) => mockShipmentRounds.splice(mockShipmentRounds.indexOf(r), 1));
       row.items = row.items.filter((i) => i !== item);
+      mockSettleJob(row, user);
       mockJobHistory(row, user, 'IMPORT_JOB_ITEM_REMOVED', { item: item.code, qty: String(item.qty), unit: item.unit }, null);
       return delay(mockImportJobDto(row, user));
     },

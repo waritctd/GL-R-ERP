@@ -135,6 +135,7 @@ class ImportSheetBackfillService {
         final List<Map<String, Object>> adopted = new ArrayList<>();
         final List<Map<String, Object>> filledInPlace = new ArrayList<>();
         final List<Map<String, Object>> dealsMoved = new ArrayList<>();
+        final List<Long> createdDocumentIds = new ArrayList<>();
         final List<String> sequenceBumps = new ArrayList<>();
 
         Tally copy() {
@@ -149,6 +150,7 @@ class ImportSheetBackfillService {
             t.adopted.addAll(adopted);
             t.filledInPlace.addAll(filledInPlace);
             t.dealsMoved.addAll(dealsMoved);
+            t.createdDocumentIds.addAll(createdDocumentIds);
             t.sequenceBumps.addAll(sequenceBumps);
             return t;
         }
@@ -257,8 +259,14 @@ class ImportSheetBackfillService {
         portal = sheet.findIrs(docs);
         Map<Long, List<PortalLot>> lots = sheet.lotsOf(portal.values().stream().map(PortalIr::id).toList());
         Long planFactory = block.factoryId() != null ? block.factoryId() : Long.valueOf(factoryId);
-        List<IrPlan> fresh = planner.classify(source, planFactory, blockRound, choices, blocksPerDoc, portal, lots,
-            new HashSet<>(), created);
+        List<IrPlan> fresh = new ArrayList<>();
+        for (IrPlan p : planner.classify(source, planFactory, blockRound, choices, blocksPerDoc, portal, lots, new HashSet<>(), created)) {
+            PortalIr made = portal.get(p.docNumber());
+            // an IR this run created for another factory is not extended by this block (the dry run says the same)
+            boolean foreign = ImportSheetPlanner.CREATE_MORE.equals(p.action()) && created.containsKey(p.docNumber())
+                && made != null && !Objects.equals(made.factoryId(), factoryId);
+            fresh.add(foreign ? ImportSheetPlanner.asSkip(p, "เลขเดียวกันอยู่กลุ่มแถวของโรงงานอื่น ตรวจเลขใบขอซื้อ") : p);
+        }
         requireSamePlan(block.irs(), fresh);
 
         boolean needsRound = fresh.stream().anyMatch(p -> Set.of(ImportSheetPlanner.CREATE, ImportSheetPlanner.CREATE_MORE,
@@ -272,7 +280,7 @@ class ImportSheetBackfillService {
             t.roundsUpdated++;
         }
         if (blockRound != null) {
-            addDocuments(blockRound, block, actor);
+            addDocuments(blockRound, block, actor, t);
         }
 
         Set<Long> touchedRounds = new HashSet<>();
@@ -316,7 +324,7 @@ class ImportSheetBackfillService {
                     before2.put("before", sheet.roundSnapshot(p.fromRoundId()));
                     t.filledInPlace.add(before2);
                     sheet.fillRound(p.fromRoundId(), block.facts(), actor.id(), actor.name());
-                    addDocuments(p.fromRoundId(), block, actor);
+                    addDocuments(p.fromRoundId(), block, actor, t);
                     touchedRounds.add(p.fromRoundId());
                     irIds.add(p.importRequestId());
                 }
@@ -350,7 +358,8 @@ class ImportSheetBackfillService {
 
     private static void requireSamePlan(List<IrPlan> planned, List<IrPlan> fresh) {
         for (int i = 0; i < planned.size(); i++) {
-            if (!planned.get(i).action().equals(fresh.get(i).action())) {
+            if (!planned.get(i).action().equals(fresh.get(i).action())
+                || !Objects.equals(planned.get(i).fromRoundId(), fresh.get(i).fromRoundId())) {
                 throw new IllegalStateException("ข้อมูลของ " + planned.get(i).docNumber() + " เปลี่ยนระหว่างนำเข้า");
             }
         }
@@ -406,15 +415,15 @@ class ImportSheetBackfillService {
         rounds.deleteRound(from);
     }
 
-    private void addDocuments(long roundId, BlockPlan block, UserPrincipal actor) {
+    private void addDocuments(long roundId, BlockPlan block, UserPrincipal actor, Tally t) {
         for (String no : block.proformas()) {
             if (!sheet.documentExists(roundId, "PROFORMA", no)) {
-                rounds.insertDocument(roundId, "PROFORMA", no, null, null, actor.id(), false);
+                t.createdDocumentIds.add(rounds.insertDocument(roundId, "PROFORMA", no, null, null, actor.id(), false));
             }
         }
         for (String no : block.invoices()) {
             if (!sheet.documentExists(roundId, "INVOICE", no)) {
-                rounds.insertDocument(roundId, "INVOICE", no, null, null, actor.id(), false);
+                t.createdDocumentIds.add(rounds.insertDocument(roundId, "INVOICE", no, null, null, actor.id(), false));
             }
         }
     }
@@ -423,6 +432,7 @@ class ImportSheetBackfillService {
         Map<String, Object> s = new LinkedHashMap<>();
         s.put("createdRoundIds", t.createdRoundIds);
         s.put("createdIrIds", t.createdIrIds);
+        s.put("createdDocumentIds", t.createdDocumentIds);
         s.put("adopted", t.adopted);
         s.put("filledInPlace", t.filledInPlace);
         s.put("dealsAdvanced", t.dealsMoved);

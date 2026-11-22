@@ -422,8 +422,9 @@ final class ImportSheetParser {
                 .replaceAll("^[\\s|]+|[\\s|]+$", "").replaceAll("\\s+\\|\\s+\\|\\s+", " | ");
             completeNote = rest.isEmpty() ? null : rest;
         } else {
+            // a remark can only mention a GR number (for example a cancelled one): it counts when a customs or arrival date backs it
             Matcher inRemark = GR_NUMBER.matcher(String.join(" ", remarks));
-            if (inRemark.find()) {
+            if ((d.get(RELEASED) != null || d.get(ARRIVED) != null) && inRemark.find()) {
                 grNumber = inRemark.group().toUpperCase(Locale.ROOT);
             }
         }

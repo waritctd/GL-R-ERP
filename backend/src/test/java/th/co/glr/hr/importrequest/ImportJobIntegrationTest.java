@@ -49,6 +49,8 @@ import th.co.glr.hr.ticket.TicketService;
 class ImportJobIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final LocalDate TODAY = LocalDate.now(ZoneId.of("Asia/Bangkok"));
+    /** A manual number in this year's counter: the two digit Buddhist year, so it stays valid after 1 January. */
+    private static final String LATE = "IR" + (TODAY.getYear() + 543) % 100 + "987";
 
     private ImportJobService jobs;
     private CompanyIncomingService company;
@@ -103,8 +105,8 @@ class ImportJobIntegrationTest extends AbstractPostgresIntegrationTest {
 
         long sailing = jobs.create(request(null, new RoundChoice("NEW", null), null), importUser).rounds().get(0).id();
         jdbc.update("UPDATE sales.shipment_round SET import_step = 'IN_TRANSIT', in_transit_on = current_date WHERE shipment_round_id = " + sailing, Map.of());
-        ImportJobDto late = jobs.create(request("IR69987", new RoundChoice("EXISTING", sailing), null), importUser);
-        assertThat(late.importRequest().docNumber()).isEqualTo("IR69987");
+        ImportJobDto late = jobs.create(request(LATE, new RoundChoice("EXISTING", sailing), null), importUser);
+        assertThat(late.importRequest().docNumber()).isEqualTo(LATE);
         assertThat(late.importRequest().importStep()).isEqualTo(ImportRequestStep.IN_TRANSIT);
         assertThat(late.items().get(0).lots()).hasSize(1);
 
@@ -114,7 +116,7 @@ class ImportJobIntegrationTest extends AbstractPostgresIntegrationTest {
         // the counter moved past the typed number, so the portal never mints it again
         assertThat(Integer.parseInt(fresh.importRequest().docNumber().substring(4))).isGreaterThan(987);
 
-        refused(() -> jobs.create(request("IR69987", new RoundChoice("NONE", null), null), importUser), HttpStatus.CONFLICT);
+        refused(() -> jobs.create(request(LATE, new RoundChoice("NONE", null), null), importUser), HttpStatus.CONFLICT);
         refused(() -> jobs.create(request("6947A", new RoundChoice("NONE", null), null), importUser), HttpStatus.BAD_REQUEST);
         refused(() -> jobs.create(request(null, new RoundChoice("EXISTING", round("RECEIVED")), null), importUser), HttpStatus.CONFLICT);
     }
