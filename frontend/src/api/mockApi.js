@@ -4875,7 +4875,7 @@ function mockWarehouseAllowance(ticket, item) {
   // the share is of the whole line (the IR still holds the marked part); the mark only lowers the ceiling
   const importQty = Math.max(Number(item.qty ?? 0) - declared, 0);
   const unitKey = (u) => String(u ?? '').trim().toLowerCase().replace(/^(pcs?|pieces?)$/, 'แผ่น');
-  const sameUnit = mine.every((it) => unitKey(it.unit) === '' || [unitKey(item.unit), unitKey(item.rawUnit)].includes(unitKey(it.unit))); // a blank IR unit is the line's
+  const sameUnit = mine.every((it) => unitKey(it.unit) === '' || [unitKey(item.unit), unitKey(item.rawUnit), !unitKey(item.unit) && !unitKey(item.rawUnit) && (item.unitBasis ?? 'PIECE') === 'PIECE' ? 'แผ่น' : null].includes(unitKey(it.unit))); // a blank IR unit is the line's
   const arrived = mockSumQty(receivedLotsOf.map((l) => l.receivedQty ?? l.qty));
   const imported = sameUnit && irQty > importQty && onRounds < irQty // an over-order fills the line first
     ? Math.min(importQty, arrived)

@@ -2769,7 +2769,10 @@ public class TicketRepository {
                    COALESCE(BOOL_AND(COALESCE(NULLIF(btrim(iri.unit), '') IS NULL
                                              OR regexp_replace(lower(btrim(iri.unit)), '^(pcs?|pieces?)$', 'แผ่น')
                                                 IN (regexp_replace(lower(btrim(ti.unit)), '^(pcs?|pieces?)$', 'แผ่น'),
-                                                    regexp_replace(lower(btrim(ti.raw_unit)), '^(pcs?|pieces?)$', 'แผ่น')), false)), false) AS same_unit
+                                                    regexp_replace(lower(btrim(ti.raw_unit)), '^(pcs?|pieces?)$', 'แผ่น'),
+                                                    -- a piece-basis line with no unit text is in แผ่น
+                                                    CASE WHEN ti.unit_basis = 'PIECE' AND NULLIF(btrim(ti.unit), '') IS NULL
+                                                          AND NULLIF(btrim(ti.raw_unit), '') IS NULL THEN 'แผ่น' END), false)), false) AS same_unit
               FROM sales.import_request ir
               JOIN sales.import_request_item iri ON iri.import_request_id = ir.import_request_id
               LEFT JOIN sales.ticket_item ti ON ti.item_id = iri.ticket_item_id

@@ -395,6 +395,11 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         lot(round("ORDERED"), irC, 50);
         long itemC = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketC), Long.class);
         assertThat(ticketService.warehouseRemaining(ticketC, owner).get(itemC)).isEqualByComparingTo("30");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL, raw_unit = NULL WHERE ticket_id = :t", Map.of("t", ticketC));
+        jdbc.update("UPDATE sales.import_request_item SET unit = 'แผ่น' WHERE import_request_id = :ir", Map.of("ir", irC));
+        assertThat(ticketService.warehouseRemaining(ticketC, owner).get(itemC)).isEqualByComparingTo("30"); // a piece line with no unit text
+        jdbc.update("UPDATE sales.import_request_item SET unit = 'กล่อง' WHERE import_request_id = :ir", Map.of("ir", irC));
+        assertThat(ticketService.warehouseRemaining(ticketC, owner).get(itemC)).isEqualByComparingTo("20"); // a box is never a piece
         jdbc.update("UPDATE sales.import_request_item SET unit = 'ตร.ม.' WHERE import_request_id = :ir", Map.of("ir", irC));
         assertThat(ticketService.warehouseRemaining(ticketC, owner).get(itemC)).isEqualByComparingTo("20"); // another unit: 40 * 50 / 100
     }
