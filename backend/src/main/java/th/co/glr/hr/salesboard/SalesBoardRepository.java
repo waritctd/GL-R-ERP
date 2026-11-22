@@ -78,7 +78,7 @@ public class SalesBoardRepository {
                      vq.number
                 FROM sales.quotation vq
                 LEFT JOIN sales.deal_party vp ON vp.party_id = vq.party_id
-               WHERE vq.ticket_id = t.ticket_id AND vq.doc_status IN (:valueStatuses)
+               WHERE vq.ticket_id = t.ticket_id AND NOT vq.is_sample AND vq.doc_status IN (:valueStatuses)
                ORDER BY (vq.doc_status <> 'EXPIRED') DESC, COALESCE(vp.is_headline, FALSE) DESC,
                         COALESCE(vq.approved_at, vq.issued_at) DESC NULLS LAST, vq.quotation_id DESC
                LIMIT 1

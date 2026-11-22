@@ -36,6 +36,7 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.PicturePlacementRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RecordOutcomeRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RejectRequest;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.SetSampleRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 
 /** Quotation v2 (direct deal quotation, V165) endpoints — see docs/sales/quotation-v2-plan.md's "API" section
@@ -223,6 +224,14 @@ public class DealQuotationController {
                                          HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("quotation", quotations.reject(id, request, user));
+    }
+
+    /** Turns the sample mark on or off. See {@code DealQuotationService#setSample}. */
+    @PatchMapping("/deal-quotations/{id}/sample")
+    Map<String, DealQuotationDto> setSample(@PathVariable long id, @Valid @RequestBody SetSampleRequest request,
+                                            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.setSample(id, request.isSample(), user));
     }
 
     @PostMapping("/deal-quotations/{id}/revisions")

@@ -258,7 +258,7 @@ public class DashboardRepository {
         // board: quotation → imported_value → estimated_value.
         String stated = "COALESCE(t.imported_value, t.estimated_value)";
         String value = "CASE WHEN " + stated + " IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sales.quotation vq"
-            + " WHERE vq.ticket_id = t.ticket_id AND vq.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED',"
+            + " WHERE vq.ticket_id = t.ticket_id AND NOT vq.is_sample AND vq.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED',"
             + " 'EXPIRED')) THEN " + stated + " ELSE " + payable + " END";
         return jdbc.queryForObject("SELECT COALESCE(SUM(" + value
             + "), 0) FROM sales.ticket t WHERE t.lifecycle = 'ACTIVE' AND t.sales_stage IN (:beforeOrder) "

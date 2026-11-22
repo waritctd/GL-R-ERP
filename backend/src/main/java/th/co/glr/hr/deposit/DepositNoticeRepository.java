@@ -84,7 +84,7 @@ public class DepositNoticeRepository {
      * {@link #findRepointTarget} takes only such a row, so a notice's customer and lines never come from different rows. */
     static final String BILLABLE_Q = """
         ((q.origin = 'PRICING_REQUEST' AND q.doc_status IN ('ACCEPTED','ISSUED'))
-          OR (q.origin = 'DEAL_DIRECT' AND q.doc_status IN ('ACCEPTED','ISSUED','APPROVED')))""";
+          OR (q.origin = 'DEAL_DIRECT' AND NOT q.is_sample AND q.doc_status IN ('ACCEPTED','ISSUED','APPROVED')))""";
 
     /** The notice's customer is the QUOTATION's party customer whenever the reference names a new-engine quotation of
      * this deal that has a party (a deal can hold several BUYER parties; the stored header may name the headline one).
@@ -209,7 +209,7 @@ public class DepositNoticeRepository {
                AND (CAST(:chosen AS BIGINT) IS NULL OR quotation_id = :chosen)
                AND ((origin IS NULL AND pricing_request_id IS NOT NULL AND doc_status IN ('ACCEPTED','ISSUED'))
                  OR (origin = 'PRICING_REQUEST' AND doc_status IN ('ACCEPTED','ISSUED'))
-                 OR (origin = 'DEAL_DIRECT' AND doc_status IN (:dealDirectStatuses)))
+                 OR (origin = 'DEAL_DIRECT' AND NOT is_sample AND doc_status IN (:dealDirectStatuses)))
              ORDER BY CASE WHEN doc_status IN ('ACCEPTED','APPROVED') THEN 0 ELSE 1 END, quotation_id DESC
              LIMIT 1
             """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()

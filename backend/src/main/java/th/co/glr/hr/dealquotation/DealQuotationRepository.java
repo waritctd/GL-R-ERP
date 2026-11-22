@@ -1188,7 +1188,7 @@ public class DealQuotationRepository {
                    ) c
               JOIN sales.quotation q ON q.ticket_id = c.ticket_id
               JOIN sales.deal_party p ON p.party_id = q.party_id AND p.customer_id = :customerId
-             WHERE q.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED')
+             WHERE q.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED') AND NOT q.is_sample
              ORDER BY q.approved_at DESC NULLS LAST, q.quotation_id DESC
             """, Map.of("ticketId", ticketId, "customerId", customerId),
             (rs, n) -> new ChainQuotation(rs.getLong("quotation_id"), rs.getString("order_code")));
@@ -1280,6 +1280,48 @@ public class DealQuotationRepository {
                 .addValue("id", quotationId)
                 .addValue("recipientType", recipientType)
                 .addValue("recipientLabel", recipientLabel));
+    }
+
+    /** Sets the sample mark on a live direct quotation. The service holds the ticket lock and has checked the guards. */
+    public int updateIsSample(long quotationId, boolean isSample) {
+        return jdbc.update("""
+            UPDATE sales.quotation SET is_sample = :isSample, updated_at = now()
+             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status NOT IN ('SUPERSEDED', 'CANCELLED')
+            """, new MapSqlParameterSource().addValue("id", quotationId).addValue("isSample", isSample));
+    }
+
+    /** The number of another live real direct quotation of the same party (or of the no-party group), if any. */
+    public Optional<String> findOtherLiveRealQuotationNumber(long ticketId, Long partyId, long quotationId) {
+        return jdbc.query("""
+            SELECT number FROM sales.quotation
+             WHERE ticket_id = :ticketId AND quotation_id <> :id AND party_id IS NOT DISTINCT FROM CAST(:partyId AS BIGINT)
+               AND origin = 'DEAL_DIRECT' AND NOT is_sample AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED')
+             ORDER BY quotation_id DESC LIMIT 1
+            """, new MapSqlParameterSource().addValue("ticketId", ticketId).addValue("id", quotationId)
+                .addValue("partyId", partyId), (rs, n) -> rs.getString("number")).stream().findFirst();
+    }
+
+    /** Does a live deposit notice, a live remaining invoice or a delivery round use this quotation? */
+    public boolean isUsedByBillingOrDelivery(long ticketId, long quotationId, String number) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.deposit_notice d
+                            WHERE d.ticket_id = :ticketId AND d.reference = :number AND d.status IN ('DRAFT', 'ISSUED'))
+                OR EXISTS (SELECT 1 FROM sales.remaining_invoice r
+                            WHERE r.ticket_id = :ticketId AND r.status IN ('DRAFT', 'ISSUED')
+                              AND (r.customer_quotation_id = :id
+                                   OR (r.customer_quotation_id IS NULL AND r.reference = :number)))
+                OR EXISTS (SELECT 1 FROM sales.delivery_request dr WHERE dr.quotation_id = :id)
+            """, Map.of("ticketId", ticketId, "id", quotationId, "number", number), Boolean.class));
+    }
+
+    /** Does a live quotation approved by the reuse rule name this number as its price source? */
+    public boolean isPriceSourceOfLiveQuotation(String number) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.quotation o
+                            WHERE o.approval_source_numbers IS NOT NULL
+                              AND o.doc_status NOT IN ('SUPERSEDED', 'CANCELLED')
+                              AND :number = ANY (string_to_array(replace(o.approval_source_numbers, ' ', ''), ',')))
+            """, Map.of("number", number), Boolean.class));
     }
 
     /** Sets whether a quotation's printed document names
@@ -1728,7 +1770,7 @@ public class DealQuotationRepository {
         return jdbc.query("""
             WITH prior AS (
                 SELECT quotation_id, doc_status FROM sales.quotation
-                 WHERE ticket_id = :ticketId AND quotation_id <> :keepId AND origin = 'DEAL_DIRECT'
+                 WHERE ticket_id = :ticketId AND quotation_id <> :keepId AND origin = 'DEAL_DIRECT' AND NOT is_sample
                    AND doc_status IN ('DRAFT', 'PENDING_APPROVAL')""" + keepClause + """
 
                  FOR UPDATE) -- lock first, so a concurrent DRAFT -> PENDING_APPROVAL is read as PENDING (B7 notice)
@@ -1817,7 +1859,7 @@ public class DealQuotationRepository {
         return jdbc.query("""
             UPDATE sales.quotation
                SET doc_status = 'SUPERSEDED', updated_at = now()
-             WHERE ticket_id = :ticketId AND quotation_id <> :approvedId
+             WHERE ticket_id = :ticketId AND quotation_id <> :approvedId AND is_sample = FALSE
                -- V204: one live offer per PARTY, not per deal. Sibling bidders each keep their own approved
                -- document; a row with no party (pre-V204, no customer, or the pricing-request route which is deal-level) still sweeps like before.
                AND (party_id IS NULL
@@ -2062,11 +2104,12 @@ public class DealQuotationRepository {
         }
         String originClause = originPredicate(originFilter, includePricedOrigins);
         return jdbc.queryForObject("""
-            SELECT COUNT(*) AS all_count,
+            SELECT COUNT(*) FILTER (WHERE NOT q.is_sample) AS all_count,
+                   -- A sample still needs its approver, so only this count keeps samples (owner ruling 2026-11-22).
                    COUNT(*) FILTER (WHERE q.doc_status = 'PENDING_APPROVAL') AS pending_count,
-                   COUNT(*) FILTER (WHERE %s) AS rework_count,
-                   COUNT(*) FILTER (WHERE q.doc_status = 'CANCELLED') AS cancelled_count,
-                   COUNT(*) FILTER (WHERE q.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED')) AS approved_count
+                   COUNT(*) FILTER (WHERE NOT q.is_sample AND %s) AS rework_count,
+                   COUNT(*) FILTER (WHERE NOT q.is_sample AND q.doc_status = 'CANCELLED') AS cancelled_count,
+                   COUNT(*) FILTER (WHERE NOT q.is_sample AND q.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED')) AS approved_count
               FROM sales.quotation q
               JOIN sales.ticket t ON t.ticket_id = q.ticket_id
              WHERE %s%s
@@ -2313,6 +2356,7 @@ public class DealQuotationRepository {
                    -- Sales feedback #5 (V192.1, 2026-10-06): "ไม่แสดงชื่อโครงการในใบเสนอราคา" — see
                    -- DealQuotationDtos#hideProjectName's own Javadoc. FALSE on every pre-V192.1 row.
                    q.hide_project_name,
+                   q.is_sample,
                    -- Quotation <-> deal linking, slice 1: the deal's code and LIVE stage, so list
                    -- and detail can link "ดีล {code}" without a second round trip.
                    tk.code AS ticket_code, tk.sales_stage AS deal_stage,
@@ -2473,7 +2517,8 @@ public class DealQuotationRepository {
             rs.getBoolean("party_headline"),
             rs.getInt("deal_buyer_count")
         )
-            .withApprovalBasis(rs.getString("approval_basis"), rs.getString("approval_source_numbers"));
+            .withApprovalBasis(rs.getString("approval_basis"), rs.getString("approval_source_numbers"))
+            .withIsSample(rs.getBoolean("is_sample"));
     }
 
     /**

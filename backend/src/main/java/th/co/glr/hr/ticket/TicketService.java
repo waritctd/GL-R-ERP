@@ -4519,7 +4519,7 @@ public class TicketService {
         }
     }
 
-    private boolean canManageQuotation(TicketSummaryDto s, UserPrincipal actor) {
+    public boolean canManageQuotation(TicketSummaryDto s, UserPrincipal actor) {
         return CEO_ROLES.contains(actor.role())
             || (ownsDeal(s, actor));
     }

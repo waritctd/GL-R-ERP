@@ -592,8 +592,29 @@ public final class DealQuotationRequests {
          * only: the party must belong to the deal; it fixes the recipient (its role), the customer/contact
          * snapshot (its customer, not the deal's) and the number family. Null keeps the pre-V204 behaviour
          * (the deal's own customer). Ignored on UPDATE: a document never changes party. */
-        Long partyId
+        Long partyId,
+        /** Optional. On create, null means a real quotation. On update, null keeps the stored mark. */
+        @com.fasterxml.jackson.annotation.JsonProperty("isSample") Boolean isSample
     ) {
+        /** The shape without {@link #isSample}, kept so existing construction sites compile unchanged. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, Long printedByDisplayId, Long salesRepDisplayId,
+                                          String projectName, Boolean omitContactHonorific,
+                                          String fullPaymentTerm, String orderedByName,
+                                          Boolean hideProjectName, String orderedByPhone,
+                                          String orderedByEmail, String recipientType, Boolean clearContact,
+                                          List<ItemInput> items, Long partyId) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, orderedByName, hideProjectName,
+                orderedByPhone, orderedByEmail, recipientType, clearContact, items, partyId, null);
+        }
+
         /** The pre-clearContact canonical shape (no {@link #clearContact}) — kept so every existing
          * construction site (tests, mostly) compiles unchanged. Defaults it to null: no clearing. */
         public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
@@ -675,7 +696,7 @@ public final class DealQuotationRequests {
             return new UpsertDealQuotationRequest(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
                 creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode, documentLanguage, currency,
                 printedByDisplayId, salesRepDisplayId, projectName, omitContactHonorific, fullPaymentTerm, orderedByName,
-                hideProjectName, orderedByPhone, orderedByEmail, recipientType, clearContact, items, newPartyId);
+                hideProjectName, orderedByPhone, orderedByEmail, recipientType, clearContact, items, newPartyId, isSample);
         }
 
         public UpsertDealQuotationRequest withRecipientType(String newRecipientType) {
@@ -683,7 +704,7 @@ public final class DealQuotationRequests {
                 remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
                 documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
                 omitContactHonorific, fullPaymentTerm, orderedByName, hideProjectName,
-                orderedByPhone, orderedByEmail, newRecipientType, clearContact, items, partyId);
+                orderedByPhone, orderedByEmail, newRecipientType, clearContact, items, partyId, isSample);
         }
 
         /** Copy with only {@link #hideProjectName} replaced — every other field unchanged. */
@@ -692,7 +713,16 @@ public final class DealQuotationRequests {
                 remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
                 documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
                 omitContactHonorific, fullPaymentTerm, orderedByName, newHideProjectName,
-                orderedByPhone, orderedByEmail, recipientType, clearContact, items, partyId);
+                orderedByPhone, orderedByEmail, recipientType, clearContact, items, partyId, isSample);
+        }
+
+        /** Copy with only {@link #isSample} replaced. */
+        public UpsertDealQuotationRequest withIsSample(Boolean newIsSample) {
+            return new UpsertDealQuotationRequest(contactId, deptCode, unitCode, offerDate, depositPercent,
+                remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, orderedByName, hideProjectName,
+                orderedByPhone, orderedByEmail, recipientType, clearContact, items, partyId, newIsSample);
         }
 
         /** Copy with only {@link #clearContact} replaced — every other field unchanged. */
@@ -701,7 +731,7 @@ public final class DealQuotationRequests {
                 remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
                 documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
                 omitContactHonorific, fullPaymentTerm, orderedByName, hideProjectName,
-                orderedByPhone, orderedByEmail, recipientType, newClearContact, items, partyId);
+                orderedByPhone, orderedByEmail, recipientType, newClearContact, items, partyId, isSample);
         }
 
         /** The pre-orderedByName shape (today's canonical, minus #orderedByName) — kept so every existing construction
@@ -807,6 +837,10 @@ public final class DealQuotationRequests {
 
     // There is no dual approval and no second slot to fill on anyone's behalf: one approval,
     // by whoever may act, issues the document.
+    /** {@code PATCH /deal-quotations/{id}/sample}. A nullable {@code Boolean}, so an omitted field is a clear 400. */
+    public record SetSampleRequest(
+        @jakarta.validation.constraints.NotNull @com.fasterxml.jackson.annotation.JsonProperty("isSample") Boolean isSample) {}
+
     public record ApproveRequest(@Size(max = 2000) String note) {}
 
     public record RejectRequest(@NotBlank @Size(max = 2000) String reason) {}

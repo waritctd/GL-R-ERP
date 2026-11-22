@@ -354,7 +354,7 @@ public class ReceiptImportRepository {
         Map<Long, Set<String>> quotes = new LinkedHashMap<>();
         jdbc.query("""
             SELECT q.ticket_id, q.number FROM sales.quotation q
-             WHERE q.number IS NOT NULL AND q.doc_status NOT IN ('CANCELLED', 'SUPERSEDED', 'REJECTED')
+             WHERE q.number IS NOT NULL AND NOT q.is_sample AND q.doc_status NOT IN ('CANCELLED', 'SUPERSEDED', 'REJECTED')
                AND q.ticket_id IN (""" + deals + ")", p, rs -> {
             quotes.computeIfAbsent(rs.getLong(1), k -> new HashSet<>()).add(rs.getString(2));
         });

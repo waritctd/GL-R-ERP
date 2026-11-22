@@ -65,7 +65,7 @@ public class ImportRequestQueryRepository {
               FROM sales.quotation q
               JOIN sales.quotation_item qi ON qi.quotation_id = q.quotation_id
               JOIN price_catalog.product_prices pp ON pp.price_id = qi.catalog_price_id
-             WHERE q.ticket_id = :id AND q.origin = 'DEAL_DIRECT' AND q.doc_status = 'APPROVED'
+             WHERE q.ticket_id = :id AND q.origin = 'DEAL_DIRECT' AND q.doc_status = 'APPROVED' AND NOT q.is_sample
                AND qi.lead_time_min_days IS NOT NULL AND qi.lead_time_max_days IS NOT NULL
             """, Map.of("id", ticketId), (rs, n) -> new QuotationLeadTimeRow(
                 (Long) rs.getObject("ticket_item_id"), (Long) rs.getObject("factory_id"),

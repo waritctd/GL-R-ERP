@@ -35,7 +35,7 @@ public class TicketRepository {
            FROM sales.quotation aq
            JOIN sales.deal_party ad ON ad.party_id = aq.party_id AND ad.status IN ('AWARDED', 'AWARDED_SPLIT')
            JOIN customers.customer ac ON ac.customer_id = ad.customer_id
-          WHERE aq.ticket_id = t.ticket_id AND aq.origin IS NOT NULL
+          WHERE aq.ticket_id = t.ticket_id AND aq.origin IS NOT NULL AND NOT aq.is_sample
             AND aq.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED')
           ORDER BY aq.quotation_id DESC LIMIT 1)""";
 
@@ -710,7 +710,7 @@ public class TicketRepository {
         List<Long> parentIds = jdbc.query("""
             SELECT quotation_id
               FROM sales.quotation
-             WHERE ticket_id = :ticketId AND recipient_type = :recipientType
+             WHERE ticket_id = :ticketId AND recipient_type = :recipientType AND NOT is_sample
              ORDER BY quotation_version DESC, quotation_id DESC
              LIMIT 1
             """,
@@ -726,6 +726,7 @@ public class TicketRepository {
                SET doc_status = 'SUPERSEDED'
              WHERE ticket_id = :ticketId
                AND recipient_type = :recipientType
+               AND NOT is_sample
                AND doc_status NOT IN ('SUPERSEDED','ACCEPTED','REJECTED','CANCELLED')
             """,
             new MapSqlParameterSource()
@@ -1085,6 +1086,7 @@ public class TicketRepository {
             SELECT quotation_id FROM sales.quotation
              WHERE ticket_id = :ticketId
                AND origin IN ('PRICING_REQUEST', 'DEAL_DIRECT')
+               AND NOT is_sample
                AND doc_status IN ('ACCEPTED', 'ISSUED', 'APPROVED')
              ORDER BY CASE doc_status
                           WHEN 'ACCEPTED' THEN 0
@@ -2205,10 +2207,10 @@ public class TicketRepository {
      * APPROVED, unconfirmed one is not payable. Table alias {@code q} must be sales.quotation.
      */
     public static final String ANSWERED_QUOTATION_SQL =
-        "(q.doc_status = 'ACCEPTED' OR (q.doc_status = 'APPROVED' AND q.origin = 'DEAL_DIRECT'"
+        "(NOT q.is_sample AND (q.doc_status = 'ACCEPTED' OR (q.doc_status = 'APPROVED' AND q.origin = 'DEAL_DIRECT'"
         + " AND EXISTS (SELECT 1 FROM sales.ticket_event pe WHERE pe.ticket_id = q.ticket_id"
         + " AND pe.kind = '" + TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION + "'"
-        + " AND pe.related_document_type = 'QUOTATION' AND pe.related_document_id = q.quotation_id)))";
+        + " AND pe.related_document_type = 'QUOTATION' AND pe.related_document_id = q.quotation_id))))";
 
     /**
      * Once a remaining invoice is ISSUED, what the customer owes follows the ISSUED documents -- the deposit PART plus
@@ -2275,7 +2277,7 @@ public class TicketRepository {
                   LIMIT 1),
                 (SELECT QUOTATION_AMOUNT
                    FROM sales.quotation q
-                  WHERE q.ticket_id = %1$s AND q.doc_status IN ('ISSUED','SENT')
+                  WHERE q.ticket_id = %1$s AND NOT q.is_sample AND q.doc_status IN ('ISSUED','SENT')
                   ORDER BY CASE q.recipient_type
                                WHEN 'BUYER' THEN 0
                                WHEN 'OWNER' THEN 1
@@ -2340,7 +2342,7 @@ public class TicketRepository {
                            END AS basis,
                            CASE WHEN (q.remainder_mode = 'CREDIT' OR q.full_payment_term = 'CREDIT') AND q.credit_days IS NOT NULL THEN q.credit_days::int END AS credit_days
                       FROM sales.quotation q
-                     WHERE q.ticket_id = %1$s AND (ANSWERED OR q.doc_status IN ('ISSUED', 'SENT'))
+                     WHERE q.ticket_id = %1$s AND NOT q.is_sample AND (ANSWERED OR q.doc_status IN ('ISSUED', 'SENT'))
                      ORDER BY CASE q.doc_status WHEN 'ACCEPTED' THEN 0 WHEN 'APPROVED' THEN 1 ELSE 2 END,
                               CASE q.recipient_type
                                   WHEN 'BUYER' THEN 0
@@ -2841,6 +2843,7 @@ public class TicketRepository {
      */
     private static final String LIVE_DIRECT_QUOTATION_PREDICATE = """
                              AND origin = 'DEAL_DIRECT'
+                             AND is_sample = FALSE
                              AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED')
         """;
 
@@ -3681,7 +3684,8 @@ public class TicketRepository {
             (SELECT array_agg(DISTINCT r.recipient_type)
                FROM sales.quotation r
               WHERE r.ticket_id = t.ticket_id
-                AND r.doc_status <> 'CANCELLED') AS quoted_recipients,
+                AND r.doc_status <> 'CANCELLED'
+                AND NOT r.is_sample) AS quoted_recipients,
             (SELECT d.total_payable FROM sales.deposit_notice d
               WHERE d.ticket_id = t.ticket_id AND d.status = 'ISSUED'
               ORDER BY d.version DESC, d.deposit_notice_id DESC LIMIT 1) AS deposit_due,

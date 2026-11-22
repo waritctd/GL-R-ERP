@@ -31,7 +31,7 @@ public class FinanceDealRepository {
             SELECT q.quotation_id, q.number, q.doc_status, q.total_amount, q.currency,
                    q.issued_at, q.accepted_at, q.origin, q.pricing_request_id
               FROM sales.quotation q
-             WHERE q.ticket_id = :id AND (ANSWERED OR q.doc_status IN ('ISSUED', 'SENT'))
+             WHERE q.ticket_id = :id AND NOT q.is_sample AND (ANSWERED OR q.doc_status IN ('ISSUED', 'SENT'))
              ORDER BY CASE q.doc_status WHEN 'ACCEPTED' THEN 0 WHEN 'APPROVED' THEN 1 ELSE 2 END,
                       CASE q.recipient_type WHEN 'BUYER' THEN 0 WHEN 'OWNER' THEN 1 ELSE 2 END,
                       q.accepted_at DESC NULLS LAST, q.issued_at DESC, q.quotation_id DESC

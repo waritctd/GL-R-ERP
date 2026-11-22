@@ -80,7 +80,7 @@ public class DocumentChainRepository {
                     ORDER BY e.created_at DESC, e.event_id DESC
                     LIMIT 1) pe ON TRUE
              WHERE q.quotation_id IN (:ids)
-               AND q.origin = 'DEAL_DIRECT' AND q.doc_status = 'APPROVED'
+               AND q.origin = 'DEAL_DIRECT' AND q.doc_status = 'APPROVED' AND NOT q.is_sample
             """ + scopeClause, params, rs -> {
             out.put(rs.getLong("quotation_id"), new ListFacts(
                 new DocumentChainRules.Facts(rs.getString("status"), rs.getString("lifecycle"),

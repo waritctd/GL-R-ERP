@@ -234,18 +234,22 @@ public class DealQuotationService {
         DealQuotationRepository.PartyRef party = resolvePartyForCreate(ticketId, request.partyId());
         String recipientType = party != null ? party.role() : requireRecipientForCreate(request.recipientType());
         quotations.lockTicket(ticketId);
+        // A sample is a price document only: it sits outside the one-route and one-live-quotation rules below.
+        boolean sample = Boolean.TRUE.equals(request.isSample());
         // One pricing route per deal: the reverse of DirectQuotationLocks#requireNoLiveDirectQuotation. Only for
         // #create; a revision or reorder is not a new route choice, and #createFromPricingRequest IS the pricing route.
-        th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLivePricingRequest(tickets, ticketId);
+        if (!sample) {
+            th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLivePricingRequest(tickets, ticketId);
+        }
         // The deal's route (a property of the deal, so before N6, which is about its documents): no party off it.
         th.co.glr.hr.ticket.TicketService.requireQuotationRecipientOnRoute(ticket.entryChannel(), recipientType);
         // One live direct quotation per deal, unless every live one is APPROVED and addressed to an earlier party. The
         // 409 names the blocking one (liveQuotationId/number/docStatus, top-level in the body) so the client can offer
         // "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข". Under #lockTicket so concurrent creates cannot both pass.
-        if (party != null) {
+        if (!sample && party != null) {
             // V204: per deal party: a sibling bidder's live document does not block this party's first one.
             th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotationForParty(tickets, ticketId, party.partyId());
-        } else {
+        } else if (!sample) {
             th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotationForCreate(tickets, ticketId, recipientType);
         }
         ContactSnapshot contact = resolveContact(request.contactId(), null, ticket, partyCustomerId(party));
@@ -315,11 +319,15 @@ public class DealQuotationService {
         // The named party, or the default one, now has a document: ACTIVE -> QUOTED.
         Long quotedPartyId = party != null ? Long.valueOf(party.partyId())
             : quotations.findDefaultPartyId(ticketId, ticket.customerId(), recipientType).orElse(null);
-        if (quotedPartyId != null) {
-            quotations.markPartyQuoted(quotedPartyId);
+        if (sample) {
+            quotations.updateIsSample(id, true);
+        } else {
+            if (quotedPartyId != null) {
+                quotations.markPartyQuoted(quotedPartyId);
+            }
+            advanceDealToRecipientStage(ticketId, recipientType, actor);
+            moveOwnerToSalesRep(ticket, salesRepDisplayId, actor);
         }
-        advanceDealToRecipientStage(ticketId, recipientType, actor);
-        moveOwnerToSalesRep(ticket, salesRepDisplayId, actor);
         // A brand-new document prints its project unless the request says otherwise, so only an explicit true needs
         // writing (the column DEFAULT is FALSE). A statement of its own, see DealQuotationRepository#updateHideProjectName.
         if (Boolean.TRUE.equals(request.hideProjectName())) {
@@ -956,7 +964,9 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
         // Only an ACTUAL change of the rep moves the owner: re-saving a draft that already carries it must not.
-        if (!java.util.Objects.equals(salesRepDisplayId, existing.salesRepDisplayId())) {
+        // A sample is a price document only, so it never moves the deal.
+        boolean staysSample = request.isSample() != null ? request.isSample() : existing.isSample();
+        if (!staysSample && !java.util.Objects.equals(salesRepDisplayId, existing.salesRepDisplayId())) {
             moveOwnerToSalesRep(ticket, salesRepDisplayId, actor);
         }
         // Persist a sent ผู้รับ. The header CAS just proved the row is still a DRAFT in this transaction and
@@ -969,7 +979,7 @@ public class DealQuotationService {
                     throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
                 }
             }
-            if (recipientChanged) {
+            if (recipientChanged && !staysSample) {
                 // Re-addressing a DRAFT corrects WHO the document is for, so the stage follows. Only on a genuine change (a no-op
                 // re-save must not write a stage event). Forward-only, so a correction BACK to an earlier party leaves the deal
                 // where the later one put it.
@@ -985,6 +995,10 @@ public class DealQuotationService {
             if (quotations.updateHideProjectName(id, request.hideProjectName()) == 0) {
                 throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
             }
+        }
+        // A missing value keeps the stored mark. A change passes the same guards as PATCH .../sample.
+        if (request.isSample() != null && request.isSample() != existing.isSample()) {
+            applySampleMark(id, request.isSample(), actor);
         }
         // Item ids are STABLE across a draft save: a full delete+insert minted new ids on every save, so a client reusing
         // ids from an earlier load (after its own autosave, a second tab, a racing save) silently lost every picture; see
@@ -1402,7 +1416,9 @@ public class DealQuotationService {
         DealQuotationDto approved = requireQuotation(id);
         // One-live-quotation sweep (see #supersedeOtherLiveOnTicket). Runs BEFORE the ancestor walk below so the parent's
         // DEAL_QUOTATION_SUPERSEDED event comes from the sweep.
-        supersedeOtherLiveOnTicket(approved, actor);
+        if (!approved.isSample()) {
+            supersedeOtherLiveOnTicket(approved, actor);
+        }
         // The customer's last approved document stays valid until a REVISION reaches APPROVED (see the status-machine
         // note). Only for a revision. Runs AFTER the sweep and stays SILENT (no ticket event): a DRAFT ancestor from a
         // reject/resubmit chain is invisible to the sweep's live-status predicate, so this walk is the only thing that
@@ -1413,14 +1429,17 @@ public class DealQuotationService {
         Long ancestorId = approved.parentQuotationId();
         while (ancestorId != null) {
             DealQuotationDto ancestor = requireQuotation(ancestorId);
-            quotations.supersede(ancestorId);
+            // A sample and a real quotation never replace each other, even when one was revised from the other.
+            if (ancestor.isSample() == approved.isSample()) {
+                quotations.supersede(ancestorId);
+            }
             ancestorId = ancestor.parentQuotationId();
         }
         tickets.addEventWithDocument(approved.ticketId(), actor.id(), actor.name(), TicketEventKind.QUOTATION_ISSUED,
             null, null, "อนุมัติใบเสนอราคา " + approved.number(), RelatedDocumentType.QUOTATION, id);
         // Spec 2026-11-15 §7.2: the approved document fills its deal — stage onto the recipient's (forward-only) and
         // the addressee into the blank designer/owner/buyer name. Same transaction. Null only in hand-wired tests.
-        if (ticketService != null) {
+        if (ticketService != null && !approved.isSample()) {
             ticketService.applyApprovedQuotation(approved.ticketId(), approved.id(), approved.recipientType(), actor);
         }
         String message = "ใบเสนอราคา " + approved.number() + " ได้รับอนุมัติแล้ว";
@@ -2049,6 +2068,10 @@ public class DealQuotationService {
         tickets.lockTicketForUpdate(ticketId);
         TicketSummaryDto locked = requireTicketSummary(ticketId);
 
+        // Before the replay check: a sample on an already confirmed deal must be refused, not answered as a success.
+        if (requireQuotation(quotationId).isSample()) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาตัวอย่างยืนยันคำสั่งซื้อไม่ได้ เอาเครื่องหมายตัวอย่างออกก่อน");
+        }
         if (tickets.hasPromotionFromQuotationEvent(ticketId)) {
             return promotionResult(ticketId, quotationId); // idempotent replay: no writes
         }
@@ -2519,6 +2542,81 @@ public class DealQuotationService {
         return revision;
     }
 
+    /** {@code PATCH /deal-quotations/{id}/sample}: turns the sample mark on or off. Writing follows canManageQuotation (spec 0001). */
+    @Transactional
+    public DealQuotationDto setSample(long id, boolean isSample, UserPrincipal actor) {
+        applySampleMark(id, isSample, actor);
+        return requireQuotation(id);
+    }
+
+    /** The one writer of a mark change, shared by {@link #setSample} and {@link #update}. Guards run under the deal's lock. */
+    private void applySampleMark(long id, boolean isSample, UserPrincipal actor) {
+        long ticketId = requireQuotation(id).ticketId();
+        // Writing the mark follows canManageQuotation (spec 0001), whichever endpoint carries it.
+        if (ticketService == null || !ticketService.canManageQuotation(requireTicketSummary(ticketId), actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        quotations.lockTicket(ticketId);
+        DealQuotationDto quotation = requireQuotation(id);
+        if (isSample && !DealQuotationRepository.ORIGIN_DEAL_DIRECT.equals(quotation.origin())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ใบตัวอย่างต้องเป็นใบเสนอราคาที่สร้างจากงานโดยตรงเท่านั้น");
+        }
+        if (QuotationStatus.SUPERSEDED.equals(quotation.docStatus()) || QuotationStatus.CANCELLED.equals(quotation.docStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้ถูกแทนที่หรือยกเลิกแล้ว จึงเปลี่ยนเครื่องหมายตัวอย่างไม่ได้");
+        }
+        if (quotation.isSample() == isSample) {
+            return;
+        }
+        if (isSample) {
+            requireCanBecomeSample(quotation);
+        } else {
+            requireCanBecomeReal(quotation);
+        }
+        if (quotations.updateIsSample(id, isSample) != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+        tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.EDITED, null, null,
+            (isSample ? "ทำเครื่องหมายใบตัวอย่าง " : "เอาเครื่องหมายใบตัวอย่างออก ") + quotation.number(),
+            RelatedDocumentType.QUOTATION, id);
+        if (!isSample) {
+            // Now a real quotation: it does what a real one did when it was created or approved.
+            if (quotation.partyId() != null) {
+                quotations.markPartyQuoted(quotation.partyId());
+            }
+            if (QuotationStatus.APPROVED.equals(quotation.docStatus()) && ticketService != null) {
+                ticketService.applyApprovedQuotation(ticketId, id, quotation.recipientType(), actor);
+            } else {
+                advanceDealToRecipientStage(ticketId, quotation.recipientType(), actor);
+            }
+            moveOwnerToSalesRep(requireTicketSummary(ticketId), quotation.salesRepDisplayId(), actor);
+        }
+    }
+
+    private void requireCanBecomeSample(DealQuotationDto quotation) {
+        if (tickets.isOrderConfirmedFromQuotation(quotation.ticketId(), quotation.id())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงเป็นใบตัวอย่างไม่ได้");
+        }
+        if (quotations.isUsedByBillingOrDelivery(quotation.ticketId(), quotation.id(), quotation.number())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้มีใบแจ้งมัดจำ ใบแจ้งยอดคงเหลือ หรือรอบส่งของแล้ว จึงเป็นใบตัวอย่างไม่ได้");
+        }
+        // The reused quotation prints the approver of its price source, which must stay a real quotation.
+        if (quotations.isPriceSourceOfLiveQuotation(quotation.number())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้เป็นแหล่งราคาของใบเสนอราคาอื่นที่อนุมัติแล้ว จึงเป็นใบตัวอย่างไม่ได้");
+        }
+    }
+
+    private void requireCanBecomeReal(DealQuotationDto quotation) {
+        quotations.findOtherLiveRealQuotationNumber(quotation.ticketId(), quotation.partyId(), quotation.id())
+            .ifPresent(number -> {
+                throw new ApiException(HttpStatus.CONFLICT, "เอาเครื่องหมายตัวอย่างออกไม่ได้ เพราะมีใบเสนอราคาจริง " + number + " อยู่แล้ว");
+            });
+        if (tickets.hasPromotionFromQuotationEvent(quotation.ticketId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "เอาเครื่องหมายตัวอย่างออกไม่ได้ เพราะงานนี้ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว");
+        }
+        // A real direct quotation may not sit beside a live pricing request (one pricing route per deal).
+        th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLivePricingRequest(tickets, quotation.ticketId());
+    }
+
     /**
      * "สร้างจากใบเดิม" / สั่งเหมือนเดิม: clone an APPROVED direct-deal quotation into a new, INDEPENDENT DRAFT on the
      * same deal, at the next number in the SAME shared numbering family a revision uses (see {@link #insertCopyOf}),
@@ -2555,6 +2653,10 @@ public class DealQuotationService {
         // source between the check and the lock, and without re-fetching this would clone a SUPERSEDED source.
         source = requireApprovedForClone(requireQuotation(id),
             "สร้างจากใบเดิมได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น");
+        // The clone of a sample is real, so it must pass what taking the mark off would have to pass.
+        if (source.isSample()) {
+            requireCanBecomeReal(source);
+        }
         long newId = insertReorderCopyOf(source, actor);
         DealQuotationDto reorder = requireQuotation(newId);
         tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.DEAL_QUOTATION_REORDERED,
@@ -2653,6 +2755,10 @@ public class DealQuotationService {
         // The copy's items point at the source's (immutable, shared) picture rows, matched by seq. Shared by revisions and
         // reorder clones.
         quotations.copyPictureLinks(source.id(), newId);
+        // A revision keeps its parent's sample mark. A reorder clone starts as real.
+        if (parentQuotationId != null && source.isSample()) {
+            quotations.updateIsSample(newId, true);
+        }
         // A CEO-linked line already removed on the source stays "removed from the CEO's decision" on the copy; resetting the
         // counter to 0 would let a revision dodge #requireCeoApprovalIfChanged.
         if (prSource && source.itemsRemovedFromCeoCount() > 0) {
@@ -2685,7 +2791,7 @@ public class DealQuotationService {
      * and flip the deposit policy), and the confirmed one may not be cloned.
      */
     private void requireNoOtherDirectQuotationAfterConfirm(DealQuotationDto quotation) {
-        if (isPricingRequestOrigin(quotation)
+        if (quotation.isSample() || isPricingRequestOrigin(quotation)
                 // V204: a contractor recorded as "ยังรอผล" is still bidding after the winner's order was confirmed; its own
                 // document may still be submitted and approved, and a later bid outcome forks it to a child deal.
                 || Set.of("ACTIVE", "QUOTED", "NEGOTIATING").contains(quotation.partyStatus())

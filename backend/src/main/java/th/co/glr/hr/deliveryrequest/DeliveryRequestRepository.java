@@ -331,7 +331,7 @@ public class DeliveryRequestRepository {
         + "')))";
 
     /** A quotation an order can be delivered against: a direct one from APPROVED on, or the accepted pricing-request one of a confirmed order. */
-    private static final String ORDER_QUOTATION = "((origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED','ISSUED','SENT','ACCEPTED'))"
+    private static final String ORDER_QUOTATION = "((origin = 'DEAL_DIRECT' AND NOT is_sample AND doc_status IN ('APPROVED','ISSUED','SENT','ACCEPTED'))"
         + " OR " + PRICING_ORDER + ")";
 
     /** The order came through a pricing request, the customer accepted it and the deal is an order: nothing is left to confirm. */

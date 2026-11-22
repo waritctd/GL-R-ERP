@@ -54,6 +54,7 @@ public class DealPartyRepository {
                  FROM sales.quotation q
                 WHERE q.party_id = p.party_id
                   AND q.doc_status NOT IN ('SUPERSEDED', 'CANCELLED')
+                  AND NOT q.is_sample
                 ORDER BY q.quotation_id DESC
                 LIMIT 1) lq ON TRUE
         """;
@@ -150,7 +151,7 @@ public class DealPartyRepository {
     public Optional<Long> findLatestApprovedDirectQuotationId(long partyId) {
         return jdbc.query("""
             SELECT quotation_id FROM sales.quotation
-             WHERE party_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED'
+             WHERE party_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED' AND NOT is_sample
              ORDER BY quotation_id DESC LIMIT 1
             """, Map.of("id", partyId), (rs, n) -> rs.getLong("quotation_id")).stream().findFirst();
     }
@@ -185,7 +186,7 @@ public class DealPartyRepository {
             "SELECT t.ticket_id, t.code, t.child_kind, t.sales_stage, t.lifecycle, t.fulfillment_status,"
                 + " COALESCE(NULLIF((" + TicketRepository.payableAmountExVatSelect("t.ticket_id") + "), 0),"
                 + " (SELECT q.total_amount FROM sales.quotation q WHERE q.ticket_id = t.ticket_id"
-                + " AND q.doc_status = 'APPROVED' AND q.origin = 'DEAL_DIRECT'"
+                + " AND q.doc_status = 'APPROVED' AND q.origin = 'DEAL_DIRECT' AND NOT q.is_sample"
                 + " ORDER BY q.quotation_id DESC LIMIT 1), 0) AS value_ex_vat,"
                 + " (" + TicketRepository.paidAmountSelect("t.ticket_id") + ") AS received,"
                 + " (" + TicketRepository.payableAmountSelect("t.ticket_id") + ") AS payable,"
