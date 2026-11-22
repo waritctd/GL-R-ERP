@@ -4875,10 +4875,13 @@ function mockWarehouseAllowance(ticket, item) {
   // the share is of the whole line (the IR still holds the marked part); the mark only lowers the ceiling
   const importQty = Math.max(Number(item.qty ?? 0) - declared, 0);
   const unitKey = (u) => String(u ?? '').trim().toLowerCase().replace(/^(pcs?|pieces?)$/, 'แผ่น');
-  const sameUnit = mine.every((it) => unitKey(it.unit) === '' || [unitKey(item.unit), unitKey(item.rawUnit), !unitKey(item.unit) && !unitKey(item.rawUnit) && (item.unitBasis ?? 'PIECE') === 'PIECE' ? 'แผ่น' : null].includes(unitKey(it.unit))); // a blank IR unit is the line's
+  // TicketRepository#lotReceipts: raw_unit is a price basis, so only the line's own quantity unit is compared
+  const lineUnit = unitKey(item.unit) || 'แผ่น';
+  const sameUnit = mine.every((it) => unitKey(it.unit) === '' || ((item.unitBasis ?? 'PIECE') === 'PIECE' && unitKey(it.unit) === lineUnit));
   const arrived = mockSumQty(receivedLotsOf.map((l) => l.receivedQty ?? l.qty));
-  const imported = sameUnit && irQty > importQty && onRounds < irQty // an over-order fills the line first
-    ? Math.min(importQty, arrived)
+  const wanted = mockSumQty(mine.map(mockWantedQty));
+  const imported = sameUnit
+    ? (onRounds < wanted ? Math.min(importQty, arrived) : importQty) // only what arrived, until all that is wanted is in
     : importQty * (irQty <= 0 ? 1 : Math.min(1, onRounds / irQty));
   return Math.round(Math.min(qty, stock + imported) * 100) / 100;
 }

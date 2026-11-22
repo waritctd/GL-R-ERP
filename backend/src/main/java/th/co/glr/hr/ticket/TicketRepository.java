@@ -2737,7 +2737,7 @@ public class TicketRepository {
 
     /** Per deal line an ISSUED IR line points at: the IR quantity and how much of it sits on RECEIVED rounds (lot
      * quantities as planned; a short arrival is NOT subtracted, so it can never stop a deal from being delivered). */
-    public record LineReceipt(BigDecimal irQty, BigDecimal onRounds, BigDecimal arrived, long receivedLots, boolean lotReturned, boolean sameUnit) {}
+    public record LineReceipt(BigDecimal irQty, BigDecimal wantedQty, BigDecimal onRounds, BigDecimal arrived, long receivedLots, boolean lotReturned, boolean sameUnit) {}
     // receivedLots: the line's lots on RECEIVED rounds, INCLUDING ones that received 0 (the GOODS_RECEIVED bypass is for lines with none)
 
     /** {@code dealHasLots}: any ISSUED IR of the deal has a lot at all; without it nothing is capped (pre-portal, stock-only
@@ -2765,22 +2765,22 @@ public class TicketRepository {
                    COALESCE(SUM((SELECT COUNT(*) FROM sales.shipment_lot l2
                                   WHERE l2.import_request_item_id = iri.import_request_item_id)), 0) AS lots,
                    COALESCE(BOOL_OR(ti.had_returned_lot), false) AS lot_returned,
-                   -- a blank IR unit is the deal line's own (a portal IR copies ti.unit, usually NULL)
-                   COALESCE(BOOL_AND(COALESCE(NULLIF(btrim(iri.unit), '') IS NULL
-                                             OR regexp_replace(lower(btrim(iri.unit)), '^(pcs?|pieces?)$', 'แผ่น')
-                                                IN (regexp_replace(lower(btrim(ti.unit)), '^(pcs?|pieces?)$', 'แผ่น'),
-                                                    regexp_replace(lower(btrim(ti.raw_unit)), '^(pcs?|pieces?)$', 'แผ่น'),
-                                                    -- a piece-basis line with no unit text is in แผ่น
-                                                    CASE WHEN ti.unit_basis = 'PIECE' AND NULLIF(btrim(ti.unit), '') IS NULL
-                                                          AND NULLIF(btrim(ti.raw_unit), '') IS NULL THEN 'แผ่น' END), false)), false) AS same_unit
+                   COALESCE(SUM(COALESCE(w.wanted_qty, iri.qty)), 0) AS wanted_qty, -- less what was marked not delivered
+                   -- a blank IR unit is the deal line's own (a portal IR copies ti.unit, usually NULL). raw_unit is a price basis,
+                   -- never the quantity's unit: a line counted in pieces has ti.unit, or no unit text at all.
+                   COALESCE(BOOL_AND(NULLIF(btrim(iri.unit), '') IS NULL
+                                     OR (ti.unit_basis = 'PIECE'
+                                         AND regexp_replace(lower(btrim(iri.unit)), '^(pcs?|pieces?)$', 'แผ่น')
+                                             = regexp_replace(lower(COALESCE(NULLIF(btrim(ti.unit), ''), 'แผ่น')), '^(pcs?|pieces?)$', 'แผ่น'))), false) AS same_unit
               FROM sales.import_request ir
               JOIN sales.import_request_item iri ON iri.import_request_id = ir.import_request_id
               LEFT JOIN sales.ticket_item ti ON ti.item_id = iri.ticket_item_id
+              LEFT JOIN sales.import_item_wanted w ON w.import_request_item_id = iri.import_request_item_id
              WHERE ir.ticket_id = :t AND ir.status = 'ISSUED'
              GROUP BY iri.ticket_item_id
             """, Map.of("t", ticketId), rs -> {
                 if (rs.getObject("item_id") != null) { // an unlinked line still counts toward dealHasLots
-                    byItem.put(rs.getLong("item_id"), new LineReceipt(rs.getBigDecimal("ir_qty"), rs.getBigDecimal("on_rounds"), rs.getBigDecimal("arrived"), rs.getLong("received_lots"), rs.getBoolean("lot_returned"), rs.getBoolean("same_unit")));
+                    byItem.put(rs.getLong("item_id"), new LineReceipt(rs.getBigDecimal("ir_qty"), rs.getBigDecimal("wanted_qty"), rs.getBigDecimal("on_rounds"), rs.getBigDecimal("arrived"), rs.getLong("received_lots"), rs.getBoolean("lot_returned"), rs.getBoolean("same_unit")));
                 }
                 if (rs.getLong("lots") > 0 || rs.getBoolean("lot_returned")) { // a returned last lot keeps the deal capped
                     anyLots[0] = true;

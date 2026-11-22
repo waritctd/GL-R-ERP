@@ -1026,6 +1026,125 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         finish(l);
     }
 
+    @Test
+    void arrivedGoodsCountTowardTheDealFirst_acrossUnitsTheShareStays() {
+        Line split = sized("LM-1", 14, 32, "pcs");
+        receive(split, 14, 14);
+        allowance(split, "14");
+        deliverItemFromWarehouse(split.ticket, split.item, "14");
+        assertThat(fulfilment(split.ticket)).isEqualTo("FULLY_DELIVERED");
+
+        Line both = sized("LM-2", 14, 32, "pcs");
+        receive(both, 14, 14);
+        receive(both, 18, 18);
+        allowance(both, "14");
+
+        Line single = sized("LM-3", 18, 66, "pcs");
+        receive(single, 66, 66);
+        allowance(single, "18");
+
+        Line sqm = sized("LM-4", 600, new BigDecimal("60.12"), "ตร.ม.");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL WHERE item_id = :i", Map.of("i", sqm.item));
+        insertAndReceive(sqm, "30.06");
+        allowance(sqm, "300");
+        insertAndReceive(sqm, "30.06");
+        allowance(sqm, "600");
+
+        Line sqmBasis = sized("LM-10", 600, new BigDecimal("60.12"), "ตร.ม.");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL, unit_basis = 'SQM', qty_sqm = 60.12 WHERE item_id = :i", Map.of("i", sqmBasis.item));
+        insertAndReceive(sqmBasis, "30.06");
+        allowance(sqmBasis, "300"); // SQM basis: qty is not in ตร.ม., so the share applies
+
+        Line zero = sized("LM-5", 100, 100, "pcs");
+        long zr = receive(zero, 100, 0);
+        allowance(zero, "0");
+        rounds.returnLotToWaiting(zr, lotIdOf(zr, zero.irItem), importUser);
+        allowance(zero, "0");
+        mark(zero, "100");
+        assertThat(fulfilment(zero.ticket)).isEqualTo("FULLY_DELIVERED");
+
+        Line marked = sized("LM-6", 100, 100, "pcs");
+        receive(marked, 60, 60);
+        mark(marked, "40");
+        allowance(marked, "60");
+        deliverItemFromWarehouse(marked.ticket, marked.item, "60");
+        assertThat(fulfilment(marked.ticket)).isEqualTo("FULLY_DELIVERED");
+
+        Line stock = sized("LM-7", 100, 80, "pcs");
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = 20 WHERE item_id = :i", Map.of("i", stock.item));
+        receive(stock, 40, 40);
+        allowance(stock, "60");
+
+        Line shortLot = sized("LM-8", 100, 100, "pcs");
+        receive(shortLot, 100, 60);
+        allowance(shortLot, "100");
+
+        Line mixed = sized("LM-9", 100, 50, "pcs");
+        long other = jdbc.queryForObject("""
+            INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model)
+            VALUES (:ir, :ti, 2, 'MIX', '20x20', 50, 'กล่อง', 'Round Factory', 'Raku') RETURNING import_request_item_id""",
+            Map.of("ir", mixed.ir, "ti", mixed.item), Long.class);
+        long mr = round("ORDERED");
+        insertLot(mr, mixed.ir, mixed.irItem, 50);
+        insertLot(mr, mixed.ir, other, 25);
+        rounds.advance(mr, receiveRequest(List.of(new LotReceipt(lotIdOf(mr, mixed.irItem), new BigDecimal("50")),
+            new LotReceipt(lotIdOf(mr, other), new BigDecimal("25")))), importUser);
+        allowance(mixed, "75");
+
+        Line exact = sized("LM-11", 100, 100, "pcs");
+        receive(exact, 14, 12);
+        allowance(exact, "12"); // only what is in the warehouse while 86 are still to come
+
+        Line under = sized("LM-12", 100, 50, "pcs");
+        receive(under, 25, 25);
+        allowance(under, "25");
+
+        Line wantedIn = sized("LM-13", 100, 100, "pcs");
+        receive(wantedIn, 60, 50);
+        mark(wantedIn, "40");
+        allowance(wantedIn, "60"); // all that is wanted is in: the short lot does not cap
+        deliverItemFromWarehouse(wantedIn.ticket, wantedIn.item, "60");
+        assertThat(fulfilment(wantedIn.ticket)).isEqualTo("FULLY_DELIVERED");
+
+        Line priceBasis = sized("LM-14", 600, 60, "sqm");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL, raw_unit = 'sqm' WHERE item_id = :i", Map.of("i", priceBasis.item));
+        receive(priceBasis, 30, 30);
+        allowance(priceBasis, "300"); // raw_unit is a price basis: ตร.ม. is never counted as pieces
+
+        Line rd56 = sized("LM-15", 14, 32, "แผ่น");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL, raw_unit = 'แผ่น' WHERE item_id = :i", Map.of("i", rd56.item));
+        receive(rd56, 14, 12);
+        allowance(rd56, "12");
+        Line rd55 = sized("LM-16", 10, 24, "แผ่น");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL, raw_unit = 'แผ่น' WHERE item_id = :i", Map.of("i", rd55.item));
+        receive(rd55, 10, 10);
+        allowance(rd55, "10");
+        Line third = sized("LM-17", 90, 90, "แผ่น");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL, raw_unit = 'แผ่น' WHERE item_id = :i", Map.of("i", third.item));
+        receive(third, 90, 90);
+        allowance(third, "90");
+    }
+
+    private Line sized(String code, int dealQty, Number irQty, String irUnit) {
+        Line l = line(code);
+        jdbc.update("UPDATE sales.ticket_item SET qty = :q WHERE item_id = :i", Map.of("q", dealQty, "i", l.item));
+        jdbc.update("UPDATE sales.import_request_item SET qty = :q, unit = :u WHERE import_request_item_id = :i",
+            Map.of("q", irQty, "u", irUnit, "i", l.irItem));
+        return l;
+    }
+
+    private void insertAndReceive(Line l, String qty) {
+        long r = round("ORDERED");
+        jdbc.update("INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty) VALUES (:r, :ir, :i, :q)",
+            Map.of("r", r, "ir", l.ir, "i", l.irItem, "q", new BigDecimal(qty)));
+        rounds.advance(r, receiveRequest(List.of(new LotReceipt(lotIdOf(r, l.irItem), new BigDecimal(qty)))), importUser);
+    }
+
+    private void allowance(Line l, String expected) {
+        BigDecimal remaining = ticketService.warehouseRemaining(l.ticket, owner).get(l.item);
+        assertThat(remaining).isEqualByComparingTo(expected);
+    }
+
     private record Line(long ticket, long ir, long item, long irItem) {}
 
     private Line line(String code) {
