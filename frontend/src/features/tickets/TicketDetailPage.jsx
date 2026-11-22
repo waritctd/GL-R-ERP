@@ -1238,7 +1238,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const bidOutcomeBanner = bidOutcomeAvailable && awaitingBid
     ? `รอผลประมูล · ผู้รับเหมา ${buyerParties(parties).filter(isBiddingParty).length} ราย เสนอราคาแล้ว · กด "บันทึกผลประมูล" เมื่อทราบผล เลือกผู้ชนะได้มากกว่า 1 ราย`
     : null;
-  if (bidOutcomeAvailable && !can.confirmFinalPayment && !can.confirmClose && !can.verifyClose) {
+  // Once the goods are delivered the next step is the money: a contractor still waiting moves to ⋯, it does not lead.
+  const bidOutcomeInMenu = bidOutcomeAvailable && ['DELIVERED', 'CLOSED_PAID'].includes(summary.salesStage);
+  if (bidOutcomeAvailable && !bidOutcomeInMenu && !can.confirmFinalPayment && !can.confirmClose && !can.verifyClose) {
     stickyPrimaryLabel = 'บันทึกผลประมูล';
     stickyPrimaryAction = (
       <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action="record_bid_outcome"
@@ -1702,6 +1704,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       onSelect: handleOpenAdvance,
       testId: 'deal-stage-advance',
     },
+    bidOutcomeInMenu && { key: 'recordBidOutcome', label: 'บันทึกผลประมูล', icon: 'check', disabled: actionLoading, onSelect: () => setBidOutcomeOpen(true) },
     canEditStage && {
       key: 'editStage', label: 'แก้ไขสถานะ…', icon: 'pencil', disabled: actionLoading, onSelect: handleOpenEditStage,
     },

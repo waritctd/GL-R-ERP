@@ -4175,7 +4175,7 @@ function mockApprovedQuotationsOf(ticketId) {
       || (q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED' && mockIsOrderStage(ticketId))))
     .sort((a, b) => a.id - b.id)
     .map((q) => ({
-      id: q.id, number: q.number, total: q.grandTotal ?? 0, docStatus: q.docStatus,
+      id: q.id, number: q.number, total: q.grandTotal ?? 0, docStatus: q.docStatus, legacy: false,
       // DepositNoticeRepository#findGoverningQuotation: a DEAL_DIRECT quotation sources a notice when ACCEPTED, ISSUED or
       // APPROVED (not SENT); a 0% one is refused by the service.
       depositBlockedReason: !['ACCEPTED', 'ISSUED', 'APPROVED'].includes(q.docStatus)

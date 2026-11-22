@@ -321,7 +321,10 @@ public class DeliveryRequestRepository {
     }
 
     /** Recording ACCEPTED moves only the pricing request: the deal itself is an order from ORDER_RECEIVED on. */
-    private static final String PRICING_ORDER = "(origin = 'PRICING_REQUEST' AND doc_status = 'ACCEPTED' AND ticket_id IN"
+    private static final String ACCEPTED_PRICING = "((origin = 'PRICING_REQUEST' OR (origin IS NULL AND pricing_request_id IS NOT NULL))"
+        + " AND doc_status = 'ACCEPTED')"; // both writers of a pricing-request quotation; a NULL origin is CustomerQuotationService's
+
+    private static final String PRICING_ORDER = "(" + ACCEPTED_PRICING + " AND ticket_id IN"
         + " (SELECT ticket_id FROM sales.ticket WHERE sales_stage IN ('"
         + String.join("','", th.co.glr.hr.ticket.DealStage.ORDER.subList(
             th.co.glr.hr.ticket.DealStage.indexOf(th.co.glr.hr.ticket.DealStage.ORDER_RECEIVED), th.co.glr.hr.ticket.DealStage.ORDER.size()))
@@ -340,16 +343,23 @@ public class DeliveryRequestRepository {
 
     /** The customer accepted a pricing-request quotation, whatever stage the deal is at. */
     public boolean hasAcceptedPricingQuotation(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM sales.quotation WHERE ticket_id = :t AND " + ACCEPTED_PRICING + ")",
+            Map.of("t", ticketId), Boolean.class));
+    }
+
+    /** A pricing-request quotation of the older writer: its PDF comes from CustomerQuotationService. */
+    public boolean isLegacyPricingQuotation(long quotationId) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
             SELECT EXISTS (SELECT 1 FROM sales.quotation
-                            WHERE ticket_id = :t AND origin = 'PRICING_REQUEST' AND doc_status = 'ACCEPTED')
-            """, Map.of("t", ticketId), Boolean.class));
+                            WHERE quotation_id = :q AND origin IS NULL AND pricing_request_id IS NOT NULL)
+            """, Map.of("q", quotationId), Boolean.class));
     }
 
     /** The order's quotations ({@link #ORDER_QUOTATION}), oldest first. */
     public List<ApprovedQuotationDto> approvedQuotations(long ticketId) {
         return jdbc.query("""
-            SELECT quotation_id, number, doc_status, total_amount, document_language, deposit_percent
+            SELECT quotation_id, number, doc_status, total_amount, document_language, deposit_percent, origin IS NULL AS legacy
               FROM sales.quotation
              WHERE ticket_id = :t AND %s
              ORDER BY quotation_id
@@ -362,7 +372,7 @@ public class DeliveryRequestRepository {
                     ? "ใบเสนอราคานี้ส่งลูกค้าแล้ว ใช้ออกใบแจ้งยอดเงินรับมัดจำไม่ได้"
                     : depositPercent != null && depositPercent == 0
                         ? "ใบเสนอราคานี้ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้" : null;
-                return new ApprovedQuotationDto(rs.getLong("quotation_id"), rs.getString("number"), total, status, blocked, null);
+                return new ApprovedQuotationDto(rs.getLong("quotation_id"), rs.getString("number"), total, status, blocked, null, rs.getBoolean("legacy"));
             });
     }
 

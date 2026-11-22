@@ -20,7 +20,7 @@ import { depositNoticesQueryOptions } from '../../deposits/createDepositNoticeDr
 // The PDF of each kind. The routes answer as a download (Content-Disposition: attachment), so a plain link would save the
 // file instead of showing it: the PDF is fetched and shown in a tab that was opened in the tap itself.
 const VIEW_PDF = {
-  QUOTATION: (id) => api.dealQuotations.downloadPdf(id),
+  QUOTATION: (id, row) => (row.legacy ? api.pricingRequests.downloadCustomerQuotationPdf(id) : api.dealQuotations.downloadPdf(id)),
   DEPOSIT_NOTICE: (id) => api.depositNotices.downloadPdf(id),
   REMAINING_INVOICE: (id) => api.storedRemainingInvoices.download(id),
   IMPORT_REQUEST: (id) => api.storedImportRequests.download(id),
@@ -58,7 +58,7 @@ export function useRoundDocuments({ ticketId, quotation, approvedQuotations = []
   const rows = [];
 
   rows.push(quotation
-    ? { key: `QUOTATION:${quotation.id}`, kind: 'QUOTATION', id: quotation.id, present: true,
+    ? { key: `QUOTATION:${quotation.id}`, kind: 'QUOTATION', id: quotation.id, present: true, legacy: quotation.legacy,
       title: `ใบเสนอราคา ${quotation.number}`, sub: `อนุมัติแล้ว · ${formatMoney(quotation.total)}` }
     : { key: 'QUOTATION', kind: 'QUOTATION', present: false, title: 'ใบเสนอราคา', sub: 'เลือกใบเสนอราคาของรอบนี้', create: null, blocked: null });
 
@@ -140,7 +140,7 @@ function ViewDoc({ row }) {
   const [state, setState] = useState('idle');
   const open = async () => {
     setState('busy');
-    setState((await openBlobInTab(() => VIEW_PDF[row.kind](row.id))) === 'ok' ? 'idle' : 'failed');
+    setState((await openBlobInTab(() => VIEW_PDF[row.kind](row.id, row))) === 'ok' ? 'idle' : 'failed');
   };
   return (
     <span className="flex shrink-0 flex-col items-end">

@@ -103,6 +103,14 @@ public class DeliveryRequestService {
         this.prePortal = prePortal;
     }
 
+    private th.co.glr.hr.customerquotation.CustomerQuotationService customerQuotations;
+
+    /** Setter-injected so the hand-wired test call sites keep compiling (the PDF of an older pricing-request quotation). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void wireCustomerQuotations(th.co.glr.hr.customerquotation.CustomerQuotationService customerQuotations) {
+        this.customerQuotations = customerQuotations;
+    }
+
     public RoundsResponse list(long ticketId, UserPrincipal actor) {
         RoundsResponse r = listFor(ticketId, actor);
         // Import stays price-free: no round file (they carry prices, the tax invoice included) and no invoice money.
@@ -168,7 +176,7 @@ public class DeliveryRequestService {
         }
         BigDecimal paid = tickets.sumPaid(s.id());
         return approved.stream().map(q -> new ApprovedQuotationDto(q.id(), q.number(), q.total(), q.docStatus(),
-            q.depositBlockedReason(), q.total().subtract(paid).max(BigDecimal.ZERO))).toList();
+            q.depositBlockedReason(), q.total().subtract(paid).max(BigDecimal.ZERO), q.legacy())).toList();
     }
 
     /** What the order may still be invoiced for: payable minus the confirmed invoices, never below zero. */
@@ -766,7 +774,9 @@ public class DeliveryRequestService {
             byte[] pdf;
             try {
                 pdf = switch (d.kind()) {
-                    case "QUOTATION" -> quotations.renderPdfForDealDocument(d.id(), ticketId, actor);
+                    case "QUOTATION" -> rounds.isLegacyPricingQuotation(d.id())
+                        ? customerQuotations.renderPdf(d.id(), actor)
+                        : quotations.renderPdfForDealDocument(d.id(), ticketId, actor);
                     case "DEPOSIT_NOTICE" -> depositNotices.getPdf(d.id(), actor);
                     case "REMAINING_INVOICE" -> remainingInvoices.getPdf(d.id(), actor);
                     default -> importRequests.renderStored(d.id(), actor);

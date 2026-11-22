@@ -23,7 +23,7 @@ public final class DeliveryRequestDtos {
      * quotation total (VAT included) less the money already on the deal; null otherwise. {@code depositBlockedReason}: why a deposit notice cannot be drafted from this quotation (DepositNoticeRepository's
      * own rule), null when it can. */
     public record ApprovedQuotationDto(long id, String number, BigDecimal total, String docStatus, String depositBlockedReason,
-                                       BigDecimal preDepositMax) {}
+                                       BigDecimal preDepositMax, boolean legacy) {}
 
     public record LineDto(long itemId, String description, String unit, BigDecimal coveredQty, BigDecimal deliveredQty) {}
 
