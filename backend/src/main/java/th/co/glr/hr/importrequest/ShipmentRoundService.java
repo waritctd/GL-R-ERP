@@ -497,6 +497,21 @@ public class ShipmentRoundService {
         applyAftermath(onActiveDeals(recomputeIrSteps(irs, actor, null), irs), actor, null);
     }
 
+    /** After lots changed with nobody to tell (the sheet backfill): the same undo reset, step recompute, job events and
+     * rollup as {@link #finishLotChange}, with no bell and no email. The rounds and IRs must already be locked. */
+    public void settleQuietly(List<IrLock> irs, List<Long> roundIds, UserPrincipal actor, String note) {
+        roundIds.forEach(rounds::clearUndo);
+        rounds.clearIrUndo(irs.stream().map(IrLock::id).toList());
+        onActiveDeals(recomputeIrSteps(irs, actor, note), irs).stream()
+            .collect(Collectors.groupingBy(c -> c.ir().ticketId(), java.util.TreeMap::new, Collectors.toList()))
+            .forEach((ticketId, list) -> irService.afterStepChanges(ticketId, list, actor, note, false));
+    }
+
+    /** After import changed the lots of an import job: the steps follow, and the job's IR has no deal to roll up. */
+    public void settleImportJob(List<IrLock> irs, List<Long> roundIds, UserPrincipal actor) {
+        finishLotChange(irs, roundIds, actor);
+    }
+
     private void requireNotLeft(ShipmentRoundDto round) {
         if (ImportRequestStep.indexOf(round.importStep()) >= LEFT_INDEX) {
             throw new ApiException(HttpStatus.CONFLICT,

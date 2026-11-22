@@ -72,6 +72,7 @@ const ImportDealPage = lazy(() => import('./features/importDeal/ImportDealPage.j
 const MyOrdersPage = lazy(() => import('./features/myOrders/MyOrdersPage.jsx').then(toDefault('MyOrdersPage')));
 const ShipmentRoundPage = lazy(() => import('./features/fulfilment/ShipmentRoundPage.jsx').then(toDefault('ShipmentRoundPage')));
 const ImportFulfilmentPage = lazy(() => import('./features/fulfilment/ImportFulfilmentPage.jsx').then(toDefault('ImportFulfilmentPage')));
+const ImportJobPage = lazy(() => import('./features/fulfilment/ImportJobPage.jsx').then(toDefault('ImportJobPage')));
 const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
 // Quotation v2 — direct deal quotation. Sibling feature to the PricingRequest chain above, not a
 // replacement.
@@ -539,6 +540,8 @@ export function App() {
                   path="/fulfilment/rounds/:id"
                   element={<ShipmentRoundPage user={user} showToast={showToast} />}
                 />
+                {/* งานนำเข้า: an IR with no sales job, which import creates and corrects (ID3/IM3). */}
+                <Route path="/fulfilment/jobs/:id" element={<ImportJobPage user={user} showToast={showToast} />} />
                 {/* Import's OWN per-deal page (GET /api/import/deals/{id}). Import is refused the whole-deal /tickets/:id, so
                  * this is where its deal links land. Guarded by canViewImportDeal (import/ceo) in PATH_GUARDS. */}
                 <Route

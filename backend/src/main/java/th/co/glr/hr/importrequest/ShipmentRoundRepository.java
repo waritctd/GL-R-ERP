@@ -210,7 +210,15 @@ public class ShipmentRoundRepository {
         import_step, contacted_on, ordered_on, picked_up_on, in_transit_on, awaiting_customs_on, received_on,
         step_by_id, step_by_name, step_note, label, transport_mode, vessel, voyage, forwarder, container_nos, port,
         goods_ready_on, etd_planned_on, etd_actual_on, eta_on, arrived_on, customs_released_on, gr_number,
-        complete_per_invoice, complete_note, note""";
+        complete_per_invoice, complete_note, note, transship_eta_on, insured_on""";
+
+    /** JOB for a deal's import request, else SALES_ORDER (source PORTAL), IMPORT or BACKFILL. */
+    static String origin(Long ticketId, String source) {
+        if (ticketId != null) {
+            return "JOB";
+        }
+        return "PORTAL".equals(source) ? "SALES_ORDER" : source;
+    }
 
     private static MapSqlParameterSource factParams(MapSqlParameterSource p, ShipmentFacts f) {
         ShipmentFacts x = f == null ? new ShipmentFacts(null, null, null, null, null, null, null, null, null, null,
@@ -221,7 +229,7 @@ public class ShipmentRoundRepository {
             .addValue("etdActualOn", x.etdActualOn()).addValue("etaOn", x.etaOn()).addValue("arrivedOn", x.arrivedOn())
             .addValue("customsReleasedOn", x.customsReleasedOn()).addValue("grNumber", x.grNumber())
             .addValue("completePerInvoice", x.completePerInvoice()).addValue("completeNote", x.completeNote())
-            .addValue("factNote", x.note());
+            .addValue("factNote", x.note()).addValue("transshipEtaOn", x.transshipEtaOn()).addValue("insuredOn", x.insuredOn());
     }
 
     /** {@code all}: write every fact as sent (the facts editor); otherwise only the non-null ones (an advance). The
@@ -233,7 +241,8 @@ public class ShipmentRoundRepository {
             {"etd_actual_on", "etdActualOn", "DATE"}, {"eta_on", "etaOn", "DATE"}, {"port", "port", "VARCHAR"},
             {"arrived_on", "arrivedOn", "DATE"}, {"customs_released_on", "customsReleasedOn", "DATE"},
             {"gr_number", "grNumber", "VARCHAR"}, {"complete_per_invoice", "completePerInvoice", "BOOLEAN"},
-            {"complete_note", "completeNote", "VARCHAR"}, {"note", "factNote", "VARCHAR"}};
+            {"complete_note", "completeNote", "VARCHAR"}, {"note", "factNote", "VARCHAR"},
+            {"transship_eta_on", "transshipEtaOn", "DATE"}, {"insured_on", "insuredOn", "DATE"}};
         StringBuilder sb = new StringBuilder("transport_mode = COALESCE(CAST(:transportMode AS VARCHAR), transport_mode), ");
         for (String[] c : cols) {
             String v = "CAST(:" + c[1] + " AS " + c[2] + ")";
@@ -362,7 +371,7 @@ public class ShipmentRoundRepository {
                         date(rs, "etd_actual_on"), date(rs, "eta_on"), date(rs, "arrived_on"),
                         date(rs, "customs_released_on"), rs.getString("gr_number"),
                         (Boolean) rs.getObject("complete_per_invoice"), rs.getString("complete_note"),
-                        rs.getString("note")),
+                        rs.getString("note"), date(rs, "transship_eta_on"), date(rs, "insured_on")),
                     List.of(), List.of(), adv == null ? null : adv.toInstant(), (Long) rs.getObject("step_undo_by_id"),
                     rs.getString("step_undo_from"),
                     rs.getString("step_advance_id"), rs.getTimestamp("updated_at").toInstant());
@@ -393,7 +402,7 @@ public class ShipmentRoundRepository {
                WHERE l.import_request_item_id IN (SELECT import_request_item_id FROM sales.shipment_lot
                                                    WHERE shipment_round_id IN (:ids)))
             SELECT x.*, r.doc_number, r.ticket_id, t.code AS ticket_code, t.customer_name, p.name AS project_name,
-                   r.order_purpose, r.purpose_note,
+                   r.order_purpose, r.purpose_note, r.source AS ir_source,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS requester_name
               FROM x JOIN sales.import_request r USING (import_request_id)
               LEFT JOIN sales.ticket t ON t.ticket_id = r.ticket_id
@@ -411,7 +420,8 @@ public class ShipmentRoundRepository {
                     rs.getString("brand"), rs.getString("model"), rs.getString("size"), rs.getString("unit"),
                     rs.getBigDecimal("qty"), rs.getBigDecimal("item_qty"), rs.getInt("lot_no"),
                     remaining.signum() > 0 ? lots + 1 : lots, remaining.max(BigDecimal.ZERO), rs.getBigDecimal("received_qty"),
-                    rs.getString("order_purpose"), rs.getString("purpose_note"), rs.getString("requester_name")));
+                    rs.getString("order_purpose"), rs.getString("purpose_note"), rs.getString("requester_name"),
+                    origin((Long) rs.getObject("ticket_id"), rs.getString("ir_source"))));
             });
         return out;
     }
@@ -527,7 +537,7 @@ public class ShipmentRoundRepository {
         Map<Long, List<ShipmentWaitingLine>> lines = new java.util.HashMap<>();
         jdbc.query("""
             SELECT r.import_request_id, r.doc_number, r.factory_id, r.factory_name, r.ticket_id, t.code AS ticket_code,
-                   t.customer_name, p.name AS project_name, r.order_purpose, r.purpose_note,
+                   t.customer_name, p.name AS project_name, r.order_purpose, r.purpose_note, r.source AS ir_source,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS requester_name,
                    i.import_request_item_id AS item_id, i.code, i.brand, i.model, i.size, i.unit,
                    COALESCE(w.wanted_qty, i.qty) - COALESCE((SELECT sum(l.qty) FROM sales.shipment_lot l
@@ -556,7 +566,8 @@ public class ShipmentRoundRepository {
                         return new ShipmentWaitingDto(id, rs.getString("doc_number"), (Long) rs.getObject("factory_id"),
                             rs.getString("factory_name"), (Long) rs.getObject("ticket_id"), rs.getString("ticket_code"),
                             rs.getString("customer_name"), rs.getString("project_name"), null,
-                            rs.getString("order_purpose"), rs.getString("purpose_note"), rs.getString("requester_name"));
+                            rs.getString("order_purpose"), rs.getString("purpose_note"), rs.getString("requester_name"),
+                            origin((Long) rs.getObject("ticket_id"), rs.getString("ir_source")));
                     } catch (java.sql.SQLException e) {
                         throw new IllegalStateException(e);
                     }
@@ -564,7 +575,7 @@ public class ShipmentRoundRepository {
             });
         return byIr.values().stream().map(w -> new ShipmentWaitingDto(w.importRequestId(), w.docNumber(), w.factoryId(),
             w.factoryName(), w.ticketId(), w.ticketCode(), w.customerName(), w.projectName(),
-            lines.get(w.importRequestId()), w.orderPurpose(), w.purposeNote(), w.requesterName())).toList();
+            lines.get(w.importRequestId()), w.orderPurpose(), w.purposeNote(), w.requesterName(), w.origin())).toList();
     }
 
     /** Import requests carrying lots on these rounds, locked FOR UPDATE in ascending id. */
@@ -756,7 +767,8 @@ public class ShipmentRoundRepository {
                                    OR NULLIF(btrim(note), '') IS NOT NULL
                                    OR complete_per_invoice IS FALSE OR NULLIF(btrim(complete_note), '') IS NOT NULL
                                    OR goods_ready_on IS NOT NULL OR etd_planned_on IS NOT NULL OR etd_actual_on IS NOT NULL
-                                   OR eta_on IS NOT NULL OR arrived_on IS NOT NULL OR customs_released_on IS NOT NULL))
+                                   OR eta_on IS NOT NULL OR arrived_on IS NOT NULL OR customs_released_on IS NOT NULL
+                                   OR transship_eta_on IS NOT NULL OR insured_on IS NOT NULL))
             """, Map.of("r", roundId), Boolean.class));
     }
 
@@ -799,7 +811,7 @@ public class ShipmentRoundRepository {
                          String customerName, String projectName, String orderPurpose, String purposeNote,
                          String requesterName, Long requesterId, LocalDate wantedBy, String requiredByNote, LocalDate expectedTo,
                          long itemId, String brand, String model, String code, String size, String unit,
-                         BigDecimal itemQty, TicketLot lot) {}
+                         BigDecimal itemQty, TicketLot lot, String ownerName, String requestedByName, String source) {}
 
     /**
      * Every ISSUED IR line of the caller's scope with its lots, in ONE query: project deals (ACTIVE; {@code allDeals} or
@@ -811,6 +823,7 @@ public class ShipmentRoundRepository {
             SELECT ir.import_request_id, ir.doc_number, ir.factory_name, ir.ticket_id, t.code AS ticket_code,
                    t.customer_name, p.name AS project_name, ir.order_purpose, ir.purpose_note,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS requester_name, ir.requester_id, ir.wanted_by,
+                   NULLIF(TRIM(CONCAT_WS(' ', o.first_name_th, o.last_name_th)), '') AS owner_name, ir.requested_by_name, ir.source,
                    ir.required_by_note, ir.first_issued_date + ir.lead_time_max_days AS expected_to,
                    i.import_request_item_id, i.brand, i.model, i.code, i.size, i.unit, COALESCE(w.wanted_qty, i.qty) AS item_qty,
                    l.shipment_lot_id, l.qty AS lot_qty, l.received_qty,
@@ -823,6 +836,7 @@ public class ShipmentRoundRepository {
               LEFT JOIN sales.ticket t ON t.ticket_id = ir.ticket_id
               LEFT JOIN customers.project p ON p.project_id = t.project_id
               LEFT JOIN hr.employee e ON e.employee_id = ir.requester_id
+              LEFT JOIN hr.employee o ON o.employee_id = t.created_by
               LEFT JOIN sales.shipment_lot l ON l.import_request_item_id = i.import_request_item_id
               LEFT JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
              WHERE ir.status = 'ISSUED'
@@ -857,7 +871,8 @@ public class ShipmentRoundRepository {
                     rs.getString("requester_name"), (Long) rs.getObject("requester_id"), date(rs, "wanted_by"), rs.getString("required_by_note"),
                     date(rs, "expected_to"), rs.getLong("import_request_item_id"), rs.getString("brand"),
                     rs.getString("model"), rs.getString("code"), rs.getString("size"), rs.getString("unit"),
-                    rs.getBigDecimal("item_qty"), lot);
+                    rs.getBigDecimal("item_qty"), lot, rs.getString("owner_name"), rs.getString("requested_by_name"),
+                    rs.getString("source"));
             });
     }
 

@@ -13,7 +13,11 @@ public final class MyIncomingDtos {
     public record MyIncomingRow(String kind, Long ticketId, String ticketCode, String who, String requesterName,
                                 String factoryName, String docNumber, long importRequestId, String wantedBy,
                                 boolean waiting, String product, String unit, BigDecimal qty, IncomingLot lot,
-                                boolean canWithdraw) {}
+                                boolean canWithdraw,
+                                /** The job's owner, or who asked for a no-project order (the sheet's text when nobody is matched). */
+                                String repName,
+                                /** Whether the caller may open this row's job or order. */
+                                boolean canOpen) {}
 
     public record MyIncomingResponse(List<MyIncomingRow> rows) {}
 }

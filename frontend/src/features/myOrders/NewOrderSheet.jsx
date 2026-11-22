@@ -7,7 +7,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { bangkokTodayIso } from '../../utils/format.js';
 import { cn } from '../../utils/cn.js';
-import { PURPOSE_LABELS } from '../fulfilment/shipmentRounds.js';
+import { ORDER_PURPOSE_LABELS } from '../fulfilment/shipmentRounds.js';
 
 const blankLine = () => ({ key: Math.random().toString(36).slice(2), code: '', size: '', qty: '', unit: 'แผ่น' });
 
@@ -68,7 +68,7 @@ export function useNewOrderForm({ onDone, showToast, wide = false, enabled = tru
         <div className="flex flex-col gap-1">
           <span className="text-xs font-bold text-text-secondary" id="order-purpose">สั่งเพื่ออะไร *</span>
           <div className="flex flex-wrap gap-2" role="group" aria-labelledby="order-purpose">
-            {Object.entries(PURPOSE_LABELS).map(([code, label]) => (
+            {Object.entries(ORDER_PURPOSE_LABELS).map(([code, label]) => (
               <button key={code} type="button" aria-pressed={purpose === code} onClick={() => setPurpose(code)} data-testid={`order-purpose-${code}`}
                 className={cn('inline-flex min-h-11 items-center rounded-full border px-4 text-sm font-bold',
                   purpose === code ? 'border-primary bg-primary/10 text-primary' : 'border-border-input bg-surface text-text-secondary')}>

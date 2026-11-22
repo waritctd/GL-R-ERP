@@ -7,6 +7,7 @@ import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { FilterBar, PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -14,15 +15,22 @@ import { cn } from '../../utils/cn.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { AdvanceRoundSheet } from './AdvanceRoundSheet.jsx';
 import { DownloadIrButton } from './DownloadIrButton.jsx';
+import { ImportJobSheet } from './ImportJobSheet.jsx';
 import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import {
-  formatQty, irRows, lotProduct, lotWho, lotWhoSub, roundIrSummary, roundSubline, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
+  formatQty, irRows, lotProduct, lotWho, lotWhoSub, ORIGIN_LABELS, roundIrSummary, roundSubline, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
 } from './shipmentRounds.js';
 import { useRoundUndo } from './useRoundUndo.jsx';
 
 // Whole literals (Tailwind JIT), one track per column: the waiting table has 6 (ND1), the rounds table 7.
 const WAITING_GRID = 'grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,1.6fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,1fr)]';
 const ROUNDS_GRID = 'grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(15rem,1.3fr)]';
+
+/** An IR number that opens its page: the deal's for a sales job, the งานนำเข้า page otherwise. */
+function IrLink({ row }) {
+  const to = row.ticketId == null ? `/fulfilment/jobs/${row.importRequestId}` : `/import/deals/${row.ticketId}`;
+  return <Link to={to} className="text-info underline"><code>{row.docNumber}</code></Link>;
+}
 
 /**
  * การขนส่ง — import's queue of SHIPMENT ROUNDS (N01 on a phone, ND1 from desktop width). A round is one factory shipment;
@@ -37,6 +45,8 @@ export function ImportFulfilmentPage({ user, showToast }) {
   const [search, setSearch] = useState('');
   const [advancing, setAdvancing] = useState(null);
   const [planning, setPlanning] = useState(false);
+  const [creatingJob, setCreatingJob] = useState(false);
+  const [showChecks, setShowChecks] = useState(false);
   const navigate = useNavigate();
   const undo = useRoundUndo({ showToast });
 
@@ -51,6 +61,9 @@ export function ImportFulfilmentPage({ user, showToast }) {
     queryKey: queryKeys.ticketList(''),
     queryFn: () => api.tickets.list({}).then((r) => r?.tickets ?? []),
   });
+  // What the one time load of the import team's sheet did, and what it left for import to check. Null until it has run.
+  const runQuery = useQuery({ queryKey: queryKeys.importSheetRun(), queryFn: () => api.importJobs.latestRun(), enabled: editable, retry: false });
+  const run = runQuery.data;
   const rounds = useMemo(() => listQuery.data?.rounds ?? [], [listQuery.data]);
   const waiting = useMemo(() => listQuery.data?.waiting ?? [], [listQuery.data]);
 
@@ -70,12 +83,12 @@ export function ImportFulfilmentPage({ user, showToast }) {
         || (a.customerName ?? a.code ?? '').localeCompare(b.customerName ?? b.code ?? '', 'th'));
   }, [ticketsQuery.data, rounds, waiting, term]);
   const visibleWaiting = useMemo(() => (chip === 'ALL' || chip === 'WAITING' ? waiting : [])
-    .filter((w) => !term || [w.factoryName, w.docNumber, w.ticketCode, w.customerName, w.projectName]
+    .filter((w) => !term || [w.factoryName, w.docNumber, w.ticketCode, w.customerName, w.projectName, w.purposeNote, w.requesterName]
       .some((f) => (f ?? '').toLowerCase().includes(term))), [waiting, chip, term]);
   const visibleRounds = useMemo(() => rounds
     .filter((r) => chip === 'ALL' || chip === r.importStep)
     .filter((r) => !term || [roundTitle(r), r.facts?.vessel, r.facts?.proformaNo, r.facts?.invoiceNo, ...(r.documents ?? []).map((d) => d.docNo),
-      ...r.lots.flatMap((l) => [l.docNumber, l.ticketCode, l.customerName, l.projectName])]
+      ...r.lots.flatMap((l) => [l.docNumber, l.ticketCode, l.customerName, l.projectName, l.purposeNote, l.requesterName])]
       .some((f) => (f ?? '').toLowerCase().includes(term))), [rounds, chip, term]);
 
   const waitingColumns = [
@@ -83,7 +96,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
     {
       key: 'ir',
       header: 'ใบขอซื้อ',
-      render: (w) => (w.ticketId == null ? <code>{w.docNumber}</code> : <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>),
+      render: (w) => <IrLink row={w} />,
     },
     {
       key: 'who',
@@ -102,11 +115,11 @@ export function ImportFulfilmentPage({ user, showToast }) {
       render: (w) => <span className="tabular-nums font-bold">{w.lines.length > 1 ? `${w.lines.length} รายการ` : `${formatQty(w.lines[0].remainingQty)} ${w.lines[0].unit ?? ''}`}</span>,
     },
     {
-      key: 'status',
-      header: 'สถานะ',
+      key: 'origin',
+      header: 'ที่มา',
       render: (w) => (
         <span className="flex flex-col items-start gap-1">
-          <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
+          <StatusBadge tone="neutral">{ORIGIN_LABELS[w.origin] ?? 'งานขาย'}</StatusBadge>
           {w.ticketId == null ? <DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
         </span>
       ),
@@ -158,12 +171,13 @@ export function ImportFulfilmentPage({ user, showToast }) {
       <span className="flex min-w-0 flex-col gap-0.5">
         <b className="text-sm">{w.factoryName}</b>
         <small className="text-text-muted">
-          {w.ticketId == null ? <code>{w.docNumber}</code> : <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>}
+          <IrLink row={w} />
           {' · '}{lotWho(w)} · เหลือ {w.lines.map((l) => `${formatQty(l.remainingQty)} ${l.unit ?? ''}`.trim()).join(', ')}
         </small>
       </span>
       <span className="flex shrink-0 flex-col items-end gap-1">
         <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
+        <StatusBadge tone="neutral">{ORIGIN_LABELS[w.origin] ?? 'งานขาย'}</StatusBadge>
         {w.ticketId == null ? <DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
       </span>
     </div>
@@ -178,7 +192,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
           <li key={row.key} className="flex items-start justify-between gap-3 text-sm" data-testid="round-ir-row">
             <span className="flex min-w-0 flex-col">
               <b>{row.who}</b>
-              <small className="text-text-muted"><code>{row.docNumber}</code> · {row.lotText}</small>
+              <small className="text-text-muted"><IrLink row={{ ...row, importRequestId: row.key }} /> · {row.lotText}</small>
             </span>
             <span className="shrink-0 font-bold tabular-nums">{row.qtyText}</span>
           </li>
@@ -194,9 +208,10 @@ export function ImportFulfilmentPage({ user, showToast }) {
     <PageStack>
       <PageHeader
         title="การขนส่ง"
-        subtitle="เลื่อนขั้นตอนทีละรอบขนส่ง · ทุกใบขอซื้อในรอบขยับพร้อมกัน · หนึ่งใบขอซื้อแบ่งไปได้หลายรอบ"
+        subtitle="เลื่อนขั้นตอนทีละรอบขนส่ง · ทุกใบขอซื้อในรอบขยับพร้อมกัน · สร้างงานนำเข้าเองได้เมื่อยังไม่มีงานขายในระบบ"
         actions={(
           <>
+            {editable ? <Button type="button" variant="secondary" onClick={() => setCreatingJob(true)} data-testid="import-job-new">+ สร้างงานนำเข้า</Button> : null}
             {editable && waitingFactories(waiting).length > 0 ? (
               <Button type="button" variant="primary" className="hidden min-[1041px]:inline-flex" onClick={() => setPlanning(true)} data-testid="plan-round-header">
                 + จัดรอบขนส่ง
@@ -208,6 +223,20 @@ export function ImportFulfilmentPage({ user, showToast }) {
           </>
         )}
       />
+
+      {run ? (
+        <Panel className="flex flex-wrap items-center justify-between gap-3 border-info-border bg-info-bg" data-testid="sheet-run-banner">
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <b className="text-sm">นำสถานะจากตารางของเข้ามาไว้ในระบบแล้ว</b>
+            <span className="text-xs text-text-secondary">
+              เมื่อ {formatThaiDate(run.finishedAt)} · {run.roundsCreated} รอบขนส่ง · {run.irsCreated} งานนำเข้าที่ยังไม่มีงานขาย · ตั้งแต่นี้แก้ไขและสร้างงานนำเข้าในระบบได้เลย ไม่ต้องกลับไปแก้ในตาราง
+            </span>
+          </span>
+          {run.needsCheck?.length > 0 ? (
+            <Button type="button" size="sm" variant="secondary" onClick={() => setShowChecks(true)} data-testid="sheet-run-checks">ดู {run.needsCheck.length} รายการที่ต้องตรวจ</Button>
+          ) : null}
+        </Panel>
+      ) : null}
 
       <FilterBar>
         <div className="flex min-w-0 max-w-full gap-2 overflow-x-auto" role="group" aria-label="กรองตามขั้นตอน">
@@ -343,6 +372,22 @@ export function ImportFulfilmentPage({ user, showToast }) {
           onClose={() => setPlanning(false)}
           onDone={(round) => { setPlanning(false); if (round?.id) navigate(`/fulfilment/rounds/${round.id}`); }}
         />
+      ) : null}
+      {creatingJob ? (
+        <ImportJobSheet showToast={showToast} onClose={() => setCreatingJob(false)}
+          onSaved={(job) => { setCreatingJob(false); navigate(`/fulfilment/jobs/${job.importRequest.id}`); }} />
+      ) : null}
+      {showChecks ? (
+        <Modal title="รายการที่ต้องตรวจ" subtitle="จากการนำเข้าตารางของเข้า" onClose={() => setShowChecks(false)} placement="sheet-on-phone" testId="sheet-run-checks-sheet">
+          <ul className="m-0 flex list-none flex-col p-0">
+            {run.needsCheck.map((c) => (
+              <li key={`${c.row}-${c.what}`} className="flex flex-col gap-0.5 border-t border-border-subtle py-2 first:border-t-0">
+                <b className="text-sm">แถว {c.row} · {c.what}</b>
+                <span className="text-xs text-text-muted">{c.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </Modal>
       ) : null}
       {undo.snackbar}
     </PageStack>

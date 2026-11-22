@@ -662,6 +662,20 @@ export const api = {
   },
   myIncoming: {
     get: () => apiRequest(API_ROUTES.myIncoming.get),
+    // ทั้งบริษัท: every IR's progress for the whole sales team, read only (CompanyIncomingService).
+    all: () => apiRequest(API_ROUTES.myIncoming.all),
+  },
+  // Mirrors ImportJobController: งานนำเข้า import creates and corrects. `update` sends only what changed, plus
+  // `clear: ['requesterId' | 'depositReceivedOn' | 'wantedBy']` to empty an optional field. latestRun is null until a sheet load ran.
+  importJobs: {
+    create: (payload) => apiRequest(API_ROUTES.importJobs.list, { method: 'POST', body: payload }),
+    get: (id) => apiRequest(API_ROUTES.importJobs.detail(id)),
+    update: (id, payload) => apiRequest(API_ROUTES.importJobs.detail(id), { method: 'PATCH', body: payload }),
+    addItem: (id, payload) => apiRequest(API_ROUTES.importJobs.items(id), { method: 'POST', body: payload }),
+    updateItem: (id, itemId, payload) => apiRequest(API_ROUTES.importJobs.item(id, itemId), { method: 'PATCH', body: payload }),
+    removeItem: (id, itemId) => apiRequest(API_ROUTES.importJobs.item(id, itemId), { method: 'DELETE' }),
+    repOptions: () => apiRequest(API_ROUTES.importJobs.repOptions),
+    latestRun: () => apiRequest(API_ROUTES.importJobs.latestRun),
   },
   // Mirrors ShipmentRoundController (V239 rounds): reads import/CEO/sales_manager/read-all holders; writes and the round's
   // documents (proforma, invoice, ...) import and CEO only. `advance` payload: { targetStep, eventDate, expectedStep, note, facts,

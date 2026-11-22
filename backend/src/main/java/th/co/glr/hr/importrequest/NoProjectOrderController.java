@@ -18,11 +18,14 @@ public class NoProjectOrderController {
 
     private final NoProjectOrderService orders;
     private final MyIncomingService incoming;
+    private final CompanyIncomingService companyIncoming;
     private final SessionContext sessions;
 
-    public NoProjectOrderController(NoProjectOrderService orders, MyIncomingService incoming, SessionContext sessions) {
+    public NoProjectOrderController(NoProjectOrderService orders, MyIncomingService incoming,
+                                    CompanyIncomingService companyIncoming, SessionContext sessions) {
         this.orders = orders;
         this.incoming = incoming;
+        this.companyIncoming = companyIncoming;
         this.sessions = sessions;
     }
 
@@ -39,5 +42,11 @@ public class NoProjectOrderController {
     @GetMapping("/my-incoming")
     MyIncomingResponse myIncoming(HttpSession session) {
         return incoming.myIncoming(sessions.requireUser(session));
+    }
+
+    /** ทั้งบริษัท: every IR's progress for the whole sales team, read only. */
+    @GetMapping("/incoming/all")
+    MyIncomingResponse allIncoming(HttpSession session) {
+        return companyIncoming.all(sessions.requireUser(session));
     }
 }

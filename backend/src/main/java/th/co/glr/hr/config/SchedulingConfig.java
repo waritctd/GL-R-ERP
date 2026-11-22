@@ -1,5 +1,6 @@
 package th.co.glr.hr.config;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -27,6 +28,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  */
 @Configuration
 @Profile("!test")
+// The one off import sheet backfill process runs no background worker: it must not fire mail or recalculation jobs.
+@ConditionalOnExpression("'${app.import-sheet.backfill.file:}'.isEmpty()")
 @EnableScheduling
 public class SchedulingConfig {
 }

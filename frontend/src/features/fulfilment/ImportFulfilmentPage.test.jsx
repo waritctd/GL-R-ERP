@@ -105,7 +105,7 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     expect(screen.queryByText('ยังไม่มีรอบขนส่ง')).toBeNull();
   });
 
-  it('an order with no project reads "ตัวอย่าง · requester" and "ไม่มีโครงการ", with no deal link', async () => {
+  it('an order with no project reads "ตัวอย่าง · requester" and "ไม่มีโครงการ", opening its import job, not a deal', async () => {
     vi.mocked(api.shipmentRounds.list).mockResolvedValue({ rounds: [], waiting: [{
       importRequestId: 31, docNumber: 'IR-TEST-031', factoryId: 2, factoryName: 'Waiting Ceramics', ticketId: null, ticketCode: null,
       customerName: null, projectName: null, orderPurpose: 'SAMPLE', purposeNote: 'ให้ผู้ออกแบบ (ทดสอบ)', requesterName: 'คุณ ทดสอบ',
@@ -113,7 +113,7 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     renderAt('/fulfilment');
     expect((await screen.findAllByText('ตัวอย่าง · คุณ ทดสอบ')).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/ไม่มีโครงการ/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('IR-TEST-031')[0].closest('a')).toBeNull(); // no deal to open
+    expect(screen.getAllByText('IR-TEST-031')[0].closest('a').getAttribute('href')).toBe('/fulfilment/jobs/31'); // no deal: it opens its งานนำเข้า
     expect(screen.getAllByTestId('ir-pdf-31').length).toBeGreaterThan(0); // import gets the order form to send
   });
 

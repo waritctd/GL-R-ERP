@@ -50,6 +50,8 @@ export const ALL_FACT_FIELDS = [
   { key: 'goodsReadyOn', label: 'ของพร้อมที่โรงงาน', type: 'date' },
   { key: 'etdPlannedOn', label: 'เรือออกตามแผน', type: 'date' },
   { key: 'etdActualOn', label: 'เรือออกจริง', type: 'date' },
+  { key: 'transshipEtaOn', label: 'ETA ท่าเปลี่ยนเรือ', type: 'date' },
+  { key: 'insuredOn', label: 'วันที่ทำประกัน', type: 'date' },
   { key: 'etaOn', label: 'คาดว่าถึงไทย', type: 'date' },
   { key: 'port', label: 'ท่าเรือ', type: 'text' },
   { key: 'arrivedOn', label: 'วันที่ของถึงไทย', type: 'date' },
@@ -97,15 +99,23 @@ export const lotArrivalText = (lot, roundStep) => {
 export const lotProduct = (lot) => [[lot.brand, lot.model].filter(Boolean).join(' ') || lot.code, lot.size].filter(Boolean).join(' ');
 
 /** Who the lot is for: the deal's customer/project. */
-export const PURPOSE_LABELS = { SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก' };
+export const PURPOSE_LABELS = { CUSTOMER: 'งานลูกค้า', SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก' };
+/** What a rep may order on สั่งของไม่มีโครงการ: งานลูกค้า comes only from import or the sheet. */
+export const ORDER_PURPOSE_LABELS = { SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก' };
+/** Where an import request came from, on การขนส่ง. */
+export const ORIGIN_LABELS = { JOB: 'งานขาย', SALES_ORDER: 'ฝ่ายขายสั่ง', IMPORT: 'ฝ่ายนำเข้าสร้าง', BACKFILL: 'จากตารางของเข้า' };
 
 /** Who a lot (or a waiting IR) is for: the deal's project/customer, or for an order with no project "ตัวอย่าง · requester". */
 export const lotWho = (lot) => (lot.ticketId == null
-  ? [PURPOSE_LABELS[lot.orderPurpose], lot.requesterName].filter(Boolean).join(' · ') || lot.purposeNote
+  ? lot.orderPurpose === 'CUSTOMER' ? lot.purposeNote : [PURPOSE_LABELS[lot.orderPurpose], lot.requesterName].filter(Boolean).join(' · ') || lot.purposeNote
   : lot.projectName || lot.customerName || lot.ticketCode);
 
 /** The second line under who: the deal's code, or "ไม่มีโครงการ" (with who it is for) for an order with no project. */
-export const lotWhoSub = (lot) => (lot.ticketId == null ? ['ไม่มีโครงการ', lot.purposeNote].filter(Boolean).join(' · ') : `งาน ${lot.ticketCode}`);
+export const lotWhoSub = (lot) => {
+  if (lot.ticketId != null) return `งาน ${lot.ticketCode}`;
+  if (lot.orderPurpose === 'CUSTOMER') return ['งานลูกค้า · ยังไม่มีงานขาย', lot.requesterName].filter(Boolean).join(' · ');
+  return ['ไม่มีโครงการ', lot.purposeNote].filter(Boolean).join(' · ');
+};
 
 /** The date line under a round's step on the queue card (vessel / departure / ETA / arrival). */
 export function roundSummaryLine(round) {
@@ -122,8 +132,8 @@ export function roundSummaryLine(round) {
 }
 
 /** Under a round's name on the desktop table: its first proforma number, else the goods-receipt number. */
-export const roundSubline = (round) => (round.documents ?? []).find((d) => d.kind === 'PROFORMA' && d.docNo)?.docNo
-  ?? round.facts?.grNumber ?? '';
+export const roundSubline = (round) => [round.source === 'BACKFILL' ? 'จากตารางของเข้า' : null,
+  (round.documents ?? []).find((d) => d.kind === 'PROFORMA' && d.docNo)?.docNo ?? round.facts?.grNumber].filter(Boolean).join(' · ');
 
 /** "n ใบ · qty" and "x โครงการ · y ตัวอย่าง" for the IRs on a round (quantity only when every line shares a unit). */
 export function roundIrSummary(round) {

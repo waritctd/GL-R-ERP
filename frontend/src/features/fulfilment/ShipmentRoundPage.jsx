@@ -114,7 +114,7 @@ export function ShipmentRoundPage({ user, showToast }) {
   const returnButton = (l) => (canReturn(l)
     ? <Button type="button" size="sm" variant="secondary" className="mt-1 whitespace-normal" onClick={() => setReturning(l)} data-testid={`lot-return-${l.lotId}`}>ไม่ได้รับของ · กลับไปรอจัดรอบ</Button> : null);
   const lotColumns = [
-    { key: 'ir', header: 'ใบขอซื้อ', render: (l) => (l.ticketId == null ? <span className="flex flex-col items-start gap-1"><code>{l.docNumber}</code><DownloadIrButton importRequestId={l.importRequestId} docNumber={l.docNumber} factoryName={round.factoryName} showToast={showToast} /></span> : <Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link>) },
+    { key: 'ir', header: 'ใบขอซื้อ', render: (l) => (l.ticketId == null ? <span className="flex flex-col items-start gap-1"><Link to={`/fulfilment/jobs/${l.importRequestId}`} className="text-info underline"><code>{l.docNumber}</code></Link><DownloadIrButton importRequestId={l.importRequestId} docNumber={l.docNumber} factoryName={round.factoryName} showToast={showToast} /></span> : <Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link>) },
     { key: 'who', header: 'โครงการ / ลูกค้า', render: (l) => <span className="flex flex-col"><b className="text-sm">{lotWho(l)}</b><small className="text-text-muted">{lotWhoSub(l)}</small></span> },
     { key: 'product', header: 'สินค้า', render: (l) => lotProduct(l) },
     { key: 'qty', header: 'ไปรอบนี้', render: (l) => <span className="flex flex-col tabular-nums"><b>{formatQty(l.qty)} {l.unit ?? ''}</b><small className="text-text-muted">จาก {formatQty(l.itemQty)}</small></span> },
@@ -130,7 +130,7 @@ export function ShipmentRoundPage({ user, showToast }) {
       <span className="flex min-w-0 flex-col gap-0.5">
         <b className="text-sm">{lotWho(l)}</b>
         {l.ticketId == null ? <DownloadIrButton importRequestId={l.importRequestId} docNumber={l.docNumber} factoryName={round.factoryName} showToast={showToast} /> : null}
-        <small className="text-text-muted">{l.ticketId == null ? <code>{l.docNumber}</code> : <Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link>} · {lotProduct(l)}</small>
+        <small className="text-text-muted">{l.ticketId == null ? <Link to={`/fulfilment/jobs/${l.importRequestId}`} className="text-info underline"><code>{l.docNumber}</code></Link> : <Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link>} · {lotProduct(l)}</small>
         <small className="text-text-muted">{lotLabel(l, round.importStep)}{l.remainingQty > 0 ? ` · เหลือ ${formatQty(l.remainingQty)} รอจัดรอบ` : ''}</small>
         {lotArrivalText(l, round.importStep) ? <small className="font-bold text-danger-dark" data-testid="lot-short">{lotArrivalText(l, round.importStep)}</small> : null}
         {returnButton(l)}
