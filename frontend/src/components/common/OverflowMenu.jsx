@@ -8,16 +8,25 @@ import { Icon } from './Icon.jsx';
 /** Generic "⋯" overflow trigger + menu (ticket-detail IA rebuild Phase 1 — see
  * docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md, "Action bar (sticky)" /
  * Secondary actions). */
+// The menu stays inside the viewport wherever the trigger wrapped: its edge is held `MENU_GUTTER` from the screen's.
+const MENU_GUTTER = 8;
+const MENU_MIN_WIDTH = 192; // min-w-[12rem], until the panel is mounted and can be measured
+const keepInside = (offset, menuWidth, viewportWidth) => Math.max(MENU_GUTTER,
+  Math.min(offset, viewportWidth - menuWidth - MENU_GUTTER));
+
 // Mirrors the old absolute-positioning classes (`top-full`/`mt-1`, `mobile:top-auto mobile:bottom-full
 // mobile:mb-1`, `right-0`/`left-0`) as viewport-relative fixed coordinates. `+ 4` reproduces the old `mt-1`/
 // `mb-1` (0.25rem) gap.
-function computeMenuPosition(triggerEl, { align, flipUp }) {
+function computeMenuPosition(triggerEl, { align, flipUp, menuWidth }) {
   const rect = triggerEl.getBoundingClientRect();
   const viewportWidth = document.documentElement.clientWidth;
   const viewportHeight = document.documentElement.clientHeight;
+  const width = menuWidth || MENU_MIN_WIDTH;
   return {
     ...(flipUp ? { bottom: viewportHeight - rect.top + 4 } : { top: rect.bottom + 4 }),
-    ...(align === 'end' ? { right: viewportWidth - rect.right } : { left: rect.left }),
+    ...(align === 'end'
+      ? { right: keepInside(viewportWidth - rect.right, width, viewportWidth) }
+      : { left: keepInside(rect.left, width, viewportWidth) }),
   };
 }
 
@@ -57,7 +66,7 @@ export function OverflowMenu({
     }
     function reposition() {
       if (!triggerRef.current) return;
-      setMenuPosition(computeMenuPosition(triggerRef.current, { align, flipUp }));
+      setMenuPosition(computeMenuPosition(triggerRef.current, { align, flipUp, menuWidth: menuRef.current?.offsetWidth }));
     }
     reposition();
     window.addEventListener('scroll', reposition, true);
@@ -72,6 +81,11 @@ export function OverflowMenu({
   // supplies coordinates and the portal mounts, so gating on `open` here raced `menuRef.current` — it was still
   // null when this ran, silently dropping the focus-first-item behaviour.
   const menuMounted = menuPosition !== null;
+  // The first position used the minimum width: place it again now that the real panel can be measured.
+  useLayoutEffect(() => {
+    if (!menuMounted || !triggerRef.current) return;
+    setMenuPosition(computeMenuPosition(triggerRef.current, { align, flipUp, menuWidth: menuRef.current?.offsetWidth }));
+  }, [menuMounted, align, flipUp]);
   useLayoutEffect(() => {
     if (!menuMounted) return undefined;
 
