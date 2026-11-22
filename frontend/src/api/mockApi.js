@@ -4857,7 +4857,7 @@ function mockHasReceivedLot(ticketId) {
 // TicketRepository#unlinkedGoods: ISSUED IR lines on no deal line
 function mockUnlinkedIrGoods(ticketId) {
   return mockImportRequests.filter((r) => r.ticketId === ticketId && r.status === 'ISSUED')
-    .flatMap((ir) => ir.items.filter((i) => i.ticketItemId == null).map((i) => ({
+    .flatMap((ir) => ir.items.filter((i) => i.ticketItemId == null && !i.closedOutReason).map((i) => ({
       importRequestId: ir.id, itemId: i.id, docNumber: ir.docNumber, product: [i.brand, i.model].filter(Boolean).join(' ') || i.code,
       unit: (i.unit ?? '').trim() || null, qty: Number(i.qty),
     })));
@@ -11518,6 +11518,10 @@ export const api = {
         totalOrdered: allOne ? out.reduce((sum, i) => sum + i.ordered, 0) : null,
         totalReceived: allOne ? out.reduce((sum, i) => sum + i.received, 0) : null, irs: out,
         unlinked: mockUnlinkedIrGoods(Number(id)),
+        closedOut: irs.flatMap((ir) => ir.items.filter((i) => i.closedOutReason).map((i) => ({
+          importRequestId: ir.id, itemId: i.id, docNumber: ir.docNumber, product: [i.brand, i.model].filter(Boolean).join(' ') || i.code,
+          unit: (i.unit ?? '').trim() || null, qty: Number(i.qty), receivedQty: 0, reason: i.closedOutReason,
+        }))),
       });
     },
 
@@ -16028,6 +16032,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const ir = mockImportRequests.find((r) => r.items.some((i) => String(i.id) === String(lineId)));
       const line = ir?.items.find((i) => String(i.id) === String(lineId));
       if (!line || ir.ticketId == null) fail('ไม่พบรายการในใบขอซื้อของงาน', 404);
+      if (line.closedOutReason) fail('รายการนี้ถูกปิดไว้นอกงาน — เปิดรายการกลับก่อนจึงจะผูกได้', 409);
       if (line.ticketItemId != null) {
         if (line.ticketItemId === Number(ticketItemId)) return delay({ linked: true });
         fail('รายการนี้ผูกกับรายการอื่นของงานแล้ว', 409);
@@ -16041,6 +16046,31 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       line.ticketItemId = target.id;
       mockCompleteDeliveryIfDone(ticket, user);
       return delay({ linked: true });
+    },
+    // IrLineExitService: close out an unlinked line (import/CEO); reversible until the deal is fully delivered.
+    async closeOutLine(lineId, reason) {
+      const user = requireSession();
+      if (!['import', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const ir = mockImportRequests.find((r) => r.items.some((i) => String(i.id) === String(lineId)));
+      const line = ir?.items.find((i) => String(i.id) === String(lineId));
+      if (!line || ir.ticketId == null) fail('ไม่พบรายการในใบขอซื้อของงาน', 404);
+      if (!String(reason ?? '').trim()) fail('ระบุเหตุผลที่ปิดรายการนี้ (ไม่เกิน 255 ตัวอักษร)', 400);
+      if (line.closedOutReason) return delay({ closedOut: true });
+      if (line.ticketItemId != null) fail('รายการนี้ผูกกับรายการของงานแล้ว — ปิดได้เฉพาะรายการที่ไม่อยู่ในงาน', 409);
+      line.closedOutReason = String(reason).trim();
+      mockCompleteDeliveryIfDone(findTicketRaw(ir.ticketId), user);
+      return delay({ closedOut: true });
+    },
+    async reopenLine(lineId) {
+      const user = requireSession();
+      if (!['import', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const ir = mockImportRequests.find((r) => r.items.some((i) => String(i.id) === String(lineId)));
+      const line = ir?.items.find((i) => String(i.id) === String(lineId));
+      if (!line || ir.ticketId == null) fail('ไม่พบรายการในใบขอซื้อของงาน', 404);
+      if (!line.closedOutReason) return delay({ reopened: true });
+      if (findTicketRaw(ir.ticketId).fulfillmentStatus === 'FULLY_DELIVERED') fail('งานส่งมอบครบแล้ว เปิดรายการกลับในระบบไม่ได้ — แจ้งผู้ดูแลระบบ', 409);
+      line.closedOutReason = null;
+      return delay({ reopened: true });
     },
     async createDrafts(ticketId, request) {
       const ticket = findTicketRaw(Number(ticketId));

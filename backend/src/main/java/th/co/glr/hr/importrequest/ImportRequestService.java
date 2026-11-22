@@ -1036,6 +1036,7 @@ public class ImportRequestService {
             .map(it -> new ImportRequestItemInput(it.ticketItemId(), it.code(), it.size(),
                 it.qty(), it.unit(), it.note(), it.color(), it.texture(), it.brand(), it.model()))
             .toList());
+        stored.copyClosedOut(issued.id(), revisionId);
         return withPageCount(requireStored(revisionId));
     }
 
@@ -1069,6 +1070,9 @@ public class ImportRequestService {
         }
         if (!ImportRequestStatus.ISSUED.equals(line.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "ผูกได้เฉพาะรายการของใบขอซื้อที่ออกแล้ว");
+        }
+        if (line.closedOut()) {
+            throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ถูกปิดไว้นอกงาน — เปิดรายการกลับก่อนจึงจะผูกได้");
         }
         requireDealActive(requireTicket(ticketId));
         if (!stored.dealItemIds(ticketId).contains(ticketItemId)) {

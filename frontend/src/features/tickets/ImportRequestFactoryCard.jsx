@@ -1,4 +1,4 @@
-import { LinkIrLineSheet } from './LinkIrLineSheet.jsx';
+import { CloseOutLineSheet, LinkIrLineSheet } from './LinkIrLineSheet.jsx';
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
@@ -72,6 +72,7 @@ export function ImportRequestFactoryCard({
   const [emailDraft, setEmailDraft] = useState({ emailTo: row.emailTo ?? '', emailSubject: row.emailSubject ?? '', emailBody: row.emailBody ?? '' });
   const [footerOpen, setFooterOpen] = useState(false);
   const [linking, setLinking] = useState(null);
+  const [closing, setClosing] = useState(null);
   const [footerDraft, setFooterDraft] = useState(() => footerDraftOf(row));
   // Nit: window.confirm() replaced with the app's own ConfirmDialog pattern (see that component's own
   // Javadoc-style header — "Replaces window.confirm/window.prompt call sites").
@@ -95,6 +96,11 @@ export function ImportRequestFactoryCard({
     showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ');
   }
 
+  const reopen = useMutation({
+    mutationFn: (lineId) => api.storedImportRequests.reopenLine(lineId),
+    onSuccess: () => { invalidate(); showToast?.('success', 'เปิดรายการกลับแล้ว'); },
+    onError: onError,
+  });
   const updateBodyMutation = useMutation({
     mutationFn: (payload) => api.storedImportRequests.update(row.id, payload),
     onSuccess: () => { showToast?.('success', 'บันทึกแล้ว'); invalidate(); },
@@ -404,10 +410,20 @@ export function ImportRequestFactoryCard({
             {it.size ? <span>{it.size}</span> : null}
             <span>{Number(it.qty).toLocaleString('en-US')} {it.unit ?? ''}</span>
             {it.note ? <span>· {it.note}</span> : null}
-            {isIssued && it.ticketItemId == null ? (
-              <span className="flex items-center gap-2 text-warning-dark" data-testid={`ir-unlinked-${it.id}`}>
+            {isIssued && it.ticketItemId == null && it.closedOutReason ? (
+              <span className="flex flex-wrap items-center gap-2 text-text-muted" data-testid={`ir-closed-out-${it.id}`}>
+                ปิดนอกงานแล้ว: {it.closedOutReason}
+                {canSetLeadTime ? <Button type="button" size="sm" variant="secondary" disabled={reopen.isPending} onClick={() => reopen.mutate(it.id)} data-testid={`ir-reopen-${it.id}`}>เปิดกลับ</Button> : null}
+              </span>
+            ) : isIssued && it.ticketItemId == null ? (
+              <span className="flex flex-wrap items-center gap-2 text-warning-dark" data-testid={`ir-unlinked-${it.id}`}>
                 ยังไม่อยู่ในรายการของงาน
-                {canSetLeadTime ? <Button type="button" size="sm" variant="secondary" onClick={() => setLinking(it)} data-testid={`ir-link-${it.id}`}>ผูกกับรายการของงาน</Button> : <span>· ให้ฝ่ายนำเข้าหรือ CEO ผูกให้</span>}
+                {canSetLeadTime ? (
+                  <>
+                    <Button type="button" size="sm" variant="secondary" onClick={() => setLinking(it)} data-testid={`ir-link-${it.id}`}>ผูกกับรายการของงาน</Button>
+                    <Button type="button" size="sm" variant="secondary" onClick={() => setClosing(it)} data-testid={`ir-close-out-${it.id}`}>ปิดรายการนี้</Button>
+                  </>
+                ) : <span>· ให้ฝ่ายนำเข้าหรือ CEO ผูกหรือปิดรายการให้</span>}
               </span>
             ) : null}
           </div>
@@ -416,6 +432,7 @@ export function ImportRequestFactoryCard({
 
       {documentDetails}
 
+      {closing ? <CloseOutLineSheet line={closing} showToast={showToast} onClose={() => setClosing(null)} onDone={invalidate} /> : null}
       {linking ? <LinkIrLineSheet ticketId={ticketId} line={linking} showToast={showToast} onClose={() => setLinking(null)} onLinked={invalidate} /> : null}
 
       {emailOpen && showOrderEmail ? (

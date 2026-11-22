@@ -411,6 +411,14 @@ public class ShipmentRoundService {
         applyAftermath(onActiveDeals(recomputeIrSteps(mine, actor, null), mine), actor, null);
     }
 
+    /** After a line of one IR was closed out or reopened: that IR re-derives its step (a closed-out line is no longer wanted);
+     * the normal rollup and its one notice follow when that completes the deal. Locks as lockTicketIrs returned. */
+    @Transactional
+    public void rederiveAfterLineExit(List<IrLock> irs, long importRequestId, UserPrincipal actor) {
+        List<IrLock> mine = irs.stream().filter(i -> i.id() == importRequestId).toList();
+        applyAftermath(onActiveDeals(recomputeIrSteps(mine, actor, null), mine), actor, null);
+    }
+
     /** The round for the closing read, or null when it is now held only by finished deals (hidden): the change stays
      * committed and the caller leaves the page, as for a deleted round. */
     private ShipmentRoundDto roundOrNullIfHidden(long id, UserPrincipal actor) {

@@ -38,3 +38,31 @@ export function LinkIrLineSheet({ ticketId, line, onClose, onLinked, showToast }
     </Modal>
   );
 }
+
+/**
+ * Close out an IR line that will not be on this deal. Import / CEO, any IR step. The row, its lots and receipts stay on
+ * record; the line stops holding the deal's delivery. Reversible (เปิดกลับ) until the deal is fully delivered.
+ */
+export function CloseOutLineSheet({ line, onClose, onDone, showToast }) {
+  const [reason, setReason] = useState('');
+  const close = useMutation({
+    mutationFn: () => api.storedImportRequests.closeOutLine(line.id, reason.trim()),
+    onSuccess: () => { showToast?.('success', 'ปิดรายการนอกงานแล้ว'); onDone?.(); onClose(); },
+    onError: (e) => showToast?.('error', e?.message ?? 'ปิดรายการไม่สำเร็จ'),
+  });
+  return (
+    <Modal title="ปิดรายการนอกงานนี้" subtitle={`${line.code}${line.size ? ` ${line.size}` : ''} · ${Number(line.qty).toLocaleString('en-US')} ${line.unit ?? ''}`}
+      onClose={onClose} placement="sheet-on-phone" testId="close-out-sheet"
+      footer={<Button type="button" variant="primary" disabled={!reason.trim() || close.isPending} onClick={() => close.mutate()} data-testid="close-out-send">ปิดรายการ</Button>}>
+      <div className="flex flex-col gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-bold text-text-secondary">เหตุผล *</span>
+          <textarea className="min-h-20 w-full rounded-md border border-border-input px-2 py-2 text-base" maxLength={255} value={reason} onChange={(e) => setReason(e.target.value)} data-testid="close-out-reason" />
+        </label>
+        <p className="m-0 text-xs text-text-muted" data-testid="close-out-note">
+          ถ้ามีของถึงโกดังแล้ว ของนั้นยังอยู่ในบันทึก (ล็อตและการรับของไม่หาย) แต่ไม่นับในการเช็คส่งมอบครบของงานนี้ เปิดรายการกลับได้จนกว่างานจะส่งมอบครบ
+        </p>
+      </div>
+    </Modal>
+  );
+}

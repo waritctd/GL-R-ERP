@@ -2892,6 +2892,10 @@ public class TicketService {
         return completeDeliveryIfDone(ticketId, actor, "ส่งมอบครบ: ส่วนที่ไม่ได้รับของถูกบันทึกแล้ว", " (มีรายการที่ไม่ได้รับของ)");
     }
 
+    public String fulfilmentStatusOf(long ticketId) {
+        return requireTicket(ticketId).summary().fulfillmentStatus();
+    }
+
     /** The IR goods that held the deal open were linked or dropped: an already delivered deal completes now. */
     @Transactional
     public void completeDeliveryAfterIrRevision(long ticketId, UserPrincipal actor) {

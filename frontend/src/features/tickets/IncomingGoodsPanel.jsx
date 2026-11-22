@@ -143,7 +143,15 @@ export function IncomingGoodsPanel({ ticketId, canMessage = false, showToast }) 
           <ul className="my-1 pl-5">
             {data.unlinked.map((g, i) => <li key={i}>{g.product} {formatQty(g.qty)}{g.unit ? ` ${g.unit}` : ''} ({g.docNumber})</li>)}
           </ul>
-          ฝ่ายนำเข้าหรือ CEO ผูกรายการเหล่านี้กับรายการของงานได้ที่การ์ดใบขอซื้อ (ถ้าไม่มีสินค้านี้ในงาน ให้แก้ใบเสนอราคาก่อน) — ฝ่ายขายดูได้อย่างเดียว
+          ฝ่ายนำเข้าหรือ CEO ผูกรายการเหล่านี้กับรายการของงาน หรือปิดรายการที่ไม่ใช่ของงานนี้ ได้ที่การ์ดใบขอซื้อ (ถ้าเป็นของงานนี้แต่ยังไม่มีในใบเสนอราคา ให้แก้ใบเสนอราคาก่อน) — ฝ่ายขายดูได้อย่างเดียว
+        </div>
+      )}
+      {data.closedOut?.length > 0 && (
+        <div className="mb-3 rounded-md border border-border bg-surface-subtle p-3 text-sm text-text-muted" data-testid="incoming-closed-out">
+          <b className="text-text">ปิดรายการนอกงานนี้แล้ว (ของยังอยู่ในบันทึก แต่ไม่นับในการส่งมอบครบ)</b>
+          <ul className="my-1 pl-5">
+            {data.closedOut.map((g) => <li key={g.itemId}>{g.product} {formatQty(g.qty)}{g.unit ? ` ${g.unit}` : ''} ({g.docNumber}) · ถึงโกดัง {formatQty(g.receivedQty)} · เหตุผล: {g.reason}</li>)}
+          </ul>
         </div>
       )}
       <div className="flex flex-col gap-4">

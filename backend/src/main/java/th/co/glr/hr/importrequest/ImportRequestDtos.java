@@ -142,6 +142,8 @@ public final class ImportRequestDtos {
          * the order-email draft's per-line header. */
         String brand,
         /** The line's raw model text, separate from #code — see ImportRequestItemInput's own Javadoc. */
-        String model
+        String model,
+        /** Why this line was closed out (goods that will not be on this deal); null while it is open. */
+        String closedOutReason
     ) {}
 }

@@ -39,8 +39,10 @@ public class ImportRequestController {
 
     private final ImportRequestService service;
     private final SessionContext sessions;
+    private final IrLineExitService exits;
 
-    public ImportRequestController(ImportRequestService service, SessionContext sessions) {
+    public ImportRequestController(ImportRequestService service, SessionContext sessions, IrLineExitService exits) {
+        this.exits = exits;
         this.service = service;
         this.sessions = sessions;
     }
@@ -196,6 +198,21 @@ public class ImportRequestController {
     }
 
     record LinkLineRequest(long ticketItemId) {}
+
+    /** Import/CEO: goods that will not be on this deal; the row, lots and receipts stay. Reversible until the deal is delivered. */
+    @PostMapping("/import-requests/lines/{lineId}/close-out")
+    Map<String, Boolean> closeOutLine(@PathVariable long lineId, @RequestBody CloseOutRequest request, HttpSession session) {
+        exits.closeOut(lineId, request.reason(), sessions.requireUser(session));
+        return Map.of("closedOut", true);
+    }
+
+    @PostMapping("/import-requests/lines/{lineId}/reopen")
+    Map<String, Boolean> reopenLine(@PathVariable long lineId, HttpSession session) {
+        exits.reopen(lineId, sessions.requireUser(session));
+        return Map.of("reopened", true);
+    }
+
+    record CloseOutRequest(String reason) {}
 
     @PostMapping("/import-requests/{id}/lead-time")
     Map<String, ImportRequestDto> setLeadTime(@PathVariable long id,
