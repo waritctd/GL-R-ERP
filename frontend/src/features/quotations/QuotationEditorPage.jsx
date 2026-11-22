@@ -36,7 +36,7 @@ import {
   newLocationGroupId,
   REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
   VALIDITY_MODE_OPTIONS, FULL_PAYMENT_TERM_OPTIONS,
-  carryContactDetails, hasDealQuotationGrant,
+  carryContactDetails, printedContactLine, hasDealQuotationGrant,
 } from './quotationMeta.js';
 import { isOversightReader, isOwnerOrKeyer } from '../tickets/dealOwnership.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
@@ -464,7 +464,10 @@ export function QuotationEditorPage({ user, showToast }) {
   // Every rep-driven change of the contact (pick, edit, revert, drop with the customer) carries the
   // printed โทร./อีเมล boxes along. A reopened draft (applyEditorState, onResolve) must never refill.
   const changeContact = (next) => {
-    setTerms((t) => carryContactDetails(t, contactRef.current, next));
+    // One contact card (#71): moving from one contact to another shows the new one's details, never the old one's.
+    setTerms((t) => (contactRef.current && next
+      ? { ...t, orderedByPhone: next.phone ?? '', orderedByEmail: next.email ?? '' }
+      : carryContactDetails(t, contactRef.current, next)));
     setContact(next);
   };
   const contactPickerRef = useRef(null);
@@ -1391,7 +1394,7 @@ export function QuotationEditorPage({ user, showToast }) {
     projectName: terms.projectName || null,
     // Item 2 ("ไม่เติม “คุณ”", V180) — the checkbox under the ผู้ติดต่อ picker. Always an explicit
     // boolean, so a full PUT never leaves the server guessing what "missing" means.
-    omitContactHonorific: terms.omitContactHonorific === true,
+    omitContactHonorific: true, // #71: the name prints as typed from a draft's next save; approved documents are never re-saved
     // The customer's phone and email, printed on the document when filled. Always sent: a blank one is
     // an explicit null, which clears it. Trimmed because the Email is CHECKED trimmed
     // (orderedByEmailError), so what is sent is what was checked.
@@ -2194,7 +2197,21 @@ export function QuotationEditorPage({ user, showToast }) {
   // renders it. Its customer is the loaded deal's, or on a new deal the one chosen in the ดีล card.
   // With neither (a deal this user cannot read, e.g. a quotation-grant holder) it shows its own
   // "เลือกลูกค้าก่อน" state. Optional, never a checklist blocker.
-  const contactPicker = (
+  // What the PDF prints now: an untouched older draft keeps its stored "คุณ" rule until its next save, and says so.
+  const printsAsTyped = !quotation || dirty || quotation.omitContactHonorific === true;
+  const contactPreview = (typedName) => {
+    // A save re-reads the live contact, so what prints after an edit is the card's name, not the draft's old snapshot.
+    const liveName = typedName || contact?.firstName || '';
+    const line = (omitHonorific, contactName) => printedContactLine({
+      contactName, customerName, customerTaxId: (isEditable ? summaryCustomer?.taxId : null) ?? quotation?.customerTaxId,
+      phone: terms.orderedByPhone, email: terms.orderedByEmail,
+      english: docSettings.documentLanguage === 'EN', omitHonorific,
+    });
+    const now = line(printsAsTyped, printsAsTyped ? liveName : (quotation.contactName ?? ''));
+    const afterEdit = printsAsTyped ? null : line(true, liveName);
+    return { now, afterEdit: afterEdit !== now ? afterEdit : null };
+  };
+  const renderContactPicker = (idSuffix) => (
     <div className="col-span-full">
       <QuotationContactPicker
         ref={contactPickerRef}
@@ -2202,11 +2219,19 @@ export function QuotationEditorPage({ user, showToast }) {
         customerName={customerName}
         value={contact}
         onChange={(next) => { changeContact(next); setDirty(true); }}
+        onRecordChange={(next) => { setContact(next); setDirty(true); }}
         onResolve={setContact}
         showToast={showToast}
         idPrefix="quotation-contact"
-        omitContactHonorific={terms.omitContactHonorific}
-        onChangeOmitContactHonorific={(next) => { setTerms((t) => ({ ...t, omitContactHonorific: next })); setDirty(true); }}
+        preview={contactPreview}
+        renderPrintFields={(handlers) => (
+          <OrderedByContactFields
+            terms={terms}
+            onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
+            idSuffix={idSuffix}
+            {...handlers}
+          />
+        )}
       />
     </div>
   );
@@ -2590,12 +2615,7 @@ export function QuotationEditorPage({ user, showToast }) {
                       </select>
                     </label>
                   ) : null}
-                  {contactPicker}
-                  <OrderedByContactFields
-                    terms={terms}
-                    onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
-                    idSuffix="Inline"
-                  />
+                  {renderContactPicker('Inline')}
                   <QuotationDealFields
                     terms={terms}
                     onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
@@ -2708,13 +2728,7 @@ export function QuotationEditorPage({ user, showToast }) {
                     />
                   </div>
                 ) : null}
-                {contactPicker}
-                {/* Directly under ผู้ติดต่อ: the customer's phone and email, side by side. */}
-                <OrderedByContactFields
-                  terms={terms}
-                  onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
-                  idSuffix="Card"
-                />
+                {renderContactPicker('Card')}
                 <QuotationDealFields
                   terms={terms}
                   onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}

@@ -60,7 +60,7 @@ export function ProjectNamePrintToggle({ id, checked, onChange }) {
  * right — not from the first keystroke, when every address is still malformed. Not `type="email"`:
  * that brings the browser's own validation bubble and silently rewrites what was typed.
  */
-export function OrderedByContactFields({ terms, onChange, idSuffix }) {
+export function OrderedByContactFields({ terms, onChange, idSuffix, onFieldEdit, onFieldBlur }) {
   const phoneId = `orderedByPhone${idSuffix}`;
   const emailId = `orderedByEmail${idSuffix}`;
   const [emailLeft, setEmailLeft] = useState(false);
@@ -73,8 +73,10 @@ export function OrderedByContactFields({ terms, onChange, idSuffix }) {
           id={phoneId}
           autoComplete="off"
           maxLength={ORDERED_BY_PHONE_MAX}
+          className="mobile:min-h-[44px]"
           value={terms.orderedByPhone}
-          onChange={(e) => onChange({ orderedByPhone: e.target.value })}
+          onChange={(e) => { onFieldEdit?.('phone'); onChange({ orderedByPhone: e.target.value }); }}
+          onBlur={() => onFieldBlur?.('phone', terms.orderedByPhone)}
         />
       </FormField>
       <FormField label="อีเมล" htmlFor={emailId} error={emailError}>
@@ -86,9 +88,13 @@ export function OrderedByContactFields({ terms, onChange, idSuffix }) {
           spellCheck={false}
           autoComplete="off"
           maxLength={ORDERED_BY_EMAIL_MAX}
+          className="mobile:min-h-[44px]"
           value={terms.orderedByEmail}
-          onChange={(e) => onChange({ orderedByEmail: e.target.value })}
-          onBlur={() => setEmailLeft(true)}
+          onChange={(e) => { onFieldEdit?.('email'); onChange({ orderedByEmail: e.target.value }); }}
+          onBlur={() => {
+            setEmailLeft(true);
+            if (!orderedByEmailError(terms.orderedByEmail)) onFieldBlur?.('email', terms.orderedByEmail);
+          }}
         />
       </FormField>
     </div>
