@@ -74,7 +74,7 @@ public class ImportRequestRepository {
         Map<Long, List<ImportRequestItemDto>> byParent = new LinkedHashMap<>();
         jdbc.query("""
             SELECT import_request_item_id, import_request_id, ticket_item_id, seq, code, size,
-                   qty, unit, note, color, texture, brand, model
+                   qty, unit, note, color, texture, brand, model, closed_out_reason
               FROM sales.import_request_item
              WHERE import_request_id IN (:ids)
              ORDER BY import_request_id, seq
@@ -93,7 +93,8 @@ public class ImportRequestRepository {
                         rs.getString("color"),
                         rs.getString("texture"),
                         rs.getString("brand"),
-                        rs.getString("model")));
+                        rs.getString("model"),
+                        rs.getString("closed_out_reason")));
             });
         return rows.stream()
             .map(r -> withItems(r, byParent.getOrDefault(r.id(), List.of())))
@@ -643,5 +644,59 @@ public class ImportRequestRepository {
              WHERE import_request_id = :id AND ticket_id IS NULL AND status = 'ISSUED'
                AND NOT EXISTS (SELECT 1 FROM sales.shipment_lot WHERE import_request_id = :id)
             """, Map.of("id", importRequestId));
+    }
+
+    /** One IR line as the link action sees it. */
+    public record LineToLink(long importRequestId, Long ticketId, String status, Long ticketItemId, String code, String size, boolean closedOut) {}
+
+    public LineToLink findLine(long lineId) {
+        return jdbc.query("""
+            SELECT i.import_request_id, ir.ticket_id, ir.status, i.ticket_item_id, i.code, i.size, i.closed_out_at IS NOT NULL AS closed_out
+              FROM sales.import_request_item i JOIN sales.import_request ir ON ir.import_request_id = i.import_request_id
+             WHERE i.import_request_item_id = :i
+            """, Map.of("i", lineId), (rs, n) -> new LineToLink(rs.getLong("import_request_id"), (Long) rs.getObject("ticket_id"),
+                rs.getString("status"), (Long) rs.getObject("ticket_item_id"), rs.getString("code"), rs.getString("size"), rs.getBoolean("closed_out"))).stream().findFirst().orElse(null);
+    }
+
+    /** Size text of a deal line, to check the link is the same product. */
+    public String ticketItemSize(long ticketId, long ticketItemId) {
+        return jdbc.queryForList("SELECT size FROM sales.ticket_item WHERE item_id = :i AND ticket_id = :t",
+            Map.of("i", ticketItemId, "t", ticketId), String.class).stream().findFirst().orElse(null);
+    }
+
+    public List<Long> dealItemIds(long ticketId) {
+        return jdbc.queryForList("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId), Long.class);
+    }
+
+    public void linkLine(long lineId, long ticketItemId) {
+        jdbc.update("UPDATE sales.import_request_item SET ticket_item_id = :ti WHERE import_request_item_id = :i AND ticket_item_id IS NULL",
+            Map.of("ti", ticketItemId, "i", lineId));
+    }
+
+    /** Closes out an open, unlinked line. 0 rows = it is linked or already closed out (a double submit). */
+    public int closeOutLine(long lineId, String reason, long actorId) {
+        return jdbc.update("""
+            UPDATE sales.import_request_item SET closed_out_reason = :r, closed_out_by = :by, closed_out_at = now()
+             WHERE import_request_item_id = :i AND ticket_item_id IS NULL AND closed_out_at IS NULL
+            """, Map.of("r", reason, "by", actorId, "i", lineId));
+    }
+
+    /** A revision keeps what its predecessor closed out (lines match by position). */
+    public void copyClosedOut(long fromIrId, long toIrId) {
+        jdbc.update("""
+            UPDATE sales.import_request_item n
+               SET closed_out_reason = o.closed_out_reason, closed_out_by = o.closed_out_by, closed_out_at = o.closed_out_at
+              FROM sales.import_request_item o
+             WHERE o.import_request_id = :from AND n.import_request_id = :to AND o.seq = n.seq AND o.closed_out_at IS NOT NULL
+               AND n.ticket_item_id IS NULL
+            """, Map.of("from", fromIrId, "to", toIrId));
+    }
+
+    /** Clears all three fields. 0 rows = it was not closed out. */
+    public int reopenLine(long lineId) {
+        return jdbc.update("""
+            UPDATE sales.import_request_item SET closed_out_reason = NULL, closed_out_by = NULL, closed_out_at = NULL
+             WHERE import_request_item_id = :i AND closed_out_at IS NOT NULL
+            """, Map.of("i", lineId));
     }
 }

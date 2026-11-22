@@ -2753,7 +2753,7 @@ public class TicketRepository {
                    COALESCE(NULLIF(btrim(concat_ws(' ', iri.brand, iri.model)), ''), iri.code) AS product
               FROM sales.import_request ir
               JOIN sales.import_request_item iri ON iri.import_request_id = ir.import_request_id
-             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND iri.ticket_item_id IS NULL
+             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND iri.ticket_item_id IS NULL AND iri.closed_out_at IS NULL
              ORDER BY ir.import_request_id, iri.seq
             """, Map.of("t", ticketId), (rs, n) -> new UnlinkedGoods(rs.getString("doc_number"), rs.getString("product"),
                 rs.getBigDecimal("qty"), rs.getString("unit")));
@@ -2781,6 +2781,7 @@ public class TicketRepository {
                    COALESCE(SUM((SELECT COUNT(*) FROM sales.shipment_lot l2
                                   WHERE l2.import_request_item_id = iri.import_request_item_id)), 0) AS lots,
                    COALESCE(BOOL_OR(ti.had_returned_lot), false) AS lot_returned,
+                   COALESCE(BOOL_OR(iri.closed_out_at IS NULL), false) AS open_line,
                    COALESCE(SUM(COALESCE(w.wanted_qty, iri.qty)), 0) AS wanted_qty, -- less what was marked not delivered
                    -- a blank IR unit is the deal line's own (a portal IR copies ti.unit, usually NULL). raw_unit is a price basis,
                    -- never the quantity's unit: a line counted in pieces has ti.unit, or no unit text at all.
@@ -2796,7 +2797,7 @@ public class TicketRepository {
              GROUP BY iri.ticket_item_id
             """, Map.of("t", ticketId), rs -> {
                 if (rs.getObject("item_id") == null) { // an unlinked line still counts toward dealHasLots
-                    unlinked[0] = true;
+                    unlinked[0] |= rs.getBoolean("open_line"); // a closed-out one holds nothing
                 } else {
                     byItem.put(rs.getLong("item_id"), new LineReceipt(rs.getBigDecimal("ir_qty"), rs.getBigDecimal("wanted_qty"), rs.getBigDecimal("on_rounds"), rs.getBigDecimal("arrived"), rs.getLong("received_lots"), rs.getBoolean("lot_returned"), rs.getBoolean("same_unit")));
                 }

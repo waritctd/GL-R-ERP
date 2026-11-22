@@ -39,8 +39,10 @@ public class ImportRequestController {
 
     private final ImportRequestService service;
     private final SessionContext sessions;
+    private final IrLineExitService exits;
 
-    public ImportRequestController(ImportRequestService service, SessionContext sessions) {
+    public ImportRequestController(ImportRequestService service, SessionContext sessions, IrLineExitService exits) {
+        this.exits = exits;
         this.service = service;
         this.sessions = sessions;
     }
@@ -188,6 +190,30 @@ public class ImportRequestController {
     /** Sets lead time on an ISSUED row (owner decision 09-18 #2) — import/CEO only. The DRAFT-stage edit for the
      * owning rep/CEO goes through PATCH .../import-requests/{id} instead
      * (UpdateImportRequestRequest#leadTimeMinDays/MaxDays). */
+    /** Import/CEO: an IR line that points at no deal line gets its deal line (the stuck-deal exit). */
+    @PostMapping("/import-requests/lines/{lineId}/link")
+    Map<String, Boolean> linkLine(@PathVariable long lineId, @RequestBody LinkLineRequest request, HttpSession session) {
+        service.linkLine(lineId, request.ticketItemId(), sessions.requireUser(session));
+        return Map.of("linked", true);
+    }
+
+    record LinkLineRequest(long ticketItemId) {}
+
+    /** Import/CEO: goods that will not be on this deal; the row, lots and receipts stay. Reversible until the deal is delivered. */
+    @PostMapping("/import-requests/lines/{lineId}/close-out")
+    Map<String, Boolean> closeOutLine(@PathVariable long lineId, @RequestBody CloseOutRequest request, HttpSession session) {
+        exits.closeOut(lineId, request.reason(), sessions.requireUser(session));
+        return Map.of("closedOut", true);
+    }
+
+    @PostMapping("/import-requests/lines/{lineId}/reopen")
+    Map<String, Boolean> reopenLine(@PathVariable long lineId, HttpSession session) {
+        exits.reopen(lineId, sessions.requireUser(session));
+        return Map.of("reopened", true);
+    }
+
+    record CloseOutRequest(String reason) {}
+
     @PostMapping("/import-requests/{id}/lead-time")
     Map<String, ImportRequestDto> setLeadTime(@PathVariable long id,
             @Valid @RequestBody SetLeadTimeRequest request, HttpSession session) {

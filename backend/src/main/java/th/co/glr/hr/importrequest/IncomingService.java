@@ -93,8 +93,13 @@ public class IncomingService {
         return new IncomingResponse(wantedBy, allOne ? out.get(0).unit() : null,
             allOne ? out.stream().map(IncomingIr::ordered).reduce(BigDecimal.ZERO, BigDecimal::add) : null,
             allOne ? out.stream().map(IncomingIr::received).reduce(BigDecimal.ZERO, BigDecimal::add) : null, out,
-            irs.stream().flatMap(ir -> ir.items().stream().filter(i -> i.ticketItemId() == null)
-                .map(i -> new IncomingDtos.IncomingUnlinked(ir.docNumber(), product(i), unitOf(i), i.qty()))).toList());
+            irs.stream().flatMap(ir -> ir.items().stream().filter(i -> i.ticketItemId() == null && i.closedOutReason() == null)
+                .map(i -> new IncomingDtos.IncomingUnlinked(ir.id(), i.id(), ir.docNumber(), product(i), unitOf(i), i.qty()))).toList(),
+            irs.stream().flatMap(ir -> ir.items().stream().filter(i -> i.closedOutReason() != null)
+                .map(i -> new IncomingDtos.IncomingClosedOut(ir.id(), i.id(), ir.docNumber(), product(i), unitOf(i), i.qty(),
+                    lotsByIr.getOrDefault(ir.id(), List.of()).stream().filter(l -> l.itemId() == i.id() && "RECEIVED".equals(l.roundStep()))
+                        .map(l -> l.receivedQty() != null ? l.receivedQty() : l.qty()).reduce(BigDecimal.ZERO, BigDecimal::add),
+                    i.closedOutReason()))).toList());
     }
 
     private static String unitOf(ImportRequestItemDto item) {

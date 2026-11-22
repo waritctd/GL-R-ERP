@@ -29,8 +29,13 @@ public final class IncomingDtos {
 
     /** {@code wantedBy}: the customer's wanted date (the deal's required-by note). Totals only when all units match. */
     public record IncomingResponse(String wantedBy, String totalUnit, BigDecimal totalOrdered, BigDecimal totalReceived,
-                                   List<IncomingIr> irs, List<IncomingUnlinked> unlinked) {}
+                                   List<IncomingIr> irs, List<IncomingUnlinked> unlinked, List<IncomingClosedOut> closedOut) {}
+
+    /** A line closed out of this deal (goods that will not be on it): its lots and receipts stay on record, it no longer
+     * counts toward the deal's delivery. {@code receivedQty} is what reached the warehouse. */
+    public record IncomingClosedOut(long importRequestId, long itemId, String docNumber, String product, String unit, BigDecimal qty,
+                                    BigDecimal receivedQty, String reason) {}
 
     /** An ISSUED IR line on no deal line: the deal cannot complete delivery until it is sorted out. */
-    public record IncomingUnlinked(String docNumber, String product, String unit, BigDecimal qty) {}
+    public record IncomingUnlinked(long importRequestId, long itemId, String docNumber, String product, String unit, BigDecimal qty) {}
 }
