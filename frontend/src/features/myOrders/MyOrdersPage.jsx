@@ -15,6 +15,7 @@ import { formatThaiDate } from '../../utils/format.js';
 import { formatQty, PURPOSE_LABELS, stepLabel, stepTone } from '../fulfilment/shipmentRounds.js';
 import { LotSheet } from '../tickets/IncomingGoodsPanel.jsx';
 import { useMediaQuery } from '../../hooks/useIsMobile.js';
+import { ShippingSwitch } from '../fulfilment/ShippingSwitch.jsx';
 import { PairToDealSheet } from './PairToDealSheet.jsx';
 import { NewOrderPanel, NewOrderSheet, useNewOrderForm } from './NewOrderSheet.jsx';
 
@@ -41,7 +42,7 @@ const qtyText = (r) => {
 };
 
 /**
- * ของที่ฉันสั่ง — the ONE sales page for all incoming goods: every lot of every IR on the rep's project deals AND their
+ * การขนส่ง (sales view, was ของที่ฉันสั่ง) — the ONE sales page for all incoming goods: every lot of every IR on the rep's project deals AND their
  * no-project orders (sample / showroom / stock), with unplanned quantity as a รอจัดรอบ row. A project row opens that deal's
  * ส่งของ tab; a no-project row opens the lot sheet. The sales manager sees the team's; the showroom grant sees SHOWROOM orders.
  */
@@ -134,8 +135,9 @@ export function MyOrdersPage({ user, showToast }) {
 
   return (
     <PageStack>
+      <ShippingSwitch user={user} current="orders" />
       <PageHeader
-        title="ของที่ฉันสั่ง"
+        title="การขนส่ง"
         subtitle="ของนำเข้าของทั้งทีมขายในที่เดียว กรองดูตามผู้ดูแล โครงการ หรือสถานะได้"
         actions={canCreate && !sidePanel ? <Button type="button" variant="primary" onClick={() => setCreating(true)} data-testid="new-order">+ สั่งของไม่มีโครงการ</Button> : null}
       />

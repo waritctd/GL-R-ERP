@@ -41,7 +41,7 @@ function renderPage(user = { id: 5, name: 'คุณ ทดสอบ', role: 'sa
 
 afterEach(() => vi.clearAllMocks());
 
-describe('ของที่ฉันสั่ง', () => {
+describe('การขนส่ง (มุมมองฝ่ายขาย)', () => {
   it('lists project and no-project rows in กำลังมา and ถึงโกดังแล้ว; a project row opens its deal tab, a no-project row the lot sheet; chips filter', async () => {
     vi.mocked(api.myIncoming.get).mockResolvedValue(data);
     renderPage();

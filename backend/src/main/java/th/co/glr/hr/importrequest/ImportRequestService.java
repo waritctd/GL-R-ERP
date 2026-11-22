@@ -1256,7 +1256,7 @@ public class ImportRequestService {
     public void notifyRequesterOfReceivedLot(long requesterId, String docNumber, String factoryName, String qtyText) {
         notifications.notifyEmployeeBellOnly(requesterId, "IMPORT_LOT_RECEIVED",
             "ใบขอซื้อ (IR) " + docNumber + " จากโรงงาน " + factoryName + (qtyText.startsWith("ถึงโกดัง") ? " " : " ถึงโกดังแล้ว ")
-                + qtyText + "\nสิ่งที่ต้องทำต่อ: ดูที่ ของที่ฉันสั่ง", "/my-orders");
+                + qtyText + "\nสิ่งที่ต้องทำต่อ: ดูที่ การขนส่ง", "/my-orders");
     }
 
     /** A revision's lots followed it from the predecessor, so its step is re-derived from them (an IR with no lots keeps
