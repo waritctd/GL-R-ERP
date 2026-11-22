@@ -162,6 +162,7 @@ export function orderConfirmationOf(events) {
 export function canPromoteDealQuotationToDeal(user, quotation) {
   return canEditDealQuotation(user, quotation)
     && quotation?.docStatus === 'APPROVED'
+    && !quotation?.isSample
     && (quotation?.origin ?? 'DEAL_DIRECT') === 'DEAL_DIRECT';
 }
 

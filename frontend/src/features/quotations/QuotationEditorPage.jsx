@@ -45,6 +45,7 @@ import { DealCustomerCard, ExistingDealNotice, QuotationRecipientField } from '.
 import { offRoutePartiesFor, recipientRouteRefusal, useStageCatalog } from '../tickets/stageCatalog.js';
 import { useDealHasLivePricingRequest } from './DealPicker.jsx';
 import { OrderedByContactFields, ProjectNamePrintToggle, QuotationDealFields } from './QuotationDealFields.jsx';
+import { canManageQuotationSample, QuotationSampleSwitch } from './QuotationSampleControls.jsx';
 import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
 import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
@@ -345,6 +346,11 @@ export function QuotationEditorPage({ user, showToast }) {
   // user; ownerEmployeeId is sent only when it names someone else.
   const [dealOwnerId, setDealOwnerId] = useState('');
   const effectiveDealOwnerId = dealOwnerId || (user?.id != null ? String(user.id) : '');
+  // A new quotation's ใบตัวอย่าง choice, sent on its first save. A saved one changes through PATCH .../sample.
+  const [newIsSample, setNewIsSample] = useState(false);
+  // A new quotation may be a sample only for someone the server lets write the mark on this deal.
+  const canMarkNewSample = !id && canManageQuotationSample(user, ticket ?? { createdById: Number(effectiveDealOwnerId) });
+  const sendNewSample = newIsSample && canMarkNewSample;
 
   // /quotations/new with NEITHER an :id NOR a ?ticket= is a brand-new deal that exists nowhere yet:
   // the rep picks/creates the customer and project right here. Stable per-render (not stateful): it
@@ -1323,18 +1329,19 @@ export function QuotationEditorPage({ user, showToast }) {
     offRouteRecipientMessage: !quotation || recipientType !== quotation.recipientType
       ? recipientRouteRefusal(stageCatalog, isInlineCreate ? dealForm.entryChannel : ticket?.entryChannel, recipientType)
       : null,
-    liveDirectQuotation: !quotation && !isInlineCreate ? checklistLiveRows : null,
+    // A sample sits outside both one-live rules (DealQuotationService#create).
+    liveDirectQuotation: !quotation && !isInlineCreate && !sendNewSample ? checklistLiveRows : null,
     dealStatus: checklistDealStatus,
     // One pricing route per deal: a NEW quotation on a picked deal that holds a live pricing request
     // (DealQuotationService#create 409s it).
-    livePricingRequest: !quotation && !isInlineCreate && dealHasLivePricingRequest,
+    livePricingRequest: !quotation && !isInlineCreate && !sendNewSample && dealHasLivePricingRequest,
     // V192.3 — a typed-but-malformed address is what DealQuotationService refuses on every save.
     orderedByEmail: terms.orderedByEmail,
     missingLeadTimeSeqs,
   }), [isInlineCreate, checklistCustomer, dealForm.project, dealForm.entryChannel, attachingToDeal, checklistProjectName, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
     terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays,
-    needsDeal, quotation, recipientType, checklistLiveRows, checklistDealStatus, dealHasLivePricingRequest, terms.orderedByEmail, missingLeadTimeSeqs, stageCatalog, ticket?.entryChannel]);
+    needsDeal, quotation, recipientType, checklistLiveRows, checklistDealStatus, dealHasLivePricingRequest, sendNewSample, terms.orderedByEmail, missingLeadTimeSeqs, stageCatalog, ticket?.entryChannel]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => splitQuotationChecklist(checklist).warnings, [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
@@ -1541,9 +1548,11 @@ export function QuotationEditorPage({ user, showToast }) {
     setPendingAttachments([]);
   }
 
+  const buildCreatePayload = () => ({ ...buildUpsertPayload(), ...(sendNewSample ? { isSample: true } : {}) });
+
   const createMutation = useMutation({
     mutationFn: () => api.dealQuotations.create(effectiveTicketId, {
-      ...buildUpsertPayload(),
+      ...buildCreatePayload(),
       // ?party= (the deal page's เสนอราคา for one contractor): the document belongs to that party.
       ...(partyParam ? { partyId: Number(partyParam) } : {}),
     }),
@@ -1802,7 +1811,7 @@ export function QuotationEditorPage({ user, showToast }) {
       }
       let quotationRes;
       try {
-        quotationRes = await api.dealQuotations.create(deal.id, { ...buildUpsertPayload(), partyId });
+        quotationRes = await api.dealQuotations.create(deal.id, { ...buildCreatePayload(), partyId });
       } catch (error) {
         // The existing deal can refuse the quotation (e.g. that role is off-route for ITS ช่องทางรับงาน, which
         // the editor cannot check: the picker knows only the new-deal form's channel). Take back the party
@@ -1863,7 +1872,7 @@ export function QuotationEditorPage({ user, showToast }) {
         if (!ticketId) throw new Error('สร้างงานไม่สำเร็จ');
         setCreatedTicketIds((made) => ({ ...made, [madeFor]: ticketId }));
       }
-      const quotationRes = await api.dealQuotations.create(ticketId, buildUpsertPayload());
+      const quotationRes = await api.dealQuotations.create(ticketId, buildCreatePayload());
       await finishFirstSave(quotationRes);
     } catch (error) {
       setSaveError(error.message || 'บันทึกไม่สำเร็จ');
@@ -2738,6 +2747,16 @@ export function QuotationEditorPage({ user, showToast }) {
               </div>
             </Panel>
           )}
+
+          <QuotationSampleSwitch
+            quotation={quotation}
+            newValue={newIsSample}
+            onNewChange={(next) => { setNewIsSample(next); setDirty(true); }}
+            canMarkNew={canMarkNewSample}
+            user={user}
+            summary={ticket}
+            showToast={showToast}
+          />
 
           {/* ── รูปแบบเอกสาร ──
               Chosen once per quotation, above the rows it reshapes. Language comes first because it

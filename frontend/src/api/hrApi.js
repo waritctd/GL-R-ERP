@@ -1562,6 +1562,8 @@ export const api = {
     // Add-on orders only: the approved lines this order may reuse at their approved price.
     reusableApprovedItems: (ticketId) => apiRequest(API_ROUTES.tickets.reusableApprovedItems(ticketId)),
     createReorder: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.reorders(id), { method: 'POST', body: payload }),
+    // Turns the sample mark on or off. Responds `{ quotation }`. See DealQuotationService#setSample.
+    setSample: (id, isSample) => apiRequest(API_ROUTES.dealQuotations.sample(id), { method: 'PATCH', body: { isSample } }),
     // "สร้างดีลจากใบเสนอราคา". No request body. Responds
     // `{ result: { ticketId, ticket: TicketSummaryDto, quotation: DealQuotationDto } }`
     // (DealQuotationDtos.PromoteToDealResultDto). Idempotent server-side: a replay on an

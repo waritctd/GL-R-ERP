@@ -1167,7 +1167,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // The summary serves only the newest live direct quotation; an APPROVED one beside a newer owner/buyer
   // DRAFT/PENDING is read off the deal's rows so ⋯ can still confirm it (only the owner may; the confirm needs 'draft').
   const approvedDirect = isOwner && (summary.status ?? 'draft') === 'draft'
-    ? dealQuotationRows.filter((q) => q.origin === 'DEAL_DIRECT' && q.docStatus === 'APPROVED')
+    ? dealQuotationRows.filter((q) => q.origin === 'DEAL_DIRECT' && q.docStatus === 'APPROVED' && !q.isSample)
       .reduce((newest, q) => (newest == null || q.id > newest.id ? q : newest), null)
     : null;
   const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, {
@@ -2053,7 +2053,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       <TabPanel id="quote" idPrefix="ticket-detail" active={activeTab === 'quote'}>
         <DealQuoteTab
           orderQuotations={showOrderSwitcher ? (
-            <ProjectQuotationsByOrder orders={projectOrders} currentId={Number(ticketId)} currentContent={quotationsNode} />
+            <ProjectQuotationsByOrder orders={projectOrders} currentId={Number(ticketId)} currentContent={quotationsNode} user={user} showToast={showToast} />
           ) : null}
           addOn={canOpenAddOn(summary, user) ? (
             <div>

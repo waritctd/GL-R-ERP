@@ -738,6 +738,7 @@ export const API_ROUTES = {
     // Mirrors DealQuotationController#createReorder. Plural, sibling to `revisions` above: one source
     // may be cloned any number of times.
     reorders: (id) => `/api/deal-quotations/${id}/reorders`,
+    sample: (id) => `/api/deal-quotations/${id}/sample`,
     // "สร้างดีลจากใบเสนอราคา": promote an APPROVED direct quotation's quotation-only container ticket
     // into the pipeline at ORDER_RECEIVED. Mirrors DealQuotationController#promoteToDeal.
     promoteToDeal: (id) => `/api/deal-quotations/${id}/confirm-order`,

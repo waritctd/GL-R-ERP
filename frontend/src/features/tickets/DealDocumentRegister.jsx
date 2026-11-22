@@ -17,6 +17,7 @@ import {
 } from '../../utils/format.js';
 import { canViewCustomerQuotation } from '../pricingRequests/pricingRequestMeta.js';
 import { canViewDealQuotation, dealQuotationStatusLabel, depositTermsSummary } from '../quotations/quotationMeta.js';
+import { QuotationSampleMarkButton, QuotationSampleTag } from '../quotations/QuotationSampleControls.jsx';
 import { depositNoticeFileName } from '../deposits/createDepositNoticeDraft.js';
 import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
@@ -363,6 +364,12 @@ export function DealDocumentRegister({
     // wording, so "มัดจำเท่าไร" is answered without opening a file.
     flag: orderConfirmedQuotationId != null && Number(q.id) === Number(orderConfirmedQuotationId) ? 'ใช้ยืนยันคำสั่งซื้อ' : null,
     terms: depositTermsSummary(q),
+    sample: (
+      <>
+        <QuotationSampleTag quotation={q} user={user} summary={summary} showToast={showToast} />
+        <QuotationSampleMarkButton quotation={q} user={user} summary={summary} showToast={showToast} />
+      </>
+    ),
     // Mirrors DealDirectQuotationPanel: PDF + Excel for every status.
     actions: pdfXlsx('direct', downloadDirectQuotation, q),
     // The number links to the quotation (the query that lists these is gated on canViewDealQuotation).
@@ -579,7 +586,7 @@ function DocumentGroup({ items }) {
 // between them is kept by `gap-2`. Desktop stays compact.
 const TOUCH_TARGET = 'nav-drawer:min-h-11 nav-drawer:min-w-11';
 
-function DocumentRow({ testId, icon, title, meta, status, date, amount, recipient, flag, terms, actions = [], muted = false, to }) {
+function DocumentRow({ testId, icon, title, meta, status, date, amount, recipient, flag, sample, terms, actions = [], muted = false, to }) {
   const hasAmount = amount !== undefined && amount !== null;
   const metaText = [date ? formatThaiDate(date) : null, meta].filter(Boolean).join(' · ');
   return (
@@ -599,6 +606,7 @@ function DocumentRow({ testId, icon, title, meta, status, date, amount, recipien
         {flag ? (
           <span data-testid="document-flag" className="rounded-pill bg-primary-bg px-2 text-xs font-bold text-primary">{flag}</span>
         ) : null}
+        {sample}
         {/* Recipient of the whole document: shown on the current (top) row only. */}
         {recipient && !muted ? (
           <span data-testid="document-recipient" title={`สำหรับ: ${recipient}`}

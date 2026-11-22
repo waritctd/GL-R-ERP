@@ -12,6 +12,7 @@ import {
   dealLifecycleLabel, dealStageLabel, formatMoney, formatThaiDate, fulfilmentStatusLabel, quotationStatusLabel,
 } from '../../utils/format.js';
 import { dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
+import { QuotationSampleMarkButton, QuotationSampleTag } from '../quotations/QuotationSampleControls.jsx';
 import { findStage, useStageCatalog } from './stageCatalog.js';
 
 const ROW = 'flex min-h-14 items-start gap-3 px-4 py-2.5 text-text no-underline';
@@ -116,7 +117,7 @@ export function ProjectOrdersCard({ ordersQuery, currentId, canAddOn, onAddOn })
 /** ใบเสนอราคา tab (M06) on a multi-order project: each order's quotations under an "ออเดอร์ n <code>" heading, once.
  * The current order renders `currentContent` (the page's own quotation section, deal-direct and legacy); the others
  * list deal-direct quotations plus their ticket-native (legacy) ones. */
-export function ProjectQuotationsByOrder({ orders, currentId, currentContent }) {
+export function ProjectQuotationsByOrder({ orders, currentId, currentContent, user, showToast }) {
   const results = useQueries({
     queries: orders.flatMap((order) => (order.ticketId === currentId ? [] : [
       {
@@ -182,6 +183,12 @@ export function ProjectQuotationsByOrder({ orders, currentId, currentContent }) 
                       {q.href
                         ? <Link to={q.href} className={ROW} data-testid={`order-quotation-${q.id}`}>{body}</Link>
                         : <div className={ROW} data-testid={`order-quotation-legacy-${q.id}`}>{body}</div>}
+                      {q.href ? (
+                        <div className="flex flex-wrap items-center gap-2 px-3 empty:hidden">
+                          <QuotationSampleTag quotation={q} user={user} summary={detail?.data?.summary} showToast={showToast} />
+                          <QuotationSampleMarkButton quotation={q} user={user} summary={detail?.data?.summary} showToast={showToast} />
+                        </div>
+                      ) : null}
                     </li>
                   );
                 })}

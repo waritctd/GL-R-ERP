@@ -40,6 +40,8 @@ export function quotationChainView(quotation, chain, { dealHref = null } = {}) {
   if (quotation.docStatus === 'CANCELLED') {
     return notice('CANCELLED', 'ใบเสนอราคานี้ถูกยกเลิกแล้ว — ไม่มีเอกสารต่อจากฉบับนี้', otherLink ?? dealLink);
   }
+  // A sample never becomes an order, so it has no document chain to continue.
+  if (quotation.isSample) return { mode: 'none' };
   if (otherLink) {
     return notice('OTHER_QUOTATION', `งานนี้ยืนยันคำสั่งซื้อจากใบเสนอราคา ${confirmedNumber} แล้ว — เอกสารต่ออยู่ที่ฉบับนั้น`, otherLink);
   }

@@ -8946,6 +8946,16 @@ function forDealQuotationViewer(dto, user) {
   };
 }
 
+// Mirrors QuotationSampleRule: a hint only, computed on read.
+function mockLooksLikeSample(row) {
+  const tiles = (row.items ?? []).filter((it) => (it.lineType ?? 'TILE') === 'TILE');
+  const quantities = tiles.map((it) => it.quantity ?? it.piecesFinal);
+  if (quantities.length === 0 || quantities.some((qty) => qty == null)) return false;
+  const total = row.subtotalAmount ?? row.items.reduce((sum, it) => sum + (Number(it.lineAmount) || 0), 0);
+  return quantities.every((qty) => Number(qty) <= 1)
+    || (quantities.every((qty) => Number(qty) <= 5) && Number(total) < 3000);
+}
+
 function buildDealQuotationDto(row) {
   // Origin & the CEO-comparison flags, recomputed fresh on every read (never stored), mirroring
   // DealQuotationRepository#mapQuotation/#mapItemColumns. A DEAL_DIRECT row (origin undefined on
@@ -9070,6 +9080,9 @@ function buildDealQuotationDto(row) {
     // returned regardless: the flag only changes what DealQuotationRenderAdapter PRINTS, which this
     // mock does not render.
     hideProjectName: row.hideProjectName ?? false,
+    // Mirrors DealQuotationDto#isSample / #looksLikeSample.
+    isSample: row.isSample === true,
+    looksLikeSample: mockLooksLikeSample(row),
     // "ไม่เติม “คุณ”": NOT NULL DEFAULT FALSE on the real column — a never-set value normalises to
     // false here, same device as priceMode/documentLanguage above. Mirrors
     // DealQuotationDto#omitContactHonorific.
@@ -21526,6 +21539,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         // Sales feedback #5 (V192.1) — a brand-new document prints its project unless the request
         // says otherwise; mirrors DealQuotationService#create (null/absent = false).
         hideProjectName: payload.hideProjectName === true,
+        isSample: payload.isSample === true,
         items,
         createdAt: now, updatedAt: now,
       };
@@ -21838,6 +21852,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         hideProjectName: payload.hideProjectName == null
           ? (row.hideProjectName ?? false)
           : payload.hideProjectName === true,
+        isSample: payload.isSample == null ? row.isSample === true : payload.isSample === true,
         items,
         // Mirrors DealQuotationRepository#incrementItemsRemovedFromCeo's GREATEST(0, ...) floor.
         itemsRemovedFromCeoCount: Math.max(0, (row.itemsRemovedFromCeoCount ?? 0) + droppedLinkedCount),
@@ -22188,9 +22203,29 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (ticket?.orderConfirmedQuotationId === source.id) {
         fail('ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงสร้างจากใบเดิมไม่ได้', 409);
       }
-      const clone = mintDealQuotationReorder(source, user);
+      const clone = { ...mintDealQuotationReorder(source, user), isSample: false };
       mockDealQuotations.push(clone);
       return delay({ quotation: buildDealQuotationDto(clone) });
+    },
+
+    // Mirrors the shape of DealQuotationService#setSample. The Java service owns the full guards.
+    async setSample(id, isSample) {
+      const user = requireSession();
+      const row = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      const ticket = findTicketRaw(row.ticketId);
+      if (user.role !== 'ceo' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (isSample && (row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT') {
+        fail('ใบตัวอย่างต้องเป็นใบเสนอราคาที่สร้างจากงานโดยตรงเท่านั้น', 400);
+      }
+      if (['SUPERSEDED', 'CANCELLED'].includes(row.docStatus)) {
+        fail('ใบเสนอราคานี้ถูกแทนที่หรือยกเลิกแล้ว จึงเปลี่ยนเครื่องหมายตัวอย่างไม่ได้', 409);
+      }
+      if (isSample && ticket.orderConfirmedQuotationId === row.id) {
+        fail('ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงเป็นใบตัวอย่างไม่ได้', 409);
+      }
+      row.isSample = isSample === true;
+      return delay({ quotation: buildDealQuotationDto(row) });
     },
 
     // "ยืนยันคำสั่งซื้อ" from an APPROVED direct quotation (the promote endpoint). Mirrors
@@ -22212,6 +22247,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if ((row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT') {
         fail('ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคา (ไม่ผ่านคำขอราคา) เท่านั้น', 409);
       }
+      if (row.isSample) fail('ใบเสนอราคาตัวอย่างยืนยันคำสั่งซื้อไม่ได้ เอาเครื่องหมายตัวอย่างออกก่อน', 409);
       const result = () => delay({
         result: { ticketId: ticket.id, ticket: buildTicketDetail(ticket).summary, quotation: buildDealQuotationDto(row) },
       });
