@@ -88,7 +88,7 @@ public final class LibreOfficePdfConverter {
                         + " Calc subset, not just the core: apt-get install -y libreoffice-calc."
                         + " soffice said: " + new String(procOut).trim());
             }
-            return PdfThaiTextLayerRepair.repair(Files.readAllBytes(pdfPath));
+            return Files.readAllBytes(pdfPath);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
