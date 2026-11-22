@@ -483,6 +483,7 @@ const makeColumns = (searchTotals) => [
       return (
         <span className="flex flex-col items-start gap-1 [&>.status-badge]:min-h-5 [&>.status-badge]:px-2 [&>.status-badge]:py-0 [&>.status-badge]:text-2xs">
           <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          {row.isSample ? <StatusBadge tone="warning">ตัวอย่าง</StatusBadge> : null}
           <ApprovalBasisPill quotation={row} />
           <ChainMark stage={row.chainStage} />
         </span>
@@ -557,6 +558,7 @@ function QuotationCard({ row }) {
         </Link>
         <span className="flex shrink-0 flex-col items-end gap-1">
           <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          {row.isSample ? <StatusBadge tone="warning">ตัวอย่าง</StatusBadge> : null}
           <ApprovalBasisPill quotation={row} />
           <ChainMark stage={row.chainStage} />
         </span>
