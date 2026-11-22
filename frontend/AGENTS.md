@@ -59,6 +59,7 @@ UI_REACHABLE_UPDATE=1 npx vitest run src/api/serverContract.test.js   # regenera
 - The app does not import Tailwind preflight. The base layer in `index.css` is the only reset, so do not remove it.
 - The stage list in `src/data/dealStageCatalog.js` must match the backend. `stageCatalog.test.js` compares the two.
 - Open the dev server as `localhost`, not `127.0.0.1`, or the session cookie is not sent.
+- A quotation with `isSample` never becomes an order, a billing source or a revise target. Filter it out of any picker or action that chooses a quotation. Screens call it `ใบเสนอราคาสำหรับสั่งตัวอย่าง`.
 - Screenshots for the What's New page go in `public/whats-new-img/`, never a folder named `whats-new`.
 
 ## Agent skills

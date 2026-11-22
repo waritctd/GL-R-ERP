@@ -61,6 +61,7 @@ Tests that need a database use `TEST_DB_URL`, `TEST_DB_USERNAME` and `TEST_DB_PA
 - A commission snapshot is frozen once submitted. Never recompute it.
 - Late and early minutes in attendance are for reporting only. They must never become a payroll deduction.
 - `TemporaryPasswordGenerator` output must never be logged. `ProductionReadinessConfig` refuses to boot `prod` with unsafe mail settings.
+- A quotation with `is_sample` is a price document only. Any new query that reads value, counts, billing, orders or a live quotation from `sales.quotation` must leave samples out. The approver's pending count is the one deliberate exception.
 - The `demo` profile seeds fake logins. Never enable it against a real database.
 
 _Drafted by /audit from the repo, worth a quick human pass. Edit freely: once a line stops matching this draft, later runs treat it as curated and will flag rather than overwrite it._
