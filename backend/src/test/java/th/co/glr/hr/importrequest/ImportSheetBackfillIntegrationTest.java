@@ -226,7 +226,7 @@ class ImportSheetBackfillIntegrationTest extends AbstractPostgresIntegrationTest
             .row("IR NO.", "69915", "ยี่ห้อ", "Unknown Brand", "รายชื่อสินค้าและจำนวน", "x = 1 pcs"));
 
         Result dry = service.dryRun(file, null, dir.resolve("r1"));
-        assertThat(dry.totals().blocksExcluded()).isEqualTo(5);
+        assertThat(dry.totals().blocksExcluded()).isEqualTo(2); // the block with no usable IR number and the block naming two brands
 
         jdbc.update("INSERT INTO sales.import_request (factory_id, factory_name, brand, status, doc_number, issue_date, first_issued_date, import_step, import_step_at, order_purpose, purpose_note, source) "
             + "VALUES (:f, 'Round Factory', 'Round Factory', 'ISSUED', 'IR69911', current_date, current_date, 'CONTACTED', current_date, 'STOCK', 'มาก่อน', 'IMPORT')",
@@ -235,6 +235,36 @@ class ImportSheetBackfillIntegrationTest extends AbstractPostgresIntegrationTest
         assertThatThrownBy(() -> service.commit(file, null, dir.resolve("r2"), actorId, dry.planSha256()))
             .isInstanceOf(ImportSheetException.class);
         assertThat(counts()).isEqualTo(before);
+    }
+
+    @Test
+    void everythingLoadsWithoutAnswers_anUnknownBrandBecomesAFactory_andAClashingNumberIsKeptUnderItsOwn() throws IOException {
+        Path file = file(new ImportSheetTestBook()
+            .row("IR NO.", "69931", "ยี่ห้อ", "Brandnew Group", "Sale", "S1", "PROJECT", "งานหนึ่ง", "รายชื่อสินค้าและจำนวน", "x = 1 pcs")
+            .blank()
+            .row("IR NO.", "69932", "ยี่ห้อ", "Brandnew", "Sale", "S1", "PROJECT", "งานสอง", "รายชื่อสินค้าและจำนวน", "x = 2 pcs")
+            .blank()
+            .row("IR NO.", "69933", "ยี่ห้อ", "Round Factory", "Sale", "S1", "รายชื่อสินค้าและจำนวน", "x = 3 pcs")
+            .blank()
+            .row("IR NO.", "69933", "ยี่ห้อ", "Round Factory", "Sale", "S2", "รายชื่อสินค้าและจำนวน", "y = 4 pcs"));
+
+        Result dry = service.dryRun(file, null, dir.resolve("r1"));
+        assertThat(dry.totals().blocksExcluded()).isZero();
+        Result done = service.commit(file, null, dir.resolve("r2"), actorId, dry.planSha256());
+
+        assertThat(done.failed()).isEmpty();
+        assertThat(count("SELECT count(*) FROM price_catalog.factories WHERE lower(name) LIKE 'brandnew%'")).isEqualTo(1);
+        assertThat(string("SELECT country FROM price_catalog.factories WHERE lower(name) LIKE 'brandnew%'")).isEqualTo("ZZ");
+        assertThat(count("SELECT count(*) FROM sales.import_request WHERE doc_number IN ('IR69931', 'IR69932')")).isEqualTo(2);
+        assertThat(count("SELECT count(*) FROM sales.import_request WHERE doc_number = 'IR69933'")).isEqualTo(1);
+        assertThat(count("SELECT count(*) FROM sales.import_request WHERE doc_number = 'IR69933-90'")).isEqualTo(1);
+
+        Map<String, Integer> first = counts();
+        Result repeat = service.dryRun(file, null, dir.resolve("r3"));
+        service.commit(file, null, dir.resolve("r4"), actorId, repeat.planSha256());
+        Map<String, Integer> second = counts();
+        second.put("sales.import_sheet_backfill_run", first.get("sales.import_sheet_backfill_run"));
+        assertThat(second).isEqualTo(first);
     }
 
     @Test

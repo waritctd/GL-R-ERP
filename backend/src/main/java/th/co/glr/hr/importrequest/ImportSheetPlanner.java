@@ -78,7 +78,6 @@ class ImportSheetPlanner {
         List<Excluded> excluded = new ArrayList<>();
         Set<String> unresolvedBrands = new LinkedHashSet<>();
         Set<String> unresolvedCodes = new LinkedHashSet<>();
-        Set<Integer> clashing = clashingBlocks(parsed.blocks(), excluded);
 
         Map<String, Integer> blocksPerDoc = new HashMap<>();
         for (SheetBlock b : parsed.blocks()) {
@@ -90,17 +89,19 @@ class ImportSheetPlanner {
         for (SheetBlock b : parsed.blocks()) {
             if (b.blockedReason() != null) {
                 excluded.add(new Excluded(b.firstRow(), blockName(b), b.blockedReason()));
-            } else if (clashing.contains(b.firstRow())) {
-                continue; // listed by clashingBlocks
             } else if (b.brands().stream().map(ImportRequestService::normalizeFactoryName).distinct().count() > 1) {
                 excluded.add(new Excluded(b.firstRow(), blockName(b), "แถวในกลุ่มนี้ระบุหลายยี่ห้อ: " + String.join(", ", b.brands())));
             } else {
                 ResolvedFactory f = resolveFactory(b, byName, choices);
                 if (f == null) {
                     String label = b.brands().isEmpty() ? "block:" + b.irs().get(0).docNumber() : b.brands().get(0);
-                    unresolvedBrands.add(label);
-                    excluded.add(new Excluded(b.firstRow(), blockName(b), "ยังไม่ได้เลือกโรงงานของยี่ห้อ \"" + label + "\""));
+                    excluded.add(new Excluded(b.firstRow(), blockName(b), b.brands().isEmpty()
+                        ? "ไม่ได้ระบุยี่ห้อ จึงไม่รู้ว่าเป็นโรงงานไหน"
+                        : "ยี่ห้อ \"" + label + "\" ที่เลือกไว้ใช้ไม่ได้ (โรงงานหรือประเทศไม่ถูกต้อง)"));
                 } else {
+                    if (f.id() == null) {
+                        unresolvedBrands.add(f.name());
+                    }
                     factoryOf.put(b.firstRow(), f);
                     usable.add(b);
                 }
@@ -151,40 +152,75 @@ class ImportSheetPlanner {
             List.copyOf(unresolvedBrands), List.copyOf(unresolvedCodes), deals, totals, hash);
     }
 
-    /** The same IR number in two blocks under sales codes with nothing in common is probably a typo: both are excluded. */
-    private static Set<Integer> clashingBlocks(List<SheetBlock> blocks, List<Excluded> excluded) {
-        Map<String, List<SheetBlock>> byDoc = new LinkedHashMap<>();
-        Map<String, Map<Integer, Set<String>>> codes = new HashMap<>();
-        for (SheetBlock b : blocks) {
+    /** Marks a block warning the run summary lists for import to check. */
+    static final String RENUMBERED = "เปลี่ยนเลขใบขอซื้อ";
+    static final String UNKNOWN_COUNTRY_NOTE = "ยังไม่ระบุ (ให้ฝ่ายนำเข้าตรวจ)";
+
+    /**
+     * The same IR number in two blocks under sales codes with nothing in common is probably a typed number. The later
+     * block is kept, under a number of its own (IR69401-90 and up) so its goods show on การขนส่ง, and the change is a warning
+     * on that block for import to correct.
+     */
+    static ParsedSheet renameClashes(ParsedSheet parsed) {
+        Set<String> taken = new HashSet<>();
+        parsed.blocks().forEach(b -> b.irs().forEach(ir -> taken.add(ir.docNumber())));
+        Map<String, Set<String>> anchorCodes = new HashMap<>();
+        Map<Integer, Map<String, String>> renames = new HashMap<>();
+        for (SheetBlock b : parsed.blocks()) {
             if (b.blockedReason() != null) {
                 continue;
             }
             for (SheetIr ir : b.irs()) {
-                byDoc.computeIfAbsent(ir.docNumber(), k -> new ArrayList<>()).add(b);
-                codes.computeIfAbsent(ir.docNumber(), k -> new HashMap<>())
-                    .computeIfAbsent(b.firstRow(), k -> new HashSet<>()).addAll(splitCodes(ir.saleText()));
-            }
-        }
-        Set<Integer> out = new LinkedHashSet<>();
-        byDoc.forEach((doc, list) -> {
-            Map<Integer, Set<String>> perBlock = codes.get(doc);
-            for (int i = 0; i < list.size(); i++) {
-                for (int j = i + 1; j < list.size(); j++) {
-                    Set<String> a = perBlock.get(list.get(i).firstRow());
-                    Set<String> b = perBlock.get(list.get(j).firstRow());
-                    if (!a.isEmpty() && !b.isEmpty() && a.stream().noneMatch(b::contains)) {
-                        for (SheetBlock x : List.of(list.get(i), list.get(j))) {
-                            if (out.add(x.firstRow())) {
-                                excluded.add(new Excluded(x.firstRow(), blockName(x), "เลข " + doc
-                                    + " อยู่ 2 กลุ่มแถวแต่รหัสเซลส์ต่างกัน (" + String.join("/", a) + " กับ " + String.join("/", b)
-                                    + ") น่าจะพิมพ์เลขผิด"));
-                            }
+                Set<String> codes = new HashSet<>(splitCodes(ir.saleText()));
+                Set<String> anchor = anchorCodes.get(ir.docNumber());
+                if (anchor == null) {
+                    anchorCodes.put(ir.docNumber(), codes);
+                } else if (!anchor.isEmpty() && !codes.isEmpty() && anchor.stream().noneMatch(codes::contains)) {
+                    String base = ir.docNumber().replaceAll("-\\d{1,2}$", "");
+                    String fresh = null;
+                    for (int n = 90; n <= 99 && fresh == null; n++) {
+                        if (!taken.contains(base + "-" + n)) {
+                            fresh = base + "-" + n;
                         }
+                    }
+                    if (fresh != null) {
+                        taken.add(fresh);
+                        renames.computeIfAbsent(b.firstRow(), k -> new HashMap<>()).put(ir.docNumber(), fresh);
                     }
                 }
             }
-        });
-        return out;
+        }
+        if (renames.isEmpty()) {
+            return parsed;
+        }
+        List<SheetBlock> out = new ArrayList<>();
+        for (SheetBlock b : parsed.blocks()) {
+            Map<String, String> change = renames.get(b.firstRow());
+            if (change == null) {
+                out.add(b);
+                continue;
+            }
+            List<SheetIr> irs = new ArrayList<>();
+            List<String> warnings = new ArrayList<>(b.warnings());
+            for (SheetIr ir : b.irs()) {
+                String fresh = change.get(ir.docNumber());
+                if (fresh == null) {
+                    irs.add(ir);
+                    continue;
+                }
+                irs.add(new SheetIr(fresh, ir.firstRow(), ir.saleText(), ir.projectText(), ir.receivedOn(), ir.depositOn(), ir.wantedBy(),
+                    ir.wantedText(), ir.lines()));
+                warnings.add(RENUMBERED + ": ตารางเขียน " + ir.docNumber() + " ซ้ำกับกลุ่มแถวอื่นที่รหัสเซลส์ต่างกัน ใช้ " + fresh + " ไปก่อน");
+            }
+            out.add(new SheetBlock(b.firstRow(), b.backfillKey(), b.brands(), b.facts(), b.proformas(), b.invoices(), irs, warnings,
+                b.blockedReason()));
+        }
+        return new ParsedSheet(parsed.sheetName(), parsed.rowCount(), out);
+    }
+
+    /** A brand written with a trailing "Group" is the same factory as the plain name. */
+    static String canonicalBrand(String brand) {
+        return brand == null ? null : brand.strip().replaceAll("(?i)\\s+group$", "");
     }
 
     private static String blockName(SheetBlock b) {
@@ -213,8 +249,14 @@ class ImportSheetPlanner {
         if (brand == null) {
             return null;
         }
-        FactoryConfigDto known = byName.get(ImportRequestService.normalizeFactoryName(brand));
-        return known == null ? null : new ResolvedFactory(known.id(), known.factoryName(), null);
+        String canonical = canonicalBrand(brand);
+        FactoryConfigDto known = byName.get(ImportRequestService.normalizeFactoryName(canonical));
+        if (known != null) {
+            return new ResolvedFactory(known.id(), known.factoryName(), null);
+        }
+        // nobody has picked a factory for this brand: it becomes a factory of its own so the goods show on การขนส่ง now,
+        // and import completes the country afterwards
+        return new ResolvedFactory(null, canonical, new FactoryChoice(null, true, "ZZ", UNKNOWN_COUNTRY_NOTE));
     }
 
     /**

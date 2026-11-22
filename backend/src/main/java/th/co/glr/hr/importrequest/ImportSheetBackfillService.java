@@ -97,7 +97,7 @@ class ImportSheetBackfillService {
             throw new ImportSheetException("ไฟล์ใหญ่เกิน 10 MB");
         }
         byte[] bytes = Files.readAllBytes(file);
-        ParsedSheet parsed = ImportSheetParser.parse(new ByteArrayInputStream(bytes), LocalDate.now(BANGKOK));
+        ParsedSheet parsed = ImportSheetPlanner.renameClashes(ImportSheetParser.parse(new ByteArrayInputStream(bytes), LocalDate.now(BANGKOK)));
         Choices choices = choicesFile == null ? Choices.none() : json.readValue(choicesFile.toFile(), Choices.class);
         return new Loaded(bytes, sha256(bytes), parsed, normalizeRepCodes(choices));
     }
@@ -226,7 +226,8 @@ class ImportSheetBackfillService {
             }
             FactoryChoice choice = in.choices().factoryChoices().entrySet().stream()
                 .filter(e -> key.equals(ImportRequestService.normalizeFactoryName(e.getKey())))
-                .map(Map.Entry::getValue).findFirst().orElseThrow();
+                .map(Map.Entry::getValue).findFirst()
+                .orElse(new FactoryChoice(null, true, "ZZ", ImportSheetPlanner.UNKNOWN_COUNTRY_NOTE));
             factories.lockFactoryName(key);
             long id = factories.findByName(b.factoryName()).map(f -> f.id()).orElseGet(() ->
                 factories.createFromImportRequest(b.factoryName(), choice.countryCode(), choice.countryOther(), actor.id()));
@@ -429,6 +430,9 @@ class ImportSheetBackfillService {
         s.put("skipped", plan.skipped());
         s.put("excluded", plan.excluded());
         s.put("failed", failed);
+        s.put("newFactories", plan.unresolvedBrands());
+        s.put("renumbered", plan.blocks().stream().flatMap(b -> b.warnings().stream()
+            .filter(w -> w.startsWith(ImportSheetPlanner.RENUMBERED)).map(w -> new Excluded(b.firstRow(), b.backfillKey(), w))).toList());
         try {
             return json.writeValueAsString(s);
         } catch (JsonProcessingException e) {
@@ -459,7 +463,7 @@ class ImportSheetBackfillService {
             .append("\n- เติมในรอบเดิม: ").append(t.irsFilled()).append("\n- ข้าม: ").append(t.irsSkipped())
             .append("\n- กลุ่มแถวที่ไม่นำเข้า: ").append(t.blocksExcluded()).append("\n- งานที่จะขยับ: ").append(t.dealsToAdvance()).append("\n");
         if (!p.unresolvedBrands().isEmpty()) {
-            m.append("\n## ยี่ห้อที่ต้องเลือกโรงงาน\n\n");
+            m.append("\n## โรงงานที่สร้างใหม่จากชื่อยี่ห้อ (ประเทศยังไม่ระบุ ให้ฝ่ายนำเข้าตรวจ)\n\n");
             p.unresolvedBrands().forEach(b -> m.append("- ").append(b).append("\n"));
         }
         if (!p.unresolvedCodes().isEmpty()) {

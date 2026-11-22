@@ -382,7 +382,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
           <ul className="m-0 flex list-none flex-col p-0">
             {run.needsCheck.map((c) => (
               <li key={`${c.row}-${c.what}`} className="flex flex-col gap-0.5 border-t border-border-subtle py-2 first:border-t-0">
-                <b className="text-sm">แถว {c.row} · {c.what}</b>
+                <b className="text-sm">{c.row > 0 ? `แถว ${c.row} · ` : ''}{c.what}</b>
                 <span className="text-xs text-text-muted">{c.reason}</span>
               </li>
             ))}

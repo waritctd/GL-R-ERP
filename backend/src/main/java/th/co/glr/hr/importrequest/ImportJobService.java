@@ -144,7 +144,10 @@ public class ImportJobService {
             List<NeedsCheck> check = new ArrayList<>();
             try {
                 JsonNode s = json.readTree(r.summaryJson());
-                for (String kind : List.of("excluded", "skipped", "failed")) {
+                for (JsonNode f : s.path("newFactories")) {
+                    check.add(new NeedsCheck(0, f.asText(), "สร้างโรงงานใหม่จากชื่อยี่ห้อนี้ ประเทศยังไม่ระบุ ตรวจชื่อและประเทศที่หน้าโรงงาน"));
+                }
+                for (String kind : List.of("excluded", "skipped", "failed", "renumbered")) {
                     for (JsonNode n : s.path(kind)) {
                         check.add(new NeedsCheck(n.path("row").asInt(), n.hasNonNull("what") ? n.get("what").asText()
                             : n.path("docNumber").asText(), n.path("reason").asText()));
