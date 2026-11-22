@@ -475,13 +475,13 @@ export function QuotationEditorPage({ user, showToast }) {
         if (!next) return moved;
         // A different person prints as typed; back to the stored person restores the stored "คุณ" rule.
         const storedPerson = quotation?.contactId != null && String(next.id) === String(quotation.contactId);
-        return { ...moved, omitContactHonorific: storedPerson && !contactNameEdited ? quotation.omitContactHonorific === true : true };
+        return { ...moved, omitContactHonorific: storedPerson && String(nameEditedContactId) !== String(next.id) ? quotation.omitContactHonorific === true : true };
       });
     }
     setContact(next);
   };
   const contactPickerRef = useRef(null);
-  const [contactNameEdited, setContactNameEdited] = useState(false); // this session changed the contact's name: it prints as typed
+  const [nameEditedContactId, setNameEditedContactId] = useState(null); // whose name this session changed: that person prints as typed
   function updateDealForm(patch) {
     // The ดีล card reports ผู้รับ through the same patch-upward channel; it is quotation state, not deal-form
     // state, so it is split out to its own setter.
@@ -633,7 +633,7 @@ export function QuotationEditorPage({ user, showToast }) {
       setDocSettings(state.docSettings);
       setTerms(state.terms);
       setContact(state.contact ?? null);
-      setContactNameEdited(false);
+      setNameEditedContactId(null);
       setPendingAttachments([]);
     };
     if (id) {
@@ -2219,11 +2219,11 @@ export function QuotationEditorPage({ user, showToast }) {
   });
   const canWriteContact = ['sales', 'sales_manager'].includes(user?.role) || hasDealQuotationGrant(user); // DealEntryAccess
   const onContactNameEdit = () => {
-    const before = { omit: terms.omitContactHonorific, edited: contactNameEdited };
-    setContactNameEdited(true);
+    const before = { omit: terms.omitContactHonorific, edited: nameEditedContactId };
+    setNameEditedContactId(contact?.id ?? null);
     setTerms((t) => ({ ...t, omitContactHonorific: true }));
     return () => {
-      setContactNameEdited(before.edited);
+      setNameEditedContactId(before.edited);
       setTerms((t) => ({ ...t, omitContactHonorific: before.omit }));
     };
   };
