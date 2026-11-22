@@ -759,6 +759,9 @@ public class ImportRequestService {
         }
         ticketService.recordFirstImportRequestIssued(draft.ticketId(), id, actor);
         notifyImportOfIssuedIr(draft, docNumber, dealSnapshot, actor, predecessor.isPresent());
+        if (predecessor.isPresent()) {
+            ticketService.completeDeliveryAfterIrRevision(draft.ticketId(), actor);
+        }
         return withPageCount(requireStored(id));
     }
 

@@ -28,6 +28,7 @@ import th.co.glr.hr.importrequest.ShipmentRoundDtos.DocumentInput;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.LotInput;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.LotReceipt;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.MoveLotRequest;
+import th.co.glr.hr.ticket.CompleteDeliveryRequest;
 import th.co.glr.hr.ticket.RecordDeliveryRequest;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.UpdateShipmentRoundRequest;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.ShipmentFacts;
@@ -1026,6 +1027,125 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         finish(l);
     }
 
+    @Test
+    void arrivedGoodsCountTowardTheDealFirst_acrossUnitsTheShareStays() {
+        Line split = sized("LM-1", 14, 32, "pcs");
+        receive(split, 14, 14);
+        allowance(split, "14");
+        deliverItemFromWarehouse(split.ticket, split.item, "14");
+        assertThat(fulfilment(split.ticket)).isEqualTo("FULLY_DELIVERED");
+
+        Line both = sized("LM-2", 14, 32, "pcs");
+        receive(both, 14, 14);
+        receive(both, 18, 18);
+        allowance(both, "14");
+
+        Line single = sized("LM-3", 18, 66, "pcs");
+        receive(single, 66, 66);
+        allowance(single, "18");
+
+        Line sqm = sized("LM-4", 600, new BigDecimal("60.12"), "ตร.ม.");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL WHERE item_id = :i", Map.of("i", sqm.item));
+        insertAndReceive(sqm, "30.06");
+        allowance(sqm, "300");
+        insertAndReceive(sqm, "30.06");
+        allowance(sqm, "600");
+
+        Line sqmBasis = sized("LM-10", 600, new BigDecimal("60.12"), "ตร.ม.");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL, unit_basis = 'SQM', qty_sqm = 60.12 WHERE item_id = :i", Map.of("i", sqmBasis.item));
+        insertAndReceive(sqmBasis, "30.06");
+        allowance(sqmBasis, "300"); // SQM basis: qty is not in ตร.ม., so the share applies
+
+        Line zero = sized("LM-5", 100, 100, "pcs");
+        long zr = receive(zero, 100, 0);
+        allowance(zero, "0");
+        rounds.returnLotToWaiting(zr, lotIdOf(zr, zero.irItem), importUser);
+        allowance(zero, "0");
+        mark(zero, "100");
+        assertThat(fulfilment(zero.ticket)).isEqualTo("FULLY_DELIVERED");
+
+        Line marked = sized("LM-6", 100, 100, "pcs");
+        receive(marked, 60, 60);
+        mark(marked, "40");
+        allowance(marked, "60");
+        deliverItemFromWarehouse(marked.ticket, marked.item, "60");
+        assertThat(fulfilment(marked.ticket)).isEqualTo("FULLY_DELIVERED");
+
+        Line stock = sized("LM-7", 100, 80, "pcs");
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = 20 WHERE item_id = :i", Map.of("i", stock.item));
+        receive(stock, 40, 40);
+        allowance(stock, "60");
+
+        Line shortLot = sized("LM-8", 100, 100, "pcs");
+        receive(shortLot, 100, 60);
+        allowance(shortLot, "100");
+
+        Line mixed = sized("LM-9", 100, 50, "pcs");
+        long other = jdbc.queryForObject("""
+            INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model)
+            VALUES (:ir, :ti, 2, 'MIX', '20x20', 50, 'กล่อง', 'Round Factory', 'Raku') RETURNING import_request_item_id""",
+            Map.of("ir", mixed.ir, "ti", mixed.item), Long.class);
+        long mr = round("ORDERED");
+        insertLot(mr, mixed.ir, mixed.irItem, 50);
+        insertLot(mr, mixed.ir, other, 25);
+        rounds.advance(mr, receiveRequest(List.of(new LotReceipt(lotIdOf(mr, mixed.irItem), new BigDecimal("50")),
+            new LotReceipt(lotIdOf(mr, other), new BigDecimal("25")))), importUser);
+        allowance(mixed, "75");
+
+        Line exact = sized("LM-11", 100, 100, "pcs");
+        receive(exact, 14, 12);
+        allowance(exact, "12"); // only what is in the warehouse while 86 are still to come
+
+        Line under = sized("LM-12", 100, 50, "pcs");
+        receive(under, 25, 25);
+        allowance(under, "25");
+
+        Line wantedIn = sized("LM-13", 100, 100, "pcs");
+        receive(wantedIn, 60, 50);
+        mark(wantedIn, "40");
+        allowance(wantedIn, "60"); // all that is wanted is in: the short lot does not cap
+        deliverItemFromWarehouse(wantedIn.ticket, wantedIn.item, "60");
+        assertThat(fulfilment(wantedIn.ticket)).isEqualTo("FULLY_DELIVERED");
+
+        Line priceBasis = sized("LM-14", 600, 60, "sqm");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL, raw_unit = 'sqm' WHERE item_id = :i", Map.of("i", priceBasis.item));
+        receive(priceBasis, 30, 30);
+        allowance(priceBasis, "300"); // raw_unit is a price basis: ตร.ม. is never counted as pieces
+
+        Line rd56 = sized("LM-15", 14, 32, "แผ่น");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL, raw_unit = 'แผ่น' WHERE item_id = :i", Map.of("i", rd56.item));
+        receive(rd56, 14, 12);
+        allowance(rd56, "12");
+        Line rd55 = sized("LM-16", 10, 24, "แผ่น");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL, raw_unit = 'แผ่น' WHERE item_id = :i", Map.of("i", rd55.item));
+        receive(rd55, 10, 10);
+        allowance(rd55, "10");
+        Line third = sized("LM-17", 90, 90, "แผ่น");
+        jdbc.update("UPDATE sales.ticket_item SET unit = NULL, raw_unit = 'แผ่น' WHERE item_id = :i", Map.of("i", third.item));
+        receive(third, 90, 90);
+        allowance(third, "90");
+    }
+
+    private Line sized(String code, int dealQty, Number irQty, String irUnit) {
+        Line l = line(code);
+        jdbc.update("UPDATE sales.ticket_item SET qty = :q WHERE item_id = :i", Map.of("q", dealQty, "i", l.item));
+        jdbc.update("UPDATE sales.import_request_item SET qty = :q, unit = :u WHERE import_request_item_id = :i",
+            Map.of("q", irQty, "u", irUnit, "i", l.irItem));
+        return l;
+    }
+
+    private void insertAndReceive(Line l, String qty) {
+        long r = round("ORDERED");
+        jdbc.update("INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty) VALUES (:r, :ir, :i, :q)",
+            Map.of("r", r, "ir", l.ir, "i", l.irItem, "q", new BigDecimal(qty)));
+        rounds.advance(r, receiveRequest(List.of(new LotReceipt(lotIdOf(r, l.irItem), new BigDecimal(qty)))), importUser);
+    }
+
+    private void allowance(Line l, String expected) {
+        BigDecimal remaining = ticketService.warehouseRemaining(l.ticket, owner).get(l.item);
+        assertThat(remaining).isEqualByComparingTo(expected);
+    }
+
     private record Line(long ticket, long ir, long item, long irItem) {}
 
     private Line line(String code) {
@@ -1143,6 +1263,63 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
             INSERT INTO sales.shipment_round (factory_id, factory_name, source, import_step)
             VALUES ((SELECT factory_id FROM price_catalog.factories WHERE name = 'Round Factory'), 'Round Factory', :src, :s)
             RETURNING shipment_round_id""", Map.of("s", step, "src", source), Long.class);
+    }
+
+    @Test
+    void irGoodsOnNoDealLine_holdDeliveryOpen() {
+        // transport line + all IR goods unlinked, after they arrived
+        Line transport = line("UL-1");
+        receive(transport, 100, 100);
+        unlink(transport.irItem);
+        jdbc.update("UPDATE sales.ticket_item SET model = NULL, size = NULL, catalog_price_id = NULL, qty_sqm = NULL WHERE item_id = :i", Map.of("i", transport.item));
+        allowance(transport, "100"); // not goods: stays recordable
+        assertThatThrownBy(() -> ticketService.completeDelivery(transport.ticket,
+            new CompleteDeliveryRequest(null, null, null, null, "ทดสอบส่งก่อนมีใบกำกับ"), owner))
+            .isInstanceOf(ApiException.class).hasMessageContaining("ยังส่งมอบครบไม่ได้");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.delivery_record WHERE ticket_id = :t", Map.of("t", transport.ticket), Integer.class)).isZero();
+        deliverItemFromWarehouse(transport.ticket, transport.item, "100");
+        assertThat(fulfilment(transport.ticket)).isEqualTo("PARTIALLY_DELIVERED");
+
+        // one line linked, one goods line whose IR line lost its link
+        Line mixed = line("UL-2");
+        long loose = secondLine(mixed, 40);
+        receive(mixed, 100, 100);
+        unlink(irItemOf(loose));
+        assertThat(ticketService.warehouseRemaining(mixed.ticket, owner).get(loose)).isEqualByComparingTo("0");
+        deliverItemFromWarehouse(mixed.ticket, mixed.item, "100");
+        assertThat(fulfilment(mixed.ticket)).isEqualTo("PARTIALLY_DELIVERED");
+
+        // an unrelated stock line keeps its stock quantity
+        Line stock = line("UL-3");
+        long stocked = secondLine(stock, 40);
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = 30 WHERE item_id = :i", Map.of("i", stocked));
+        receive(stock, 100, 100);
+        unlink(irItemOf(stocked));
+        assertThat(ticketService.warehouseRemaining(stock.ticket, owner).get(stocked)).isEqualByComparingTo("30");
+
+        // no lots at all: nothing is capped
+        Line legacy = line("UL-4");
+        unlink(legacy.irItem);
+        allowance(legacy, "100");
+
+        // the exit: a revision drops the goods that never come, and the delivered deal completes
+        Line dropped = line("UL-5");
+        long gone = secondLine(dropped, 40);
+        unlink(irItemOf(gone));
+        jdbc.update("DELETE FROM sales.ticket_item WHERE item_id = :i", Map.of("i", gone));
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = 100 WHERE item_id = :i", Map.of("i", dropped.item));
+        ticketService.recordPartialDelivery(dropped.ticket, new RecordDeliveryRequest("STOCK", null,
+            List.of(new RecordDeliveryRequest.Line(dropped.item, new BigDecimal("100"))), null, null, null, "ทดสอบส่งก่อนมีใบกำกับ"), owner);
+        assertThat(fulfilment(dropped.ticket)).isEqualTo("PARTIALLY_DELIVERED");
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = 0 WHERE item_id = :i", Map.of("i", dropped.item)); // issue refuses a stock-covered line
+        long revision = irService.revise(dropped.ir, owner).id();
+        jdbc.update("DELETE FROM sales.import_request_item WHERE import_request_id = :r AND ticket_item_id IS NULL", Map.of("r", revision));
+        irService.issue(revision, null, owner);
+        assertThat(fulfilment(dropped.ticket)).isEqualTo("FULLY_DELIVERED");
+    }
+
+    private void unlink(long irItem) {
+        jdbc.update("UPDATE sales.import_request_item SET ticket_item_id = NULL WHERE import_request_item_id = :i", Map.of("i", irItem));
     }
 
     private void lot(long round, long ir, int qty) {

@@ -2140,12 +2140,17 @@ public class TicketService {
         if ("WAREHOUSE".equals(source)) {
             requireWithinReceivedLots(s, itemsById, normalized);
         }
+        boolean finishesDeal = ticket.items().stream().allMatch(item -> nullToZero(item.qtyDelivered())
+            .add(combined.getOrDefault(item.id(), BigDecimal.ZERO)).compareTo(item.deliverableQty()) >= 0);
+        List<TicketRepository.UnlinkedGoods> unlinked = finishesDeal ? tickets.unlinkedGoods(s.id()) : List.of();
+        if (completing && !unlinked.isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, unlinkedGoodsMessage(unlinked), Map.of("code", "UNLINKED_IR_GOODS"));
+        }
         long deliveryId = tickets.insertDeliveryRecord(
             s.id(), source, actor.id(), request.note(), request.recipientName(), normalized, deliveredAt, target.linkId(), noInvoiceNote);
         TicketDto updated = requireTicket(s.id());
         TicketSummaryDto updatedSummary = updated.summary();
-        boolean fullyDelivered = updated.items().stream()
-            .allMatch(item -> nullToZero(item.qtyDelivered()).compareTo(item.deliverableQty()) >= 0);
+        boolean fullyDelivered = finishesDeal && unlinked.isEmpty();
         // A back-dated record says so in the history: the event itself is stamped when it was recorded.
         String message = deliveryMessage(updated.items(), normalized)
             + (deliveredAt == null ? "" : " · วันที่ส่ง " + ThaiText.date(request.deliveredOn()))
@@ -2704,10 +2709,9 @@ public class TicketService {
      * stock-only and lot-less deals behave as before). A GOODS_RECEIVED event means the goods arrived, so a line with no lot on
      * a RECEIVED round is uncapped; a line with one is capped by its received share. Without the event, a line with no receipt
      * row has no imported part available. Stock coverage counts only once the deposit is settled (the STOCK path says the
-     * same). Capped: {@code allowed = stock + max(qty - qtyFromStock, 0) * min(1, onRounds / irQty)}, to 2 places. While an IR
-     * that ordered more than the line's imported part, in the line's own unit, still has lots to come, what really arrived fills
-     * the line first: {@code stock + min(importQty, arrived)}. Once every lot is in, a short arrival does not cap (planned
-     * quantity counts), or the deal could never reach FULLY_DELIVERED.
+     * same). Capped: {@code allowed = stock + max(qty - qtyFromStock, 0) * min(1, onRounds / irQty)}, to 2 places. In the line's own
+     * unit, while wanted quantity is still to come: {@code stock + min(importQty, arrived)}; once all of it is on received rounds a
+     * short arrival does not cap, or the deal could never reach FULLY_DELIVERED.
      */
     private static BigDecimal warehouseAllowance(TicketSummaryDto s, TicketItemDto item, TicketRepository.LotReceipts receipts,
                                                  boolean goodsEvent) {
@@ -2717,7 +2721,9 @@ public class TicketService {
         }
         TicketRepository.LineReceipt r = receipts.byItem().get(item.id());
         // the bypass is for a line with no lot on a RECEIVED round; a RECEIVED lot that got 0 caps it to its received share
-        if (goodsEvent && (r == null || (r.receivedLots() == 0 && !r.lotReturned()))) {
+        // while IR goods sit on no deal line, a goods line with no IR link is not what arrived: stock only
+        boolean heldBack = r == null && receipts.unlinkedGoods() && isGoodsLine(item);
+        if (goodsEvent && !heldBack && (r == null || (r.receivedLots() == 0 && !r.lotReturned()))) {
             return qty;
         }
         BigDecimal declared = nullToZero(item.qtyFromStock());
@@ -2727,9 +2733,11 @@ public class TicketService {
         }
         // the share is of the whole line (the IR still holds the marked part); the mark only lowers the ceiling
         BigDecimal importQty = nullToZero(item.qty()).subtract(declared).max(BigDecimal.ZERO);
-        if (r.sameUnit() && r.irQty().compareTo(importQty) > 0 && r.onRounds().compareTo(r.irQty()) < 0) {
-            // the extra ordered for stock is the last to arrive, not a share of every lot
-            return stock.add(r.arrived().min(importQty)).min(qty).setScale(2, java.math.RoundingMode.HALF_UP);
+        if (r.sameUnit()) {
+            // While wanted quantity is still to come, only what really arrived can leave. Once all of it is on received
+            // rounds a short lot does not cap (owner ruling), or the deal could never reach FULLY_DELIVERED.
+            BigDecimal imported = r.onRounds().compareTo(r.wantedQty()) < 0 ? r.arrived().min(importQty) : importQty;
+            return stock.add(imported).min(qty).setScale(2, java.math.RoundingMode.HALF_UP);
         }
         BigDecimal ratio = r.irQty().signum() <= 0 ? BigDecimal.ONE
             : r.onRounds().divide(r.irQty(), 10, java.math.RoundingMode.HALF_UP).min(BigDecimal.ONE);
@@ -2876,23 +2884,35 @@ public class TicketService {
      */
     @Transactional
     public TicketDto completeDeliveryIfDone(long ticketId, UserPrincipal actor) {
+        return completeDeliveryIfDone(ticketId, actor, "ส่งมอบครบ: ส่วนที่ไม่ได้รับของถูกบันทึกแล้ว", " (มีรายการที่ไม่ได้รับของ)");
+    }
+
+    /** A revised IR dropped the goods that held the deal open: an already delivered deal completes now. */
+    @Transactional
+    public void completeDeliveryAfterIrRevision(long ticketId, UserPrincipal actor) {
+        requireTicketLocked(ticketId);
+        completeDeliveryIfDone(ticketId, actor, "ส่งมอบครบ: IR ฉบับแก้ไขไม่มีสินค้าค้างแล้ว", "");
+    }
+
+    private TicketDto completeDeliveryIfDone(long ticketId, UserPrincipal actor, String eventNote, String noticeNote) {
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         if (!DealLifecycle.ACTIVE.equals(s.lifecycle()) || FulfilmentStatus.FULLY_DELIVERED.equals(s.fulfillmentStatus())
             || ticket.items().isEmpty()
-            || !ticket.items().stream().allMatch(i -> nullToZero(i.qtyDelivered()).compareTo(i.deliverableQty()) >= 0)) {
+            || !ticket.items().stream().allMatch(i -> nullToZero(i.qtyDelivered()).compareTo(i.deliverableQty()) >= 0)
+            || !tickets.unlinkedGoods(ticketId).isEmpty()) {
             return ticket;
         }
         tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FULLY_DELIVERED);
         tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.DELIVERY_COMPLETED, s.status(), s.status(),
-            "ส่งมอบครบ: ส่วนที่ไม่ได้รับของถูกบันทึกแล้ว");
+            eventNote);
         autoAdvanceStage(s, DealStage.DELIVERED, actor);
         TicketSummaryDto after = requireTicket(ticketId).summary();
         maybeAdvanceClosedPaid(after, "FULLY_PAID".equals(after.paymentStatus()), actor);
         BigDecimal outstanding = after.amountOutstanding();
         boolean owed = outstanding != null && outstanding.signum() > 0;
         notifications.notifyByRoleAtLink("account", TicketEventKind.DELIVERY_COMPLETED,
-            actor.name() + " บันทึกส่งสินค้าครบทุกรายการแล้ว (มีรายการที่ไม่ได้รับของ)\n"
+            actor.name() + " บันทึกส่งสินค้าครบทุกรายการแล้ว" + noticeNote + "\n"
                 + DealNoticeText.dealLabel(after.code(), after.customerName()) + " · "
                 + (owed ? "ยอดค้างชำระ " + ThaiText.money(outstanding) + " บาท" : "ลูกค้าชำระเงินครบแล้ว")
                 + "\nสิ่งที่ต้องทำต่อ: " + (owed ? "ติดตามรับชำระยอดที่เหลือ แล้วยืนยันพร้อมปิดดีล" : "ยืนยันพร้อมปิดดีลเพื่อส่งให้ CEO ตรวจสอบ"),
@@ -2918,6 +2938,20 @@ public class TicketService {
             out.put(item.id(), warehouseAllowance(s, item, receipts, goodsEvent).subtract(nullToZero(item.qtyDelivered())).max(BigDecimal.ZERO));
         }
         return out;
+    }
+
+    /** ponytail: a typed line (transport fee) has no catalog price, area, model or size; ticket_item keeps no line type.
+     * A goods line misread as this stays recordable but still cannot complete the deal. */
+    private static boolean isGoodsLine(TicketItemDto item) {
+        return item.catalogPriceId() != null || item.qtySqm() != null
+            || (item.model() != null && !item.model().isBlank()) || (item.size() != null && !item.size().isBlank());
+    }
+
+    private static String unlinkedGoodsMessage(List<TicketRepository.UnlinkedGoods> goods) {
+        return "ยังส่งมอบครบไม่ได้ เพราะสินค้าใน IR ยังไม่อยู่ในรายการของงาน: "
+            + goods.stream().map(g -> g.product() + " " + qtyText(g.qty()) + (g.unit() == null ? "" : " " + g.unit()) + " (" + g.docNumber() + ")")
+                .collect(java.util.stream.Collectors.joining(", "))
+            + " · ให้แก้ใบเสนอราคาให้มีสินค้านี้ในงาน แล้วแจ้งฝ่ายนำเข้า";
     }
 
     /** Whether the warehouse can still deliver something under the cap: some line has room. */
@@ -2946,6 +2980,11 @@ public class TicketService {
                 .forEach(item -> need.put(item.id(), item.deliverableQty()));
         }
         if (need.isEmpty()) {
+            return false;
+        }
+        boolean finishesDeal = ticket.items().stream().allMatch(item ->
+            need.getOrDefault(item.id(), nullToZero(item.qtyDelivered())).compareTo(item.deliverableQty()) >= 0);
+        if (finishesDeal && !tickets.unlinkedGoods(s.id()).isEmpty()) {
             return false;
         }
         if (need.entrySet().stream().allMatch(e -> e.getValue().compareTo(nullToZero(itemsById.get(e.getKey()).qtyFromStock())) <= 0)) {
