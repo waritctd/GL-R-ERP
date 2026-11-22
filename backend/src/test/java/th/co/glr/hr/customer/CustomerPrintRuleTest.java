@@ -15,6 +15,7 @@ class CustomerPrintRuleTest {
         assertThat(CustomerPrintRule.joinedAddress(BANK_BUILDING, null, BANK_BUILDING, HQ)).isEqualTo(BANK_BUILDING);
         String noSpace = "อาคารธนาคารตัวอย่าง" + HQ;
         assertThat(CustomerPrintRule.joinedAddress(noSpace, null, "ที่อื่น", HQ)).isEqualTo(noSpace);
+        assertThat(CustomerPrintRule.joinedAddress(BANK_BUILDING, null, null, HQ)).isEqualTo(BANK_BUILDING); // typed, no master address
     }
 
     @Test

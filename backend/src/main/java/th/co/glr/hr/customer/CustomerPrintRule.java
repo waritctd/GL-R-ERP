@@ -39,16 +39,14 @@ public final class CustomerPrintRule {
 
     /**
      * An older deposit notice's stored address, where the customer's address and branch were joined with a space. Without a
-     * tax id only the customer's own default branch comes off the end, and never from an address that is the customer's
-     * address as it stands ("อาคารธนาคารกรุงเทพ สำนักงานใหญ่" is a place, not a branch).
+     * tax id the default branch comes off only when the value is exactly that join. Anything else was typed or has since
+     * changed, and is printed whole ("อาคารธนาคารกรุงเทพ สำนักงานใหญ่" is a place, not a branch).
      */
     public static String joinedAddress(String address, String taxId, String customerAddress, String customerBranch) {
         String kept = addressOnly(address, customerBranch, taxId);
-        if (kept == null || !isBlank(taxId) || isBlank(customerBranch) || !HEAD_OFFICE.equals(customerBranch.trim())
-            || !kept.endsWith(" " + HEAD_OFFICE) || (!isBlank(customerAddress) && kept.equals(customerAddress.trim()))) {
-            return kept;
-        }
-        return kept.substring(0, kept.length() - HEAD_OFFICE.length()).trim();
+        boolean isDefaultJoin = kept != null && isBlank(taxId) && !isBlank(customerAddress) && !isBlank(customerBranch)
+            && HEAD_OFFICE.equals(customerBranch.trim()) && kept.equals(customerAddress.trim() + " " + HEAD_OFFICE);
+        return isDefaultJoin ? customerAddress.trim() : kept;
     }
 
     private static boolean isBlank(String value) {
