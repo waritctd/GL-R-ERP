@@ -47,10 +47,11 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
   // PricingRequestCreateModal.
   omitContactHonorific = false, onChangeOmitContactHonorific,
   label = 'ผู้ติดต่อ', hint = 'ชื่อจะพิมพ์ต่อจาก “เรียน” บนใบเสนอราคา',
-  // The quotation editor's one contact card (feedback #71). `renderPrintFields({ onFieldEdit, onFieldBlur })` draws the one
-  // โทร./อีเมล pair, which is what prints and, once actually edited, writes back to the picked contact. `onRecordChange`
-  // takes a saved contact record (it must not touch the printed values). `preview(typedName)` is the printed line.
-  renderPrintFields = null, onRecordChange = null, preview = null,
+  // The quotation editor's one contact card (feedback #71). `renderPrintFields({ onFieldFocus, onFieldBlur })` draws the one
+  // โทร./อีเมล pair, which is what prints and, once really changed to a non-blank value, writes back to the picked contact.
+  // `onRecordChange` takes a saved contact record (it must not touch the printed values). `preview(typedName)` is the printed
+  // line. `onNameEdit()` runs when a name edit is saved and returns its undo. `canWriteContact`: false leaves the card print-only.
+  renderPrintFields = null, onRecordChange = null, preview = null, onNameEdit = null, canWriteContact = true,
 }, ref) {
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -147,8 +148,9 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
   useImperativeHandle(ref, () => ({
     flushPendingContactSave: () => Promise.allSettled([...pendingContactSavesRef.current]),
   }), []);
-  // Only an actual edit writes back: a reopened draft's one-off printed number must never reach the contact on a blur.
-  const editedPrintFieldsRef = useRef(new Set());
+  // What each printed box held when it took focus. Only a real change writes back: a reopened draft's one-off number
+  // must never reach the contact on a blur, or on a type-and-undo.
+  const printValueAtFocusRef = useRef({});
   const recordChanged = onRecordChange ?? onChange;
 
   useEffect(() => {
@@ -157,7 +159,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
     const record = contactEditsFrom(selected);
     const wasSeeded = lastSeededContactRef.current;
     const idChanged = selected.id !== wasSeeded.id;
-    if (idChanged) editedPrintFieldsRef.current.clear(); // an unsaved edit belonged to the previous contact
+    if (idChanged) printValueAtFocusRef.current = {}; // a focus taken on the previous contact says nothing about this one
     setContactEdits((prev) => {
       if (idChanged) return record; // a different contact — the rep's dirty text belonged to the old one
       const merged = { ...prev };
@@ -191,6 +193,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
       return;
     }
     const restore = selected;
+    const undoNameEdit = field === 'firstName' || field === 'lastName' ? onNameEdit?.() : null;
     setSavingContactField(field);
     lastSeededContactRef.current = { ...lastSeededContactRef.current, [field]: next };
     setContactEdits((prev) => ({ ...prev, [field]: next }));
@@ -209,6 +212,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
         setContactEdits((prev) => ({ ...prev, [field]: previous }));
         lastSeededContactRef.current = { ...lastSeededContactRef.current, [field]: previous };
         recordChanged(restore);
+        undoNameEdit?.();
         showToast?.('error', err.message || 'บันทึกข้อมูลผู้ติดต่อไม่สำเร็จ');
       } finally {
         setSavingContactField(null);
@@ -219,14 +223,18 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
   }
 
   const printFieldHandlers = {
-    onFieldEdit: (field) => editedPrintFieldsRef.current.add(field),
+    onFieldFocus: (field, value) => { printValueAtFocusRef.current[field] = value ?? ''; },
     onFieldBlur: (field, value) => {
-      if (!editedPrintFieldsRef.current.delete(field)) return;
-      if (selected && customerId) saveContactField(field, value);
+      const atFocus = printValueAtFocusRef.current[field];
+      delete printValueAtFocusRef.current[field];
+      const next = (value ?? '').trim();
+      // A blank stays print-only: clearing it on this document must not erase the customer's contact.
+      if (atFocus === undefined || !next || next === atFocus.trim()) return;
+      if (selected && customerId && canWriteContact) saveContactField(field, value);
     },
   };
   // The real record has loaded: a frozen `{ id, firstName }` stand-in holds the whole name in one field, so it is not editable.
-  const nameEditable = !disabled && Boolean(customerId)
+  const nameEditable = !disabled && canWriteContact && Boolean(customerId)
     && options.some((c) => String(c.id) === String(selectedId));
   const typedName = selected ? `${contactEdits.firstName ?? ''} ${contactEdits.lastName ?? ''}`.trim() : '';
   const previewText = preview ? preview(typedName) : null;
@@ -470,12 +478,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
           {selected ? null : renderPrintFields(printFieldHandlers)}
           {previewText ? (
             <div className="rounded-md bg-surface-muted px-3 py-2 text-xs text-text-secondary" data-testid={`${idPrefix}-print-preview`}>
-              <span className="[overflow-wrap:anywhere]">จะพิมพ์: {previewText.now}</span>
-              {previewText.afterEdit ? (
-                <span className="mt-1 block font-bold [overflow-wrap:anywhere]" data-testid={`${idPrefix}-print-change`}>
-                  เมื่อแก้ใบนี้จะพิมพ์ชื่อตามที่พิมพ์ไว้: {previewText.afterEdit}
-                </span>
-              ) : null}
+              <span className="[overflow-wrap:anywhere]">จะพิมพ์: {previewText}</span>
             </div>
           ) : null}
         </div>

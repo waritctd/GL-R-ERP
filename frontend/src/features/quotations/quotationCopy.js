@@ -149,7 +149,7 @@ export function copyFromQuotation(quotation, newQuotationTerms) {
       // and with it the "ไม่เติม คุณ" choice made for that person.)
       orderedByPhone: '',
       orderedByEmail: '',
-      omitContactHonorific: false,
+      omitContactHonorific: true, // a new quotation prints the name as typed (#71)
     },
     suggestedProjectName: quotation.projectName ?? '',
     validityDatePassed,

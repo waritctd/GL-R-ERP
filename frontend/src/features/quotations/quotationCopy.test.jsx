@@ -172,7 +172,7 @@ describe('copyFromQuotation — a ยืนราคา date that has passed', (
       projectName: '',
       orderedByPhone: '',
       orderedByEmail: '',
-      omitContactHonorific: false,
+      omitContactHonorific: true,
     });
   });
 });

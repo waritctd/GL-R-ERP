@@ -175,7 +175,7 @@ function emptyTerms(defaults = null) {
     projectName: '',
     // "ไม่เติม “คุณ” หน้าชื่อผู้ติดต่อ", the checkbox under the ผู้ติดต่อ picker. Not remembered: it is
     // about this document's contact.
-    omitContactHonorific: false,
+    omitContactHonorific: true, // #71: a new quotation prints the name exactly as typed
     // V192.3 — the CUSTOMER's phone and email: printed on the document when filled. Not remembered.
     orderedByPhone: '',
     orderedByEmail: '',
@@ -464,13 +464,24 @@ export function QuotationEditorPage({ user, showToast }) {
   // Every rep-driven change of the contact (pick, edit, revert, drop with the customer) carries the
   // printed โทร./อีเมล boxes along. A reopened draft (applyEditorState, onResolve) must never refill.
   const changeContact = (next) => {
-    // One contact card (#71): moving from one contact to another shows the new one's details, never the old one's.
-    setTerms((t) => (contactRef.current && next
-      ? { ...t, orderedByPhone: next.phone ?? '', orderedByEmail: next.email ?? '' }
-      : carryContactDetails(t, contactRef.current, next)));
+    const prev = contactRef.current;
+    // Re-picking the same person changes nothing: a one-off printed number stays.
+    if (!(prev && next && String(prev.id) === String(next.id))) {
+      setTerms((t) => {
+        // One contact card (#71): moving from one contact to another shows the new one's details, never the old one's.
+        const moved = prev && next
+          ? { ...t, orderedByPhone: next.phone ?? '', orderedByEmail: next.email ?? '' }
+          : carryContactDetails(t, prev, next);
+        if (!next) return moved;
+        // A different person prints as typed; back to the stored person restores the stored "คุณ" rule.
+        const storedPerson = quotation?.contactId != null && String(next.id) === String(quotation.contactId);
+        return { ...moved, omitContactHonorific: storedPerson && !contactNameEdited ? quotation.omitContactHonorific === true : true };
+      });
+    }
     setContact(next);
   };
   const contactPickerRef = useRef(null);
+  const [contactNameEdited, setContactNameEdited] = useState(false); // this session changed the contact's name: it prints as typed
   function updateDealForm(patch) {
     // The ดีล card reports ผู้รับ through the same patch-upward channel; it is quotation state, not deal-form
     // state, so it is split out to its own setter.
@@ -622,6 +633,7 @@ export function QuotationEditorPage({ user, showToast }) {
       setDocSettings(state.docSettings);
       setTerms(state.terms);
       setContact(state.contact ?? null);
+      setContactNameEdited(false);
       setPendingAttachments([]);
     };
     if (id) {
@@ -697,7 +709,8 @@ export function QuotationEditorPage({ user, showToast }) {
       setInitializedFor(key);
     }
     // setDirty is a useCallback with an empty dep list (stable identity), so listing it here can't
-    // cause an extra run; it only satisfies exhaustive-deps.
+    // cause an extra run; it only satisfies exhaustive-deps. changeContact is called here only with null, which reads no render state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, quotation, effectiveTicketId, initializedFor, storedDefaults, setDirty, copyFromId, copyState]);
 
   // The main seeding effect marks `initializedFor` on the FIRST render of a `?ticket=` visit, before
@@ -1394,7 +1407,8 @@ export function QuotationEditorPage({ user, showToast }) {
     projectName: terms.projectName || null,
     // Item 2 ("ไม่เติม “คุณ”", V180) — the checkbox under the ผู้ติดต่อ picker. Always an explicit
     // boolean, so a full PUT never leaves the server guessing what "missing" means.
-    omitContactHonorific: true, // #71: the name prints as typed from a draft's next save; approved documents are never re-saved
+    // #71: new quotations print as typed; a stored one keeps its rule until the rep picks another contact or edits the name.
+    omitContactHonorific: terms.omitContactHonorific === true,
     // The customer's phone and email, printed on the document when filled. Always sent: a blank one is
     // an explicit null, which clears it. Trimmed because the Email is CHECKED trimmed
     // (orderedByEmailError), so what is sent is what was checked.
@@ -2197,19 +2211,21 @@ export function QuotationEditorPage({ user, showToast }) {
   // renders it. Its customer is the loaded deal's, or on a new deal the one chosen in the ดีล card.
   // With neither (a deal this user cannot read, e.g. a quotation-grant holder) it shows its own
   // "เลือกลูกค้าก่อน" state. Optional, never a checklist blocker.
-  // What the PDF prints now: an untouched older draft keeps its stored "คุณ" rule until its next save, and says so.
-  const printsAsTyped = !quotation || dirty || quotation.omitContactHonorific === true;
-  const contactPreview = (typedName) => {
-    // A save re-reads the live contact, so what prints after an edit is the card's name, not the draft's old snapshot.
-    const liveName = typedName || contact?.firstName || '';
-    const line = (omitHonorific, contactName) => printedContactLine({
-      contactName, customerName, customerTaxId: (isEditable ? summaryCustomer?.taxId : null) ?? quotation?.customerTaxId,
-      phone: terms.orderedByPhone, email: terms.orderedByEmail,
-      english: docSettings.documentLanguage === 'EN', omitHonorific,
-    });
-    const now = line(printsAsTyped, printsAsTyped ? liveName : (quotation.contactName ?? ''));
-    const afterEdit = printsAsTyped ? null : line(true, liveName);
-    return { now, afterEdit: afterEdit !== now ? afterEdit : null };
+  const contactPreview = (typedName) => printedContactLine({
+    contactName: typedName || quotation?.contactName || contact?.firstName || '',
+    customerName, customerTaxId: (isEditable ? summaryCustomer?.taxId : null) ?? quotation?.customerTaxId,
+    phone: terms.orderedByPhone, email: terms.orderedByEmail,
+    english: docSettings.documentLanguage === 'EN', omitHonorific: terms.omitContactHonorific === true,
+  });
+  const canWriteContact = ['sales', 'sales_manager'].includes(user?.role) || hasDealQuotationGrant(user); // DealEntryAccess
+  const onContactNameEdit = () => {
+    const before = { omit: terms.omitContactHonorific, edited: contactNameEdited };
+    setContactNameEdited(true);
+    setTerms((t) => ({ ...t, omitContactHonorific: true }));
+    return () => {
+      setContactNameEdited(before.edited);
+      setTerms((t) => ({ ...t, omitContactHonorific: before.omit }));
+    };
   };
   const renderContactPicker = (idSuffix) => (
     <div className="col-span-full">
@@ -2224,6 +2240,8 @@ export function QuotationEditorPage({ user, showToast }) {
         showToast={showToast}
         idPrefix="quotation-contact"
         preview={contactPreview}
+        onNameEdit={onContactNameEdit}
+        canWriteContact={canWriteContact}
         renderPrintFields={(handlers) => (
           <OrderedByContactFields
             terms={terms}
