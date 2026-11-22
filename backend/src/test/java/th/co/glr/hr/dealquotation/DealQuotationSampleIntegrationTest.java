@@ -126,6 +126,17 @@ class DealQuotationSampleIntegrationTest extends AbstractDealDirectQuotationInte
     }
 
     @Test
+    void aDraftRevisionMarkedByMistakeCanBeTurnedBackToReal() {
+        long ticketId = deal(salesActor);
+        DealQuotationDto real = approved(ticketId, salesActor);
+        DealQuotationDto revision = quotationService.createRevision(real.id(), salesActor);
+
+        quotationService.setSample(revision.id(), true, salesActor);
+
+        assertThat(quotationService.setSample(revision.id(), false, salesActor).isSample()).isFalse();
+    }
+
+    @Test
     void aRepWhoDoesNotOwnTheDealCannotChangeTheMark() {
         long ticketId = deal(salesActor);
         DealQuotationDto quotation = quotationService.create(ticketId, draft(), salesActor);
@@ -136,6 +147,8 @@ class DealQuotationSampleIntegrationTest extends AbstractDealDirectQuotationInte
 
         refusal(() -> quotationService.setSample(quotation.id(), true, stranger), HttpStatus.FORBIDDEN);
         refusal(() -> quotationService.update(quotation.id(), draft().withIsSample(true), salesManagerActor),
+            HttpStatus.FORBIDDEN);
+        refusal(() -> quotationService.create(ticketId, draft().withIsSample(true), salesManagerActor),
             HttpStatus.FORBIDDEN);
     }
 

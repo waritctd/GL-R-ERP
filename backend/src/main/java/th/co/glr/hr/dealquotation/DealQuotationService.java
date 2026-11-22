@@ -236,6 +236,9 @@ public class DealQuotationService {
         quotations.lockTicket(ticketId);
         // A sample is a price document only: it sits outside the one-route and one-live-quotation rules below.
         boolean sample = Boolean.TRUE.equals(request.isSample());
+        if (sample && (ticketService == null || !ticketService.canManageQuotation(ticket, actor))) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
         // One pricing route per deal: the reverse of DirectQuotationLocks#requireNoLiveDirectQuotation. Only for
         // #create; a revision or reorder is not a new route choice, and #createFromPricingRequest IS the pricing route.
         if (!sample) {
@@ -2606,7 +2609,15 @@ public class DealQuotationService {
     }
 
     private void requireCanBecomeReal(DealQuotationDto quotation) {
-        quotations.findOtherLiveRealQuotationNumber(quotation.ticketId(), quotation.partyId(), quotation.id())
+        // An unapproved revision normally sits beside its real parent until approval replaces the parent.
+        Set<Long> excluded = new HashSet<>(Set.of(quotation.id()));
+        if (!QuotationStatus.APPROVED.equals(quotation.docStatus())) {
+            for (Long ancestor = quotation.parentQuotationId(); ancestor != null;
+                 ancestor = requireQuotation(ancestor).parentQuotationId()) {
+                excluded.add(ancestor);
+            }
+        }
+        quotations.findOtherLiveRealQuotationNumber(quotation.ticketId(), quotation.partyId(), excluded)
             .ifPresent(number -> {
                 throw new ApiException(HttpStatus.CONFLICT, "เอาเครื่องหมายตัวอย่างออกไม่ได้ เพราะมีใบเสนอราคาจริง " + number + " อยู่แล้ว");
             });

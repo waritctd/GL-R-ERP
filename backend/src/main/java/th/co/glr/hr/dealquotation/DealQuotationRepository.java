@@ -1228,6 +1228,7 @@ public class DealQuotationRepository {
               FROM sales.quotation_item qi
               JOIN sales.quotation q ON q.quotation_id = qi.quotation_id
              WHERE qi.quotation_item_id IN (:ids)
+               AND NOT q.is_sample
                AND q.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED')
                AND EXISTS (SELECT 1 FROM sales.deal_party p WHERE p.party_id = q.party_id AND p.customer_id = :customerId)
                AND q.ticket_id IN (SELECT c.ticket_id FROM (""" + CHAIN_TICKETS + """
@@ -1290,14 +1291,14 @@ public class DealQuotationRepository {
             """, new MapSqlParameterSource().addValue("id", quotationId).addValue("isSample", isSample));
     }
 
-    /** The number of another live real direct quotation of the same party (or of the no-party group), if any. */
-    public Optional<String> findOtherLiveRealQuotationNumber(long ticketId, Long partyId, long quotationId) {
+    /** The number of a live real direct quotation of the same party (or no-party group) outside {@code excludedIds}. */
+    public Optional<String> findOtherLiveRealQuotationNumber(long ticketId, Long partyId, Set<Long> excludedIds) {
         return jdbc.query("""
             SELECT number FROM sales.quotation
-             WHERE ticket_id = :ticketId AND quotation_id <> :id AND party_id IS NOT DISTINCT FROM CAST(:partyId AS BIGINT)
+             WHERE ticket_id = :ticketId AND quotation_id NOT IN (:excludedIds) AND party_id IS NOT DISTINCT FROM CAST(:partyId AS BIGINT)
                AND origin = 'DEAL_DIRECT' AND NOT is_sample AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED')
              ORDER BY quotation_id DESC LIMIT 1
-            """, new MapSqlParameterSource().addValue("ticketId", ticketId).addValue("id", quotationId)
+            """, new MapSqlParameterSource().addValue("ticketId", ticketId).addValue("excludedIds", excludedIds)
                 .addValue("partyId", partyId), (rs, n) -> rs.getString("number")).stream().findFirst();
     }
 
