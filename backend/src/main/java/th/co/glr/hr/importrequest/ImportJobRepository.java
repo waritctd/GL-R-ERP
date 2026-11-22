@@ -34,9 +34,7 @@ class ImportJobRepository {
                    first_issued_date = :received, deposit_received_date = :deposit, wanted_by = :wanted,
                    required_by_note = :wantedText, doc_number = :doc, factory_id = :factory, factory_name = :factoryName,
                    brand = :brand,
-                   import_step_at = CASE WHEN import_step = 'CONTACTED'
-                                          AND NOT EXISTS (SELECT 1 FROM sales.shipment_lot l WHERE l.import_request_id = :id)
-                                         THEN :received ELSE import_step_at END,
+                   import_step_at = CASE WHEN import_step = 'CONTACTED' THEN :received ELSE import_step_at END,
                    updated_at = now()
              WHERE import_request_id = :id AND ticket_id IS NULL AND status = 'ISSUED'
             """, new MapSqlParameterSource("id", id).addValue("purpose", h.purpose()).addValue("label", h.purposeLabel())

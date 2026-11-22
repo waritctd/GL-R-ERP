@@ -3221,7 +3221,7 @@ const MOCK_ROUND_REQUIRED_NUMBERS_BY_STEP = { RECEIVED: ['PROFORMA', 'INVOICE'] 
 let mockShipmentDocSeq = 1;
 
 function mockEnsureMigratedRounds() {
-  mockImportRequests.filter((r) => r.status === 'ISSUED' && r.importStep && r.importStep !== 'CONTACTED'
+  mockImportRequests.filter((r) => r.status === 'ISSUED' && r.importStep && r.importStep !== 'CONTACTED' && r.source !== 'IMPORT'
     && !mockShipmentRounds.some((x) => x.lots.some((l) => l.importRequestId === r.id))).forEach((r) => {
     const round = {
       id: mockShipmentRoundSeq++, factoryId: r.factoryId, factoryName: r.factoryName, source: 'MIGRATED',
@@ -3527,16 +3527,28 @@ function mockFinishLots(rounds, irIds, user, forwardOnly = false) {
   });
 }
 
-const MOCK_JOB_REPS = [{ id: 1003, name: 'คุณสมหมาย ขายดี' }, { id: 1004, name: 'คุณวิภา ขายเก่ง' }];
-
-function mockJobRepName(id) {
-  return MOCK_JOB_REPS.find((r) => r.id === id)?.name ?? null;
+/** The sales logins the mock really has, so a rep named on a job is the same id every requester check compares. */
+function mockJobReps() {
+  return db.users.filter((u) => u.active && ['sales', 'sales_manager'].includes(u.role)).map((u) => ({ id: u.id, name: u.name }));
 }
 
-function mockFindImportJob(id) {
+function mockJobRepName(id) {
+  return mockJobReps().find((r) => r.id === id)?.name ?? null;
+}
+
+/** A finite, positive quantity with at most two decimals, the same rule as the Java service. */
+function mockRequireJobQty(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) fail('จำนวนต้องมากกว่า 0 ทุกรายการ', 400);
+  if (Math.round(n * 100) / 100 !== n) fail('จำนวนมีทศนิยมได้ไม่เกิน 2 ตำแหน่ง', 400);
+  return n;
+}
+
+function mockFindImportJob(id, forWrite = false) {
   const row = mockImportRequests.find((r) => r.id === Number(id));
   if (!row) fail('ไม่พบงานนำเข้านี้', 404);
   if (row.ticketId != null) fail('ใบขอซื้อนี้อยู่ในงานขาย แก้ไขในรายละเอียดของงานนั้น', 409);
+  if (forWrite && row.status !== 'ISSUED') fail('งานนำเข้านี้ถูกยกเลิกแล้ว', 409);
   return row;
 }
 
@@ -3575,7 +3587,7 @@ function mockImportJobDto(row, user) {
   return {
     importRequest: mockImportRequestDto(row), source: row.source ?? 'PORTAL', purpose: row.orderPurpose, purposeNote: row.purposeNote,
     requesterId: row.requesterId ?? null, wantedBy: row.wantedBy ?? null, items, rounds, history: row.history ?? [],
-    canEdit: ['import', 'ceo'].includes(user.role),
+    canEdit: ['import', 'ceo'].includes(user.role) && row.status === 'ISSUED',
   };
 }
 
@@ -15798,6 +15810,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (!request.receivedOn) fail('ระบุวันที่ได้รับใบขอซื้อ', 400);
       if (request.receivedOn > mockTodayIso()) fail('วันที่ได้รับใบขอซื้อต้องไม่เป็นวันในอนาคต', 400);
       if (!(request.lines ?? []).length) fail('ใส่สินค้าอย่างน้อย 1 รายการ', 400);
+      request.lines.forEach((l) => mockRequireJobQty(l.qty));
       // every refusal comes before anything is stored, so a rejected request leaves the mock as it was
       let existingRound = null;
       if (request.round?.mode === 'EXISTING') {
@@ -15838,7 +15851,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     },
     async update(id, request) {
       const user = mockShipmentWrite();
-      const row = mockFindImportJob(id);
+      const row = mockFindImportJob(id, true);
       const draft = { ...row }; // changes land on a copy, so a later refusal leaves the job as it was
       const clear = request?.clear ?? [];
       const before = {};
@@ -15864,9 +15877,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       set('depositReceivedOn', 'depositReceivedDate', request.depositReceivedOn);
       set('wantedBy', 'wantedBy', request.wantedBy);
       if (request.requesterId) { set('requester', 'requesterId', request.requesterId); draft.requestedByName = mockJobRepName(request.requesterId); }
-      if (clear.includes('requesterId')) { draft.requesterId = null; draft.requestedByName = null; }
-      if (clear.includes('depositReceivedOn')) draft.depositReceivedDate = null;
-      if (clear.includes('wantedBy')) draft.wantedBy = null;
+      if (clear.includes('requesterId') && draft.requesterId != null) { before.requester = draft.requestedByName; after.requester = null; draft.requesterId = null; draft.requestedByName = null; }
+      if (clear.includes('depositReceivedOn') && draft.depositReceivedDate != null) { before.depositReceivedOn = draft.depositReceivedDate; after.depositReceivedOn = null; draft.depositReceivedDate = null; }
+      if (clear.includes('wantedBy') && draft.wantedBy != null) { before.wantedBy = draft.wantedBy; after.wantedBy = null; draft.wantedBy = null; }
       if (request.factoryId && request.factoryId !== row.factoryId) {
         if (mockShipmentRounds.some((r) => r.lots.some((l) => l.importRequestId === row.id))) fail('งานนี้อยู่ในรอบขนส่งแล้ว เอาออกจากรอบก่อนจึงเปลี่ยนโรงงานได้', 409);
         const factory = mockPriceImportFactories.find((f) => f.factoryId === Number(request.factoryId));
@@ -15881,47 +15894,52 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     },
     async addItem(id, request) {
       const user = mockShipmentWrite();
-      const row = mockFindImportJob(id);
+      const row = mockFindImportJob(id, true);
+      const qty = mockRequireJobQty(request.qty);
       const seq = Math.max(0, ...row.items.map((i) => i.seq)) + 1;
-      row.items.push({ id: `${row.id}-${seq}`, importRequestId: row.id, ticketItemId: null, seq, code: String(request.code).trim(), size: request.size?.trim() || null, qty: Number(request.qty), unit: String(request.unit).trim() });
+      row.items.push({ id: `${row.id}-${seq}`, importRequestId: row.id, ticketItemId: null, seq, code: String(request.code).trim(), size: request.size?.trim() || null, qty, unit: String(request.unit).trim() });
       mockSettleJob(row, user); // the new quantity is on no round yet, so the step may fall back
       mockJobHistory(row, user, 'IMPORT_JOB_ITEM_ADDED', null, { item: request.code, qty: String(request.qty), unit: request.unit });
       return delay(mockImportJobDto(row, user));
     },
     async updateItem(id, itemId, request) {
       const user = mockShipmentWrite();
-      const row = mockFindImportJob(id);
+      const row = mockFindImportJob(id, true);
       const item = row.items.find((i) => String(i.id) === String(itemId));
       if (!item) fail('ไม่พบรายการสินค้านี้', 404);
       const lots = mockShipmentRounds.flatMap((r) => r.lots.filter((l) => l.itemId === item.id).map((l) => ({ l, r })));
-      const qtyChanged = request.qty != null && Number(request.qty) !== Number(item.qty);
+      const qtyChanged = request.qty != null && mockRequireJobQty(request.qty) !== Number(item.qty);
+      const was = { code: item.code, size: item.size ?? null, unit: item.unit };
       if (qtyChanged) {
         if (lots.some(({ r }) => r.importStep === 'RECEIVED')) fail('ของรายการนี้ถึงโกดังแล้ว แก้จำนวนไม่ได้', 409);
         const placed = mockSumQty(lots.map(({ l }) => l.qty));
         if (lots.length === 1 && Number(lots[0].l.qty) === Number(item.qty)) lots[0].l.qty = Number(request.qty);
         else if (Number(request.qty) < placed) fail(`จำนวนต้องไม่น้อยกว่าที่จัดลงรอบแล้ว (${placed})`, 409);
-        mockJobHistory(row, user, 'IMPORT_JOB_ITEM_UPDATED', { item: item.code, qty: String(item.qty) }, { qty: String(request.qty) });
-        item.qty = Number(request.qty);
       }
+      const changed = { before: { item: was.code }, after: {} };
+      if (qtyChanged) { changed.before.qty = String(item.qty); changed.after.qty = String(request.qty); item.qty = Number(request.qty); }
       if (request.code) item.code = request.code.trim();
       if (request.size != null) item.size = request.size.trim() || null;
       if (request.unit) item.unit = request.unit.trim();
+      [['code', item.code], ['size', item.size ?? null], ['unit', item.unit]].forEach(([k, v]) => {
+        if (was[k] !== v) { changed.before[k] = was[k]; changed.after[k] = v; }
+      });
       if (qtyChanged) mockSettleJob(row, user);
+      if (Object.keys(changed.after).length > 0) mockJobHistory(row, user, 'IMPORT_JOB_ITEM_UPDATED', changed.before, changed.after);
       return delay(mockImportJobDto(row, user));
     },
     async removeItem(id, itemId) {
       const user = mockShipmentWrite();
-      const row = mockFindImportJob(id);
+      const row = mockFindImportJob(id, true);
       const item = row.items.find((i) => String(i.id) === String(itemId));
       if (!item) fail('ไม่พบรายการสินค้านี้', 404);
       const holding = mockShipmentRounds.filter((r) => r.lots.some((l) => l.itemId === item.id));
       if (holding.some((r) => r.importStep === 'RECEIVED')) fail('ของรายการนี้ถึงโกดังแล้ว ลบไม่ได้', 409);
       if (row.items.length <= 1) fail('งานนำเข้าต้องมีสินค้าอย่างน้อย 1 รายการ', 409);
-      // a round this empties is checked like removeLot does: one holding a document or typed facts is never dropped silently
       const emptied = holding.filter((r) => r.lots.every((l) => l.itemId === item.id));
-      emptied.forEach((r) => mockRequireDeletable(r));
       holding.forEach((r) => { r.lots = r.lots.filter((l) => l.itemId !== item.id); });
-      emptied.forEach((r) => mockShipmentRounds.splice(mockShipmentRounds.indexOf(r), 1));
+      emptied.filter((r) => { try { mockRequireDeletable(r); return true; } catch { return false; } })
+        .forEach((r) => mockShipmentRounds.splice(mockShipmentRounds.indexOf(r), 1)); // a round holding a document or typed facts stays
       row.items = row.items.filter((i) => i !== item);
       mockSettleJob(row, user);
       mockJobHistory(row, user, 'IMPORT_JOB_ITEM_REMOVED', { item: item.code, qty: String(item.qty), unit: item.unit }, null);
@@ -15929,7 +15947,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     },
     async repOptions() {
       mockShipmentWrite();
-      return delay({ reps: MOCK_JOB_REPS });
+      return delay({ reps: mockJobReps() });
     },
     // The sheet load runs on the server, so mock mode never has a run to report.
     async latestRun() {
@@ -16503,7 +16521,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       }
       const today = new Date().toISOString().slice(0, 10);
       const thaiYear = String(new Date().getFullYear() + 543).slice(-2);
-      const seqForYear = mockImportRequests.filter((r) => r.docNumber?.startsWith(`IR${thaiYear}`)).length + 1;
+      let seqForYear = mockImportRequests.filter((r) => r.docNumber?.startsWith(`IR${thaiYear}`)).length + 1;
+      while (!override && mockImportRequests.some((r) => r.docNumber === `IR${thaiYear}${String(seqForYear).padStart(3, '0')}`)) seqForYear += 1;
       const docNumber = override || `IR${thaiYear}${String(seqForYear).padStart(3, '0')}`;
 
       // The predecessor this issue supersedes (this row's OWN previous version, if any) carries its progress step

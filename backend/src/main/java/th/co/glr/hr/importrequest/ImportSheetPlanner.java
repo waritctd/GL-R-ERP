@@ -73,7 +73,11 @@ class ImportSheetPlanner {
 
     Plan plan(ParsedSheet parsed, Choices choices) {
         Map<String, FactoryConfigDto> byName = new HashMap<>();
-        factories.findAll().forEach(f -> byName.putIfAbsent(ImportRequestService.normalizeFactoryName(f.factoryName()), f));
+        Map<String, List<FactoryConfigDto>> byCanonical = new HashMap<>();
+        factories.findAll().forEach(f -> {
+            byName.putIfAbsent(ImportRequestService.normalizeFactoryName(f.factoryName()), f);
+            byCanonical.computeIfAbsent(ImportRequestService.normalizeFactoryName(canonicalBrand(f.factoryName())), k -> new ArrayList<>()).add(f);
+        });
 
         List<Excluded> excluded = new ArrayList<>();
         Set<String> unresolvedBrands = new LinkedHashSet<>();
@@ -89,15 +93,15 @@ class ImportSheetPlanner {
         for (SheetBlock b : parsed.blocks()) {
             if (b.blockedReason() != null) {
                 excluded.add(new Excluded(b.firstRow(), blockName(b), b.blockedReason()));
-            } else if (b.brands().stream().map(ImportRequestService::normalizeFactoryName).distinct().count() > 1) {
+            } else if (b.brands().stream().map(x -> ImportRequestService.normalizeFactoryName(canonicalBrand(x))).distinct().count() > 1) {
                 excluded.add(new Excluded(b.firstRow(), blockName(b), "แถวในกลุ่มนี้ระบุหลายยี่ห้อ: " + String.join(", ", b.brands())));
             } else {
-                ResolvedFactory f = resolveFactory(b, byName, choices);
+                ResolvedFactory f = resolveFactory(b, byName, byCanonical, choices);
                 if (f == null) {
                     String label = b.brands().isEmpty() ? "block:" + b.irs().get(0).docNumber() : b.brands().get(0);
                     excluded.add(new Excluded(b.firstRow(), blockName(b), b.brands().isEmpty()
                         ? "ไม่ได้ระบุยี่ห้อ จึงไม่รู้ว่าเป็นโรงงานไหน"
-                        : "ยี่ห้อ \"" + label + "\" ที่เลือกไว้ใช้ไม่ได้ (โรงงานหรือประเทศไม่ถูกต้อง)"));
+                        : "ยี่ห้อ \"" + label + "\" ที่เลือกไว้ใช้ไม่ได้ (โรงงานหรือประเทศไม่ถูกต้อง) หรือตรงกับโรงงานหลายแห่ง"));
                 } else {
                     if (f.id() == null) {
                         unresolvedBrands.add(f.name());
@@ -135,7 +139,8 @@ class ImportSheetPlanner {
             String action = blockRound != null ? "UPDATE"
                 : irs.stream().anyMatch(p -> NEEDS_BLOCK_ROUND.contains(p.action())) ? "CREATE" : "NONE";
             BlockPlan plan = new BlockPlan(b.firstRow(), b.backfillKey(), b.brands().isEmpty() ? null : b.brands().get(0), f.id(),
-                f.name(), action, blockRound, b.facts(), b.proformas(), b.invoices(), b.warnings(), irs);
+                f.name(), action, blockRound, b.facts(), b.proformas(), b.invoices(), b.warnings(), irs,
+                f.newChoice() == null ? null : f.newChoice().countryCode(), f.newChoice() == null ? null : f.newChoice().countryOther());
             blocks.add(plan);
             if (blockRound != null) {
                 addDifferences(blockRound, b, differences);
@@ -173,7 +178,19 @@ class ImportSheetPlanner {
     static IrPlan asSkip(IrPlan p, String reason) {
         return new IrPlan(p.docNumber(), p.firstRow(), SKIP, reason, p.importRequestId(), p.ticketId(), p.jobCode(), p.projectText(),
             p.saleText(), p.purpose(), p.requesterId(), p.requesterName(), p.fromRoundId(), p.lines(), p.receivedOn(), p.depositOn(),
-            p.wantedBy(), p.wantedText());
+            p.wantedBy(), p.wantedText(), p.allocation());
+    }
+
+    private static IrPlan withAllocation(IrPlan p, String allocation) {
+        return new IrPlan(p.docNumber(), p.firstRow(), p.action(), p.reason(), p.importRequestId(), p.ticketId(), p.jobCode(), p.projectText(),
+            p.saleText(), p.purpose(), p.requesterId(), p.requesterName(), p.fromRoundId(), p.lines(), p.receivedOn(), p.depositOn(),
+            p.wantedBy(), p.wantedText(), allocation);
+    }
+
+    /** What an ADOPT of an IR with no lots will place: the reviewed quantities, so a later edit cannot change the write unseen. */
+    private String allocation(long importRequestId) {
+        return sheet.wantedItems(importRequestId).stream().filter(i -> i.wantedQty().signum() > 0)
+            .map(i -> i.itemId() + ":" + i.wantedQty().stripTrailingZeros().toPlainString()).collect(Collectors.joining(","));
     }
 
     /** Marks a block warning the run summary lists for import to check. */
@@ -185,7 +202,14 @@ class ImportSheetPlanner {
      * block is kept, under a number of its own (IR69401-90 and up) so its goods show on การขนส่ง, and the change is a warning
      * on that block for import to correct.
      */
-    static ParsedSheet renameClashes(ParsedSheet parsed) {
+    /** What the portal already holds, so a renumbered IR never lands on a number somebody else uses. */
+    interface PortalCheck {
+        boolean exists(String docNumber);
+
+        boolean tiedTo(String docNumber, String backfillKey);
+    }
+
+    static ParsedSheet renameClashes(ParsedSheet parsed, PortalCheck portal) {
         Set<String> taken = new HashSet<>();
         parsed.blocks().forEach(b -> b.irs().forEach(ir -> taken.add(ir.docNumber())));
         Map<String, Set<String>> anchorCodes = new HashMap<>();
@@ -203,8 +227,13 @@ class ImportSheetPlanner {
                     String base = ir.docNumber().replaceAll("-\\d{1,2}$", "");
                     String fresh = null;
                     for (int n = 90; n <= 99 && fresh == null; n++) {
-                        if (!taken.contains(base + "-" + n)) {
-                            fresh = base + "-" + n;
+                        String candidate = base + "-" + n;
+                        if (taken.contains(candidate)) {
+                            continue;
+                        }
+                        // a number an earlier run gave this very block is reused, so a repeat load adds nothing
+                        if (!portal.exists(candidate) || portal.tiedTo(candidate, b.backfillKey())) {
+                            fresh = candidate;
                         }
                     }
                     if (fresh != null) {
@@ -251,7 +280,8 @@ class ImportSheetPlanner {
         return b.irs().isEmpty() ? "กลุ่มแถวที่ไม่มีเลข IR" : b.irs().stream().map(SheetIr::docNumber).collect(Collectors.joining(", "));
     }
 
-    private ResolvedFactory resolveFactory(SheetBlock b, Map<String, FactoryConfigDto> byName, Choices choices) {
+    private ResolvedFactory resolveFactory(SheetBlock b, Map<String, FactoryConfigDto> byName,
+                                           Map<String, List<FactoryConfigDto>> byCanonical, Choices choices) {
         String brand = b.brands().isEmpty() ? null : b.brands().get(0);
         FactoryChoice choice = choices.factoryChoices().get(brand == null ? "block:" + b.irs().get(0).docNumber() : brand);
         if (choice == null && brand != null) {
@@ -262,7 +292,8 @@ class ImportSheetPlanner {
         }
         if (choice != null) {
             if (choice.isNew()) {
-                if (brand == null || choice.countryCode() == null || !factories.countryExists(choice.countryCode())) {
+                if (brand == null || choice.countryCode() == null || !factories.countryExists(choice.countryCode())
+                    || ("ZZ".equals(choice.countryCode()) && (choice.countryOther() == null || choice.countryOther().isBlank()))) {
                     return null;
                 }
                 return new ResolvedFactory(null, brand, choice);
@@ -274,7 +305,15 @@ class ImportSheetPlanner {
             return null;
         }
         String canonical = canonicalBrand(brand);
-        FactoryConfigDto known = byName.get(ImportRequestService.normalizeFactoryName(canonical));
+        // an exact name first, then the same name with or without "Group" on either side; two candidates is not a guess to make
+        FactoryConfigDto known = byName.get(ImportRequestService.normalizeFactoryName(brand));
+        if (known == null) {
+            List<FactoryConfigDto> same = byCanonical.getOrDefault(ImportRequestService.normalizeFactoryName(canonical), List.of());
+            if (same.size() > 1) {
+                return null;
+            }
+            known = same.isEmpty() ? null : same.get(0);
+        }
         if (known != null) {
             return new ResolvedFactory(known.id(), known.factoryName(), null);
         }
@@ -325,6 +364,10 @@ class ImportSheetPlanner {
         }
         if (sheetMade) {
             boolean here = blockRound != null && lots.stream().anyMatch(l -> l.roundId() == blockRound);
+            // an earlier run committed another block of this IR and rolled this one back: this block never ran, so its lines are still owed
+            if (!here && blockRound == null && "BACKFILL".equals(p.source()) && blockCount > 1 && Objects.equals(p.factoryId(), factoryId)) {
+                return plan(ir, CREATE_MORE, null, p.id(), null, null, null, choices);
+            }
             return plan(ir, here ? ON_ROUND : OTHER_ROUND, null, p.id(), p.ticketId(), p.ticketCode(), null, choices);
         }
         Set<Long> roundIds = lots.stream().map(PortalLot::roundId).collect(Collectors.toSet());
@@ -334,7 +377,7 @@ class ImportSheetPlanner {
         }
         if (lots.isEmpty()) {
             boolean anyWanted = sheet.wantedItems(p.id()).stream().anyMatch(i -> i.wantedQty().signum() > 0);
-            return anyWanted ? plan(ir, ADOPT, null, p.id(), p.ticketId(), p.ticketCode(), null, choices)
+            return anyWanted ? withAllocation(plan(ir, ADOPT, null, p.id(), p.ticketId(), p.ticketCode(), null, choices), allocation(p.id()))
                 : skip(ir, p, "ทุกรายการถูกระบุว่าไม่ส่ง", choices);
         }
         PortalLot lot = lots.get(0);
@@ -368,7 +411,7 @@ class ImportSheetPlanner {
         List<String> codes = splitCodes(ir.saleText());
         Long requester = codes.stream().map(choices.repChoices()::get).filter(Objects::nonNull).findFirst().orElse(null);
         return new IrPlan(ir.docNumber(), ir.firstRow(), action, reason, irId, ticketId, jobCode, ir.projectText(), ir.saleText(),
-            purpose, requester, ir.saleText(), fromRound, ir.lines(), ir.receivedOn(), ir.depositOn(), ir.wantedBy(), ir.wantedText());
+            purpose, requester, ir.saleText(), fromRound, ir.lines(), ir.receivedOn(), ir.depositOn(), ir.wantedBy(), ir.wantedText(), null);
     }
 
     static List<String> splitCodes(String saleText) {

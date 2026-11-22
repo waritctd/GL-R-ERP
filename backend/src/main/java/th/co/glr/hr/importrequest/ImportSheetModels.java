@@ -46,12 +46,12 @@ final class ImportSheetModels {
     record IrPlan(String docNumber, int firstRow, String action, String reason, Long importRequestId, Long ticketId,
                   String jobCode, String projectText, String saleText, String purpose, Long requesterId,
                   String requesterName, Long fromRoundId, List<SheetLine> lines, LocalDate receivedOn, LocalDate depositOn,
-                  LocalDate wantedBy, String wantedText) {}
+                  LocalDate wantedBy, String wantedText, String allocation) {}
 
     /** {@code action}: CREATE or UPDATE a round, or NONE when no IR of the block rides on a backfilled round. */
     record BlockPlan(int firstRow, String backfillKey, String factoryText, Long factoryId, String factoryName, String action,
                      Long roundId, SheetFacts facts, List<String> proformas, List<String> invoices, List<String> warnings,
-                     List<IrPlan> irs) {}
+                     List<IrPlan> irs, String newFactoryCountry, String newFactoryCountryNote) {}
 
     record Excluded(int row, String what, String reason) {}
 

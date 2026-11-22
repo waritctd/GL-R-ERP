@@ -19,7 +19,7 @@ import { formatQty, ORIGIN_LABELS, PURPOSE_LABELS, stepLabel, stepTone } from '.
 const ITEMS_GRID = 'grid-cols-[minmax(0,1.7fr)_minmax(0,0.9fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)]';
 
 const FIELD_LABELS = {
-  purpose: 'ประเภท', purposeNote: 'โครงการ / ลูกค้า', requester: 'ฝ่ายขายผู้ขอ', receivedOn: 'วันที่ได้รับใบขอซื้อ',
+  purpose: 'ประเภท', purposeNote: 'โครงการ / ลูกค้า', requester: 'ฝ่ายขายผู้ขอ', requesterId: 'รหัสผู้ขอ', receivedOn: 'วันที่ได้รับใบขอซื้อ',
   depositReceivedOn: 'วันที่ได้รับมัดจำ', wantedBy: 'ลูกค้าต้องการของ', docNumber: 'เลขที่ใบขอซื้อ', factory: 'โรงงาน',
   code: 'ชื่อสินค้า', size: 'ขนาด', qty: 'จำนวน', unit: 'หน่วย',
 };

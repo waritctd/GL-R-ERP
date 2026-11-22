@@ -284,6 +284,28 @@ class ImportSheetBackfillIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     @Test
+    void aBlockOfASplitIrThatDidNotCommitIsAppendedByTheNextRun() throws IOException {
+        ImportSheetTestBook first = new ImportSheetTestBook()
+            .row("IR NO.", "69951", "ยี่ห้อ", "Round Factory", "Sale", "S7", "PROJECT", "งานสองรอบ", "รายชื่อสินค้าและจำนวน", "A = 1 pcs");
+        Path onlyFirst = file(first);
+        Result dry = service.dryRun(onlyFirst, null, dir.resolve("r1"));
+        service.commit(onlyFirst, null, dir.resolve("r2"), actorId, dry.planSha256());
+        assertThat(count("SELECT count(*) FROM sales.import_request_item i JOIN sales.import_request r USING (import_request_id) WHERE r.doc_number = 'IR69951'")).isEqualTo(1);
+
+        Path both = file(new ImportSheetTestBook()
+            .row("IR NO.", "69951", "ยี่ห้อ", "Round Factory", "Sale", "S7", "PROJECT", "งานสองรอบ", "รายชื่อสินค้าและจำนวน", "A = 1 pcs")
+            .blank()
+            .row("IR NO.", "69951", "ยี่ห้อ", "Round Factory", "Sale", "S7", "PROJECT", "งานสองรอบ", "รายชื่อสินค้าและจำนวน", "B = 2 pcs"));
+        Result again = service.dryRun(both, null, dir.resolve("r3"));
+        Result done = service.commit(both, null, dir.resolve("r4"), actorId, again.planSha256());
+
+        assertThat(done.failed()).isEmpty();
+        assertThat(count("SELECT count(*) FROM sales.import_request WHERE doc_number = 'IR69951'")).isEqualTo(1);
+        assertThat(count("SELECT count(*) FROM sales.import_request_item i JOIN sales.import_request r USING (import_request_id) WHERE r.doc_number = 'IR69951'")).isEqualTo(2);
+        assertThat(count("SELECT count(DISTINCT shipment_round_id) FROM sales.shipment_lot l JOIN sales.import_request r USING (import_request_id) WHERE r.doc_number = 'IR69951'")).isEqualTo(2);
+    }
+
+    @Test
     void anIrInTwoBlocksIsOneIrWithLotsOnBothRounds() throws IOException {
         Path file = file(new ImportSheetTestBook()
             .row("IR NO.", "69921", "ยี่ห้อ", "Round Factory", "Sale", "S7", "PROJECT", "งานสองรอบ", "รายชื่อสินค้าและจำนวน", "A = 1 pcs")

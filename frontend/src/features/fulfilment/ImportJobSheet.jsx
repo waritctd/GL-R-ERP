@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -45,6 +45,9 @@ function Field({ id, label, children }) {
  */
 export function ImportJobSheet({ job, onClose, onSaved, showToast }) {
   const queryClient = useQueryClient();
+  // a save that finishes after this sheet was dismissed must not close or navigate away from a newer one
+  const live = useRef(true);
+  useEffect(() => () => { live.current = false; }, []);
   const editing = Boolean(job);
   const ir = job?.importRequest;
   const [purpose, setPurpose] = useState(job?.purpose ?? 'CUSTOMER');
@@ -104,7 +107,7 @@ export function ImportJobSheet({ job, onClose, onSaved, showToast }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.myIncoming() });
       queryClient.setQueryData(queryKeys.importJob(saved.importRequest.id), saved);
       showToast?.('success', editing ? 'บันทึกการแก้ไขแล้ว' : `สร้างงานนำเข้า ${saved.importRequest.docNumber} แล้ว`);
-      onSaved?.(saved);
+      if (live.current) onSaved?.(saved);
     },
     onError: (e) => showToast?.('error', e?.message ?? 'บันทึกไม่สำเร็จ'),
   });

@@ -380,7 +380,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
         <ImportJobSheet showToast={showToast} onClose={() => setCreatingJob(false)}
           onSaved={(job) => { setCreatingJob(false); navigate(`/fulfilment/jobs/${job.importRequest.id}`); }} />
       ) : null}
-      {showChecks ? (
+      {showChecks && run ? (
         <Modal title="รายการที่ต้องตรวจ" subtitle="จากการนำเข้าตารางของเข้า" onClose={() => setShowChecks(false)} placement="sheet-on-phone" testId="sheet-run-checks-sheet">
           <ul className="m-0 flex list-none flex-col p-0">
             {run.needsCheck.map((c) => (

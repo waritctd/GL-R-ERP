@@ -97,7 +97,21 @@ class ImportSheetBackfillService {
             throw new ImportSheetException("ไฟล์ใหญ่เกิน 10 MB");
         }
         byte[] bytes = Files.readAllBytes(file);
-        ParsedSheet parsed = ImportSheetPlanner.renameClashes(ImportSheetParser.parse(new ByteArrayInputStream(bytes), LocalDate.now(BANGKOK)));
+        ParsedSheet parsed = ImportSheetPlanner.renameClashes(ImportSheetParser.parse(new ByteArrayInputStream(bytes), LocalDate.now(BANGKOK)),
+            new ImportSheetPlanner.PortalCheck() {
+                @Override
+                public boolean exists(String docNumber) {
+                    return sheet.findIrs(List.of(docNumber)).containsKey(docNumber);
+                }
+
+                @Override
+                public boolean tiedTo(String docNumber, String backfillKey) {
+                    PortalIr ir = sheet.findIrs(List.of(docNumber)).get(docNumber);
+                    Long round = sheet.roundIdsByKey(List.of(backfillKey)).get(backfillKey);
+                    return ir != null && round != null
+                        && sheet.lotsOf(List.of(ir.id())).getOrDefault(ir.id(), List.of()).stream().anyMatch(l -> l.roundId() == round);
+                }
+            });
         Choices choices = choicesFile == null ? Choices.none() : json.readValue(choicesFile.toFile(), Choices.class);
         return new Loaded(bytes, sha256(bytes), parsed, normalizeRepCodes(choices));
     }
@@ -130,6 +144,7 @@ class ImportSheetBackfillService {
         int irsCreated;
         int irsAdopted;
         int dealsAdvanced;
+        int irsFilled;
         final List<Long> createdRoundIds = new ArrayList<>();
         final List<Long> createdIrIds = new ArrayList<>();
         final List<Map<String, Object>> adopted = new ArrayList<>();
@@ -145,6 +160,7 @@ class ImportSheetBackfillService {
             t.irsCreated = irsCreated;
             t.irsAdopted = irsAdopted;
             t.dealsAdvanced = dealsAdvanced;
+            t.irsFilled = irsFilled;
             t.createdRoundIds.addAll(createdRoundIds);
             t.createdIrIds.addAll(createdIrIds);
             t.adopted.addAll(adopted);
@@ -164,10 +180,15 @@ class ImportSheetBackfillService {
             throw new ImportSheetException("แผนไม่ตรงกับที่ตรวจไว้ (ข้อมูลในระบบหรือไฟล์เปลี่ยนไป) ไม่ได้บันทึกอะไร กรุณาดูรายงานใหม่");
         }
         UserPrincipal actor = actor(actorEmployeeId);
+        // the report is the only record of what ran: a folder that cannot be written is found out before anything is written
+        Files.createDirectories(reportDir);
+        if (!Files.isWritable(reportDir)) {
+            throw new ImportSheetException("เขียนรายงานในโฟลเดอร์นี้ไม่ได้ ไม่ได้บันทึกอะไร: " + reportDir);
+        }
         long runId = tx.execute(s -> sheet.insertRun(actor.id(), actor.name(), file.getFileName().toString(), in.bytes().length,
             in.sha256(), summaryJson(plan, new Tally(), List.of())));
 
-        Map<String, Long> newFactoryIds = tx.execute(s -> createNewFactories(plan, in, actor));
+        Map<String, Long> newFactoryIds = createNewFactories(plan, actor);
         Map<String, SheetBlock> sheetBlocks = new HashMap<>();
         Map<String, Integer> blocksPerDoc = new HashMap<>();
         for (SheetBlock b : in.parsed().blocks()) {
@@ -198,9 +219,16 @@ class ImportSheetBackfillService {
             writeTally(runId, plan, last, failed);
             sheet.finishRun(runId);
         });
-        Path_ paths = writeReport(plan, failed, reportDir, "COMMIT");
+        Path_ paths;
+        try {
+            paths = writeReport(plan, failed, reportDir, "COMMIT");
+        } catch (IOException e) {
+            // the writes are committed: say so with the run id rather than losing the outcome to a report error
+            log.error("Backfill run {} committed, but its report could not be written", runId, e);
+            paths = new Path_("", "");
+        }
         Totals done = new Totals(last.roundsCreated, last.roundsUpdated, last.irsCreated, last.irsAdopted,
-            plan.totals().irsFilled(), plan.totals().irsSkipped(), plan.totals().blocksExcluded() + failed.size(), last.dealsAdvanced);
+            last.irsFilled, plan.totals().irsSkipped(), plan.totals().blocksExcluded() + failed.size(), last.dealsAdvanced);
         return new Result("COMMIT", runId, done, plan.planSha256(), failed, paths);
     }
 
@@ -216,7 +244,8 @@ class ImportSheetBackfillService {
             e.divisionId(), false);
     }
 
-    private Map<String, Long> createNewFactories(Plan plan, Loaded in, UserPrincipal actor) {
+    /** One transaction per factory, so a factory that cannot be created fails only the blocks that need it. */
+    private Map<String, Long> createNewFactories(Plan plan, UserPrincipal actor) {
         Map<String, Long> out = new HashMap<>();
         for (BlockPlan b : plan.blocks()) {
             if (b.factoryId() != null) {
@@ -226,14 +255,17 @@ class ImportSheetBackfillService {
             if (out.containsKey(key)) {
                 continue;
             }
-            FactoryChoice choice = in.choices().factoryChoices().entrySet().stream()
-                .filter(e -> key.equals(ImportRequestService.normalizeFactoryName(e.getKey())))
-                .map(Map.Entry::getValue).findFirst()
-                .orElse(new FactoryChoice(null, true, "ZZ", ImportSheetPlanner.UNKNOWN_COUNTRY_NOTE));
-            factories.lockFactoryName(key);
-            long id = factories.findByName(b.factoryName()).map(f -> f.id()).orElseGet(() ->
-                factories.createFromImportRequest(b.factoryName(), choice.countryCode(), choice.countryOther(), actor.id()));
-            out.put(key, id);
+            try {
+                // the country the reviewed plan showed, not a fresh read of the choices
+                Long id = tx.execute(s -> {
+                    factories.lockFactoryName(key);
+                    return factories.findByName(b.factoryName()).map(f -> f.id()).orElseGet(() ->
+                        factories.createFromImportRequest(b.factoryName(), b.newFactoryCountry(), b.newFactoryCountryNote(), actor.id()));
+                });
+                out.put(key, id);
+            } catch (RuntimeException e) {
+                log.error("Backfill could not create factory for row {}", b.firstRow(), e);
+            }
         }
         return out;
     }
@@ -241,8 +273,12 @@ class ImportSheetBackfillService {
     private void applyBlock(BlockPlan block, SheetBlock source, Choices choices, Map<String, Integer> blocksPerDoc,
                             Map<String, Long> newFactoryIds, Map<String, Long> created, Tally t, UserPrincipal actor) {
         sheet.lockRun();
-        long factoryId = block.factoryId() != null ? block.factoryId()
+        Long resolved = block.factoryId() != null ? block.factoryId()
             : newFactoryIds.get(ImportRequestService.normalizeFactoryName(block.factoryName()));
+        if (resolved == null) {
+            throw new IllegalStateException("สร้างโรงงานของยี่ห้อนี้ไม่สำเร็จ");
+        }
+        long factoryId = resolved;
         List<String> docs = source.irs().stream().map(SheetIr::docNumber).toList();
         Long blockRound = sheet.roundIdsByKey(List.of(block.backfillKey())).get(block.backfillKey());
 
@@ -296,10 +332,10 @@ class ImportSheetBackfillService {
         }
         Map<Long, TicketState> before = sheet.ticketStates(tickets);
         for (IrPlan p : fresh) {
-            stored.raiseDocSequence(p.docNumber());
-            t.sequenceBumps.add(p.docNumber());
             switch (p.action()) {
                 case ImportSheetPlanner.CREATE -> {
+                    stored.raiseDocSequence(p.docNumber()); // only a number this run really imports moves the portal's counter
+                    t.sequenceBumps.add(p.docNumber());
                     SheetIr ir = source.irs().stream().filter(x -> x.docNumber().equals(p.docNumber())).findFirst().orElseThrow();
                     long id = stored.insertImportJob(newJob(p, ir, source, factoryId, block.factoryName(), choices, actor));
                     placeLines(id, blockRound, p.lines());
@@ -323,6 +359,7 @@ class ImportSheetBackfillService {
                     before2.put("roundId", p.fromRoundId());
                     before2.put("before", sheet.roundSnapshot(p.fromRoundId()));
                     t.filledInPlace.add(before2);
+                    t.irsFilled++;
                     sheet.fillRound(p.fromRoundId(), block.facts(), actor.id(), actor.name());
                     addDocuments(p.fromRoundId(), block, actor, t);
                     touchedRounds.add(p.fromRoundId());
@@ -359,7 +396,8 @@ class ImportSheetBackfillService {
     private static void requireSamePlan(List<IrPlan> planned, List<IrPlan> fresh) {
         for (int i = 0; i < planned.size(); i++) {
             if (!planned.get(i).action().equals(fresh.get(i).action())
-                || !Objects.equals(planned.get(i).fromRoundId(), fresh.get(i).fromRoundId())) {
+                || !Objects.equals(planned.get(i).fromRoundId(), fresh.get(i).fromRoundId())
+                || !Objects.equals(planned.get(i).allocation(), fresh.get(i).allocation())) {
                 throw new IllegalStateException("ข้อมูลของ " + planned.get(i).docNumber() + " เปลี่ยนระหว่างนำเข้า");
             }
         }

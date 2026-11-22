@@ -15,8 +15,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.DivisionAccessPolicy;
@@ -100,7 +102,8 @@ public class ImportJobService {
 
     // ── read ────────────────────────────────────────────────────────────────────────────────────────────
 
-    /** The same read rule as any no-job import request. */
+    /** The same read rule as any no-job import request. One snapshot, so the check and every read see the same edit. */
+    @Transactional(isolation = Isolation.REPEATABLE_READ, readOnly = true)
     public ImportJobDto get(long id, UserPrincipal actor) {
         ImportRequestDto row = irService.get(id, actor);
         if (row.ticketId() != null) {
@@ -195,10 +198,15 @@ public class ImportJobService {
         String doc = request.docNumber() == null || request.docNumber().isBlank()
             ? stored.nextDocNumber(today.getYear() + 543) : requireFreeNumber(request.docNumber());
         stored.raiseDocSequence(doc);
-        long id = stored.insertImportJob(new NewImportJob(factory.id(), factory.factoryName(), purpose, PURPOSE_LABELS.get(purpose),
-            request.requesterId(), requesterName, note, request.wantedBy(),
-            request.wantedBy() == null ? null : ThaiText.date(request.wantedBy()), doc, received, request.depositReceivedOn(),
-            actor.id(), actor.name(), actor.email(), "IMPORT"));
+        long id;
+        try {
+            id = stored.insertImportJob(new NewImportJob(factory.id(), factory.factoryName(), purpose, PURPOSE_LABELS.get(purpose),
+                request.requesterId(), requesterName, note, request.wantedBy(),
+                request.wantedBy() == null ? null : ThaiText.date(request.wantedBy()), doc, received, request.depositReceivedOn(),
+                actor.id(), actor.name(), actor.email(), "IMPORT"));
+        } catch (DuplicateKeyException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "เลขที่ใบขอซื้อนี้ถูกใช้แล้ว"); // two people took the same number at once
+        }
         List<Long> itemIds = new ArrayList<>();
         for (JobLine l : lines) {
             itemIds.add(stored.appendItem(id, l.code(), l.size(), l.qty(), l.unit(), null));
@@ -276,7 +284,7 @@ public class ImportJobService {
         ImportRequestDto row = job.row();
         var meta = stored.findNoProjectMeta(id).orElseThrow();
         List<String> clear = request.clear() == null ? List.of() : request.clear();
-        if (!CLEARABLE.containsAll(clear)) {
+        if (clear.stream().anyMatch(Objects::isNull) || !CLEARABLE.containsAll(clear)) {
             throw bad("ล้างข้อมูลช่องนี้ไม่ได้");
         }
         boolean rawSalesOrder = "PORTAL".equals(meta.source());
@@ -291,8 +299,8 @@ public class ImportJobService {
         String requesterName = row.requestedByName();
         if (clear.contains("requesterId")) {
             requesterName = null;
-        } else if (request.requesterId() != null) {
-            requesterName = requesterName(request.requesterId());
+        } else if (request.requesterId() != null && !request.requesterId().equals(jobs.requesterOf(id))) {
+            requesterName = requesterName(request.requesterId()); // a requester left as is is not judged again, even if they were deactivated since
         }
 
         LocalDate received = row.firstIssuedDate();
@@ -337,17 +345,17 @@ public class ImportJobService {
         diff(before, after, "wantedBy", meta.wantedBy(), wanted);
         diff(before, after, "docNumber", row.docNumber(), doc);
         diff(before, after, "factory", row.factoryName(), factoryName);
-        if (!Objects.equals(requester, jobs.requesterOf(id)) && !after.containsKey("requester")) {
-            // two people can share a display name: the id is what changed
-            before.put("requester", row.requestedByName());
-            after.put("requester", requesterName);
-        }
+        diff(before, after, "requesterId", jobs.requesterOf(id), requester); // two people can share a name: the id says who
         if (after.isEmpty() && before.isEmpty()) {
             return dto(row, actor);
         }
 
-        jobs.updateHeader(id, new ImportJobRepository.JobHeader(purpose, PURPOSE_LABELS.get(purpose), note, requester, requesterName,
-            received, deposit, wanted, wantedText, doc, factoryId, factoryName));
+        try {
+            jobs.updateHeader(id, new ImportJobRepository.JobHeader(purpose, PURPOSE_LABELS.get(purpose), note, requester, requesterName,
+                received, deposit, wanted, wantedText, doc, factoryId, factoryName));
+        } catch (DuplicateKeyException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "เลขที่ใบขอซื้อนี้ถูกใช้แล้ว");
+        }
         if (!Objects.equals(received, row.firstIssuedDate()) && !job.roundIds().isEmpty()) {
             roundService.settleImportJob(rounds.lockImportRequests(job.roundIds(), List.of(id)), job.roundIds(), actor);
         }
@@ -443,11 +451,9 @@ public class ImportJobService {
         List<Long> emptied = new ArrayList<>();
         for (JobLot l : lots) {
             if (rounds.lotCount(l.roundId()) == 1) {
-                if (rounds.hasOwnData(l.roundId())) {
-                    throw new ApiException(HttpStatus.CONFLICT,
-                        "รายการนี้เป็นล็อตสุดท้ายของรอบ และรอบนี้มีเอกสารหรือข้อมูลที่กรอกไว้ กรุณาจัดการที่หน้ารอบขนส่งก่อน");
+                if (!rounds.hasOwnData(l.roundId())) {
+                    emptied.add(l.roundId()); // a round with a document or typed facts stays, as the spec says
                 }
-                emptied.add(l.roundId());
             }
         }
         lots.forEach(l -> rounds.deleteLot(l.lotId()));
