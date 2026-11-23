@@ -284,6 +284,38 @@ class ImportSheetBackfillIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     @Test
+    void twoFactoriesWithTheSameNormalizedNameAreNeverPickedSilently() throws IOException {
+        jdbc.update("INSERT INTO price_catalog.factories (name, country, default_currency) VALUES ('Twin Co', 'IT', 'EUR'), ('TWIN CO', 'IT', 'EUR')", Map.of());
+        Path file = file(new ImportSheetTestBook()
+            .row("IR NO.", "69971", "ยี่ห้อ", "Twin Co", "รายชื่อสินค้าและจำนวน", "x = 1 pcs"));
+
+        Result dry = service.dryRun(file, null, dir.resolve("r1"));
+
+        assertThat(dry.totals().blocksExcluded()).isEqualTo(1);
+    }
+
+    @Test
+    void aRenumberedBlockKeepsItsReserveNumberWhenALowerOneBecomesFree() throws IOException {
+        jdbc.update("INSERT INTO sales.import_request (factory_id, factory_name, brand, status, doc_number, issue_date, first_issued_date, import_step, import_step_at, order_purpose, purpose_note, source) "
+            + "VALUES (:f, 'Round Factory', 'Round Factory', 'ISSUED', 'IR69981-90', current_date, current_date, 'CONTACTED', current_date, 'STOCK', 'มาก่อน', 'IMPORT')",
+            Map.of("f", factory));
+        Path file = file(new ImportSheetTestBook()
+            .row("IR NO.", "69981", "ยี่ห้อ", "Round Factory", "Sale", "S1", "PROJECT", "งานแรก", "รายชื่อสินค้าและจำนวน", "x = 1 pcs")
+            .blank()
+            .row("IR NO.", "69981", "ยี่ห้อ", "Round Factory", "Sale", "S2", "PROJECT", "งานสอง", "รายชื่อสินค้าและจำนวน", "y = 2 pcs"));
+        Result dry = service.dryRun(file, null, dir.resolve("r1"));
+        service.commit(file, null, dir.resolve("r2"), actorId, dry.planSha256());
+        assertThat(count("SELECT count(*) FROM sales.import_request WHERE doc_number = 'IR69981-91'")).isEqualTo(1);
+
+        jdbc.update("UPDATE sales.import_request SET doc_number = 'IR60001' WHERE doc_number = 'IR69981-90'", Map.of());
+        Result again = service.dryRun(file, null, dir.resolve("r3"));
+        service.commit(file, null, dir.resolve("r4"), actorId, again.planSha256());
+
+        assertThat(count("SELECT count(*) FROM sales.import_request WHERE doc_number = 'IR69981-91'")).isEqualTo(1);
+        assertThat(count("SELECT count(*) FROM sales.import_request WHERE doc_number = 'IR69981-90'")).isZero();
+    }
+
+    @Test
     void twoChoicesForOneNewFactoryWithDifferentCountriesExcludeTheLaterBlock() throws IOException {
         Path choices = dir.resolve("choices-country.json");
         Files.writeString(choices, "{\"factoryChoices\":{\"Acme\":{\"new\":true,\"countryCode\":\"IT\"},\"ACME\":{\"new\":true,\"countryCode\":\"CN\"}}}");

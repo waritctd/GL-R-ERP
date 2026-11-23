@@ -60,9 +60,9 @@ function Fact({ label, value }) {
   );
 }
 
-function ItemEditor({ draft, setDraft, locked }) {
+function ItemEditor({ draft, setDraft, locked, pending = false }) {
   return (
-    <div className="grid grid-cols-2 gap-2">
+    <fieldset disabled={pending} className="m-0 grid grid-cols-2 gap-2 border-0 p-0">
       <div className="col-span-2 flex flex-col gap-1">
         <label htmlFor="item-code" className="text-2xs text-text-muted">สินค้า</label>
         <input id="item-code" className="min-h-11 w-full text-base" maxLength={255} value={draft.code} onChange={(e) => setDraft({ ...draft, code: e.target.value })} />
@@ -80,7 +80,7 @@ function ItemEditor({ draft, setDraft, locked }) {
         <input id="item-unit" className="min-h-11 w-full text-base" maxLength={30} value={draft.unit} onChange={(e) => setDraft({ ...draft, unit: e.target.value })} />
       </div>
       {locked ? <small className="col-span-2 text-text-muted">ของถึงโกดังแล้ว แก้จำนวนไม่ได้</small> : null}
-    </div>
+    </fieldset>
   );
 }
 
@@ -193,7 +193,7 @@ function ImportJobPageBody({ id, showToast }) {
   ) : null);
 
   const columns = [
-    { key: 'item', header: 'สินค้า', render: (i) => (editItem === i.id ? <ItemEditor draft={draft} setDraft={setDraft} locked={draft.locked} /> : (
+    { key: 'item', header: 'สินค้า', render: (i) => (editItem === i.id ? <ItemEditor draft={draft} setDraft={setDraft} locked={draft.locked} pending={saveItem.isPending} /> : (
       <span className="flex flex-col gap-0.5"><b className="text-sm">{[i.code, i.size].filter(Boolean).join(' ')}</b>{i.note ? <small className="text-text-muted">{i.note}</small> : null}</span>
     )) },
     { key: 'qty', header: 'จำนวน', render: (i) => <b className="tabular-nums">{formatQty(i.qty)} {i.unit}</b> },
@@ -203,7 +203,7 @@ function ImportJobPageBody({ id, showToast }) {
   ];
   const card = (i) => (
     <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3" data-testid="job-item-card">
-      {editItem === i.id ? <><ItemEditor draft={draft} setDraft={setDraft} locked={draft.locked} />{editorActions}</> : (
+      {editItem === i.id ? <><ItemEditor draft={draft} setDraft={setDraft} locked={draft.locked} pending={saveItem.isPending} />{editorActions}</> : (
         <>
           <div className="flex items-start justify-between gap-3">
             <span className="flex min-w-0 flex-col gap-0.5"><b className="text-sm">{[i.code, i.size].filter(Boolean).join(' ')}</b>
@@ -251,7 +251,7 @@ function ImportJobPageBody({ id, showToast }) {
           <DataTable columns={columns} rows={job.items} getRowKey={(i) => i.id} gridClassName={ITEMS_GRID} mobileCard={card} emptyState={{ icon: 'check', title: 'ไม่มีรายการ' }} />
           {editItem === 'new' ? (
             <Panel className="flex flex-col gap-3" data-testid="item-new">
-              <ItemEditor draft={draft} setDraft={setDraft} locked={false} />
+              <ItemEditor draft={draft} setDraft={setDraft} locked={false} pending={saveItem.isPending} />
               {editorActions}
             </Panel>
           ) : null}

@@ -50,7 +50,7 @@ class ImportJobIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final LocalDate TODAY = LocalDate.now(ZoneId.of("Asia/Bangkok"));
     /** A manual number in this year's counter: the two digit Buddhist year, so it stays valid after 1 January. */
-    private static final String LATE = "IR" + (TODAY.getYear() + 543) % 100 + "987";
+    private static final String LATE = String.format(java.util.Locale.ROOT, "IR%02d987", (TODAY.getYear() + 543) % 100);
 
     private ImportJobService jobs;
     private CompanyIncomingService company;

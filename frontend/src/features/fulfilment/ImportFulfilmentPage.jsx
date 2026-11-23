@@ -224,6 +224,14 @@ export function ImportFulfilmentPage({ user, showToast }) {
         )}
       />
 
+      {runQuery.isError ? (
+        <Panel className="border-warning-border bg-warning-bg" data-testid="sheet-run-error">
+          <p className="m-0 flex flex-wrap items-center gap-3 text-sm">
+            โหลดผลการนำเข้าจากตารางของเข้าไม่สำเร็จ — {runQuery.error?.message || 'ลองอีกครั้ง'}
+            <Button type="button" size="sm" variant="secondary" onClick={() => runQuery.refetch()}>ลองอีกครั้ง</Button>
+          </p>
+        </Panel>
+      ) : null}
       {run ? (
         <Panel className={cn('flex flex-wrap items-center justify-between gap-3', run.blocksFailed > 0 ? 'border-warning-border bg-warning-bg' : 'border-info-border bg-info-bg')} data-testid="sheet-run-banner">
           <span className="flex min-w-0 flex-col gap-0.5">

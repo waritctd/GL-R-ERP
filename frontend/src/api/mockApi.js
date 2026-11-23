@@ -3253,7 +3253,7 @@ function mockOrigin(ir) {
 let mockNoProjectDocSeq = 900;
 // One allocator over every stored IR number, so an override on a project IR can never be issued again here.
 function mockAllocateNoProjectDocNumber() {
-  const yy = String(new Date().getFullYear() + 543).slice(2);
+  const yy = String(Number(mockTodayIso().slice(0, 4)) + 543).slice(2);
   let docNumber;
   do { docNumber = `IR${yy}${String(mockNoProjectDocSeq++).padStart(3, '0')}`; } while (mockImportRequests.some((r) => r.docNumber === docNumber));
   return docNumber;
@@ -16490,7 +16490,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         fail(`เลขที่ใบขอซื้อ ${override} ถูกใช้แล้ว`, 409);
       }
       const today = new Date().toISOString().slice(0, 10);
-      const thaiYear = String(new Date().getFullYear() + 543).slice(-2);
+      const thaiYear = String(Number(mockTodayIso().slice(0, 4)) + 543).slice(-2);
       let seqForYear = mockImportRequests.filter((r) => r.docNumber?.startsWith(`IR${thaiYear}`)).length + 1;
       while (!override && mockImportRequests.some((r) => r.docNumber === `IR${thaiYear}${String(seqForYear).padStart(3, '0')}`)) seqForYear += 1;
       const docNumber = override || `IR${thaiYear}${String(seqForYear).padStart(3, '0')}`;
