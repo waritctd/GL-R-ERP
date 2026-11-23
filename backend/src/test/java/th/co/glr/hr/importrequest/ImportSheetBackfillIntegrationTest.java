@@ -284,6 +284,20 @@ class ImportSheetBackfillIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     @Test
+    void twoChoicesForOneNewFactoryWithDifferentCountriesExcludeTheLaterBlock() throws IOException {
+        Path choices = dir.resolve("choices-country.json");
+        Files.writeString(choices, "{\"factoryChoices\":{\"Acme\":{\"new\":true,\"countryCode\":\"IT\"},\"ACME\":{\"new\":true,\"countryCode\":\"CN\"}}}");
+        Path file = file(new ImportSheetTestBook()
+            .row("IR NO.", "69961", "ยี่ห้อ", "Acme", "รายชื่อสินค้าและจำนวน", "x = 1 pcs")
+            .blank()
+            .row("IR NO.", "69962", "ยี่ห้อ", "ACME", "รายชื่อสินค้าและจำนวน", "y = 1 pcs"));
+
+        Result dry = service.dryRun(file, choices, dir.resolve("r1"));
+
+        assertThat(dry.totals().blocksExcluded()).isEqualTo(1);
+    }
+
+    @Test
     void aBlockOfASplitIrThatDidNotCommitIsAppendedByTheNextRun() throws IOException {
         ImportSheetTestBook first = new ImportSheetTestBook()
             .row("IR NO.", "69951", "ยี่ห้อ", "Round Factory", "Sale", "S7", "PROJECT", "งานสองรอบ", "รายชื่อสินค้าและจำนวน", "A = 1 pcs");

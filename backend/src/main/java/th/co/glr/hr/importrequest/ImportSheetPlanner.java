@@ -85,6 +85,7 @@ class ImportSheetPlanner {
         List<Excluded> excluded = new ArrayList<>();
         Set<String> unresolvedBrands = new LinkedHashSet<>();
         Set<String> unresolvedCodes = new LinkedHashSet<>();
+        Map<String, FactoryChoice> newFactoryChoice = new HashMap<>();
 
         Map<String, Integer> blocksPerDoc = new HashMap<>();
         for (SheetBlock b : parsed.blocks()) {
@@ -106,11 +107,23 @@ class ImportSheetPlanner {
                         ? "ไม่ได้ระบุยี่ห้อ จึงไม่รู้ว่าเป็นโรงงานไหน"
                         : "ยี่ห้อ \"" + label + "\" ที่เลือกไว้ใช้ไม่ได้ (โรงงานหรือประเทศไม่ถูกต้อง) หรือตรงกับโรงงานหลายแห่ง"));
                 } else {
+                    String conflict = null;
                     if (f.id() == null) {
-                        unresolvedBrands.add(f.name());
+                        String key = ImportRequestService.normalizeFactoryName(f.name());
+                        FactoryChoice seen = newFactoryChoice.putIfAbsent(key, f.newChoice());
+                        if (seen != null && !(Objects.equals(seen.countryCode(), f.newChoice().countryCode())
+                            && Objects.equals(seen.countryOther(), f.newChoice().countryOther()))) {
+                            conflict = "โรงงานใหม่ \"" + f.name() + "\" ถูกเลือกประเทศไม่ตรงกันในหลายกลุ่มแถว";
+                        } else {
+                            unresolvedBrands.add(f.name());
+                        }
                     }
-                    factoryOf.put(b.firstRow(), f);
-                    usable.add(b);
+                    if (conflict != null) {
+                        excluded.add(new Excluded(b.firstRow(), blockName(b), conflict));
+                    } else {
+                        factoryOf.put(b.firstRow(), f);
+                        usable.add(b);
+                    }
                 }
             }
         }
@@ -217,6 +230,7 @@ class ImportSheetPlanner {
         parsed.blocks().forEach(b -> b.irs().forEach(ir -> taken.add(ir.docNumber())));
         Map<String, Set<String>> anchorCodes = new HashMap<>();
         Map<Integer, Map<String, String>> renames = new HashMap<>();
+        Map<Integer, String> noSuffix = new HashMap<>();
         for (SheetBlock b : parsed.blocks()) {
             if (b.blockedReason() != null) {
                 continue;
@@ -245,15 +259,22 @@ class ImportSheetPlanner {
                     if (fresh != null) {
                         taken.add(fresh);
                         renames.computeIfAbsent(b.firstRow(), k -> new HashMap<>()).put(ir.docNumber(), fresh);
+                    } else {
+                        noSuffix.put(b.firstRow(), "เลข " + ir.docNumber() + " ซ้ำกับกลุ่มแถวอื่นและไม่มีเลขสำรอง (-90 ถึง -99) ว่างแล้ว");
                     }
                 }
             }
         }
-        if (renames.isEmpty()) {
+        if (renames.isEmpty() && noSuffix.isEmpty()) {
             return parsed;
         }
         List<SheetBlock> out = new ArrayList<>();
         for (SheetBlock b : parsed.blocks()) {
+            if (noSuffix.containsKey(b.firstRow())) {
+                out.add(new SheetBlock(b.firstRow(), b.backfillKey(), b.brands(), b.facts(), b.proformas(), b.invoices(), b.irs(), b.warnings(),
+                    noSuffix.get(b.firstRow()))); // left out and reported, never merged into the other IR
+                continue;
+            }
             Map<String, String> change = renames.get(b.firstRow());
             if (change == null) {
                 out.add(b);

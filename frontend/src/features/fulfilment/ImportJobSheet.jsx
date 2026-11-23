@@ -59,6 +59,12 @@ export function ImportJobSheet({ job, onClose, onSaved, showToast }) {
   const [receivedOn, setReceivedOn] = useState(ir?.firstIssuedDate ?? bangkokTodayIso());
   const [depositOn, setDepositOn] = useState(ir?.depositReceivedDate ?? '');
   const [wantedBy, setWantedBy] = useState(job?.wantedBy ?? '');
+  // what the sheet showed when it opened: a save sends only what the editor changed from this, so a stale blank never erases a newer value
+  const [initial] = useState(() => ({
+    purpose: job?.purpose ?? 'CUSTOMER', note: job?.purposeNote ?? '', requesterId: job?.requesterId ? String(job.requesterId) : '',
+    factoryId: ir?.factoryId ? String(ir.factoryId) : '', docNumber: ir?.docNumber ?? '', receivedOn: ir?.firstIssuedDate ?? '',
+    depositOn: ir?.depositReceivedDate ?? '', wantedBy: job?.wantedBy ?? '',
+  }));
   const [lines, setLines] = useState(() => [blankLine()]);
   const [roundMode, setRoundMode] = useState('NONE');
   const [roundId, setRoundId] = useState('');
@@ -75,8 +81,8 @@ export function ImportJobSheet({ job, onClose, onSaved, showToast }) {
     !note.trim() && 'โครงการ / ลูกค้า',
     !factoryId && 'โรงงาน',
     !receivedOn && 'วันที่ได้รับใบขอซื้อ',
-    receivedOn !== ir?.firstIssuedDate && receivedOn > bangkokTodayIso() && 'วันที่ได้รับต้องไม่เป็นวันในอนาคต',
-    numberMode === 'TYPED' && typed !== ir?.docNumber && !DOC_NUMBER.test(typed) && 'เลขใบขอซื้อ (เช่น IR69412)',
+    receivedOn !== initial.receivedOn && receivedOn > bangkokTodayIso() && 'วันที่ได้รับต้องไม่เป็นวันในอนาคต',
+    numberMode === 'TYPED' && typed !== initial.docNumber && !DOC_NUMBER.test(typed) && 'เลขใบขอซื้อ (เช่น IR69412)',
     !editing && (!lines.some(lineOk) || lines.some((l) => (l.code.trim() || l.qty) && !lineOk(l))) && 'สินค้าและจำนวน',
     !editing && roundMode === 'EXISTING' && !roundId && 'รอบขนส่ง',
   ].filter(Boolean);
@@ -92,15 +98,17 @@ export function ImportJobSheet({ job, onClose, onSaved, showToast }) {
           round: { mode: roundMode, roundId: roundMode === 'EXISTING' ? Number(roundId) : null },
         });
       }
+      const body = {};
       const clear = [];
-      if (!requesterId && job.requesterId) clear.push('requesterId');
-      if (!depositOn && ir.depositReceivedDate) clear.push('depositReceivedOn');
-      if (!wantedBy && job.wantedBy) clear.push('wantedBy');
-      return api.importJobs.update(ir.id, {
-        purpose, purposeNote: note.trim(), requesterId: requesterId ? Number(requesterId) : null, receivedOn,
-        depositReceivedOn: depositOn || null, wantedBy: wantedBy || null, docNumber: typed,
-        factoryId: factoryLocked ? null : Number(factoryId), clear,
-      });
+      if (purpose !== initial.purpose) body.purpose = purpose;
+      if (note.trim() !== initial.note) body.purposeNote = note.trim();
+      if (requesterId !== initial.requesterId) { if (requesterId) body.requesterId = Number(requesterId); else clear.push('requesterId'); }
+      if (receivedOn !== initial.receivedOn) body.receivedOn = receivedOn;
+      if (depositOn !== initial.depositOn) { if (depositOn) body.depositReceivedOn = depositOn; else clear.push('depositReceivedOn'); }
+      if (wantedBy !== initial.wantedBy) { if (wantedBy) body.wantedBy = wantedBy; else clear.push('wantedBy'); }
+      if (typed !== initial.docNumber) body.docNumber = typed;
+      if (!factoryLocked && factoryId !== initial.factoryId) body.factoryId = Number(factoryId);
+      return api.importJobs.update(ir.id, { ...body, clear });
     },
     onSuccess: (saved) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.shipmentRounds() });

@@ -152,6 +152,7 @@ class ImportSheetBackfillService {
         final List<Map<String, Object>> updatedRounds = new ArrayList<>();
         final List<Map<String, Object>> dealsMoved = new ArrayList<>();
         final List<Long> createdDocumentIds = new ArrayList<>();
+        final List<Long> appendedItemIds = new ArrayList<>();
         final List<String> sequenceBumps = new ArrayList<>();
 
         Tally copy() {
@@ -169,6 +170,7 @@ class ImportSheetBackfillService {
             t.updatedRounds.addAll(updatedRounds);
             t.dealsMoved.addAll(dealsMoved);
             t.createdDocumentIds.addAll(createdDocumentIds);
+            t.appendedItemIds.addAll(appendedItemIds);
             t.sequenceBumps.addAll(sequenceBumps);
             return t;
         }
@@ -352,7 +354,10 @@ class ImportSheetBackfillService {
                 }
                 case ImportSheetPlanner.CREATE_MORE -> {
                     long id = p.importRequestId() != null ? p.importRequestId() : created.get(p.docNumber());
-                    placeLines(id, blockRound, p.lines());
+                    List<Long> appended = placeLines(id, blockRound, p.lines());
+                    if (p.importRequestId() != null) {
+                        t.appendedItemIds.addAll(appended); // lines added to an IR an earlier run made: a targeted undo removes just these
+                    }
                     irIds.add(id);
                 }
                 case ImportSheetPlanner.ADOPT -> {
@@ -430,11 +435,14 @@ class ImportSheetBackfillService {
         return earliest == null || earliest.isAfter(today) ? today : earliest;
     }
 
-    private void placeLines(long importRequestId, Long roundId, List<SheetLine> lines) {
+    private List<Long> placeLines(long importRequestId, Long roundId, List<SheetLine> lines) {
+        List<Long> items = new ArrayList<>();
         for (SheetLine l : lines) {
             long item = stored.appendItem(importRequestId, l.code(), null, l.qty(), l.unit(), l.note());
             rounds.insertLot(roundId, importRequestId, item, l.qty());
+            items.add(item);
         }
+        return items;
     }
 
     private void adopt(IrPlan p, Long blockRound, List<PortalLot> lots, Tally t) {
@@ -477,6 +485,7 @@ class ImportSheetBackfillService {
         s.put("createdRoundIds", t.createdRoundIds);
         s.put("createdIrIds", t.createdIrIds);
         s.put("createdDocumentIds", t.createdDocumentIds);
+        s.put("appendedItemIds", t.appendedItemIds);
         s.put("adopted", t.adopted);
         s.put("filledInPlace", t.filledInPlace);
         s.put("updatedRounds", t.updatedRounds);
