@@ -608,40 +608,6 @@ public class ImportRequestRepository {
             Map.of("ti", ticketItemId, "i", lineId));
     }
 
-    /** A no-project order as pairing sees it, locked FOR UPDATE for the rest of the transaction; null when there is none. */
-    public record OrderToPair(String status, Long ticketId, String purpose, String purposeNote, Long requesterId,
-                              String docNumber, String factoryName, List<Long> itemIds) {}
-
-    public OrderToPair lockOrderToPair(long importRequestId) {
-        List<OrderToPair> rows = jdbc.query("""
-            SELECT status, ticket_id, order_purpose, purpose_note, requester_id, doc_number, factory_name FROM sales.import_request
-             WHERE import_request_id = :id FOR UPDATE
-            """, Map.of("id", importRequestId), (rs, n) -> new OrderToPair(rs.getString("status"), (Long) rs.getObject("ticket_id"),
-                rs.getString("order_purpose"), rs.getString("purpose_note"), (Long) rs.getObject("requester_id"),
-                rs.getString("doc_number"), rs.getString("factory_name"), List.of()));
-        if (rows.isEmpty()) {
-            return null;
-        }
-        OrderToPair o = rows.get(0);
-        return new OrderToPair(o.status(), o.ticketId(), o.purpose(), o.purposeNote(), o.requesterId(), o.docNumber(), o.factoryName(),
-            jdbc.queryForList("SELECT import_request_item_id FROM sales.import_request_item WHERE import_request_id = :id ORDER BY seq",
-                Map.of("id", importRequestId), Long.class));
-    }
-
-    public List<Long> roundIdsOfIr(long importRequestId) {
-        return jdbc.queryForList("SELECT DISTINCT shipment_round_id FROM sales.shipment_lot WHERE import_request_id = :id ORDER BY 1",
-            Map.of("id", importRequestId), Long.class);
-    }
-
-    /** Moves the order onto the deal and links each line to the deal line it is for. Lots, rounds and receipts stay as they are. */
-    public void pairToTicket(long importRequestId, long ticketId, Map<Long, Long> ticketItemByIrItem) {
-        jdbc.update("UPDATE sales.import_request SET ticket_id = :t, updated_at = now() WHERE import_request_id = :id AND ticket_id IS NULL",
-            Map.of("t", ticketId, "id", importRequestId));
-        ticketItemByIrItem.forEach((irItem, ticketItem) -> jdbc.update(
-            "UPDATE sales.import_request_item SET ticket_item_id = :ti WHERE import_request_item_id = :i",
-            Map.of("ti", ticketItem, "i", irItem)));
-    }
-
     public List<Long> ticketItemIds(long ticketId) {
         return jdbc.queryForList("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId), Long.class);
     }

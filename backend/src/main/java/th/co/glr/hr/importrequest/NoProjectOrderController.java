@@ -19,11 +19,8 @@ public class NoProjectOrderController {
     private final NoProjectOrderService orders;
     private final MyIncomingService incoming;
     private final SessionContext sessions;
-    private final ImportRequestService importRequests;
 
-    public NoProjectOrderController(NoProjectOrderService orders, MyIncomingService incoming, SessionContext sessions,
-                                    ImportRequestService importRequests) {
-        this.importRequests = importRequests;
+    public NoProjectOrderController(NoProjectOrderService orders, MyIncomingService incoming, SessionContext sessions) {
         this.orders = orders;
         this.incoming = incoming;
         this.sessions = sessions;
@@ -39,12 +36,11 @@ public class NoProjectOrderController {
         return Map.of("importRequest", orders.withdraw(id, sessions.requireUser(session)));
     }
 
-    /** Track now, pair later: a PROJECT order onto its real deal, line by line. No undo; see ImportRequestService#pairToDeal. */
+    /** Pairing a PROJECT order to a deal is not switched on yet: answers 409 before any lock or write. */
     @PostMapping("/no-project-orders/{id}/pair-to-deal")
-    Map<String, Boolean> pairToDeal(@org.springframework.web.bind.annotation.PathVariable long id,
-                                    @RequestBody ImportRequestService.PairToDealRequest request, HttpSession session) {
-        importRequests.pairToDeal(id, request, sessions.requireUser(session));
-        return Map.of("paired", true);
+    Map<String, Boolean> pairToDeal(@org.springframework.web.bind.annotation.PathVariable long id, HttpSession session) {
+        sessions.requireUser(session);
+        throw new th.co.glr.hr.common.ApiException(org.springframework.http.HttpStatus.CONFLICT, "ยังไม่เปิดใช้");
     }
 
     @GetMapping("/my-incoming")

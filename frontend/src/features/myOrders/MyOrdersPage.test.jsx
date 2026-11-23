@@ -14,9 +14,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     ...actual,
     api: {
       myIncoming: { get: vi.fn() },
-      noProjectOrders: { create: vi.fn(), withdraw: vi.fn(), pairToDeal: vi.fn() },
-      tickets: { comment: vi.fn(), list: vi.fn(), get: vi.fn() },
-      storedImportRequests: { get: vi.fn() },
+      noProjectOrders: { create: vi.fn(), withdraw: vi.fn() },
+      tickets: { comment: vi.fn() },
       factoryConfigs: { names: vi.fn() },
     },
   };
@@ -100,27 +99,6 @@ describe('การขนส่ง (มุมมองฝ่ายขาย)', (
     fireEvent.change(screen.getByTestId('orders-filter-rep'), { target: { value: '9' } });
     expect(screen.queryByText('IR-TEST-001')).toBeNull();
     expect(screen.getAllByText('IR-TEST-002').length).toBeGreaterThan(0);
-  });
-
-  it('pairs a project order that has no deal yet to a deal of the same project, line by line', async () => {
-    vi.mocked(api.myIncoming.get).mockResolvedValue({ rows: [{ ...base, kind: 'PROJECT', ticketId: null, ticketCode: null, who: 'โครงการ ทดสอบ', docNumber: 'IR-TEST-009',
-      importRequestId: 19, waiting: true, product: 'Slate Grey 60x60', unit: 'แผ่น', qty: 5, lot: null, canWithdraw: false, canPair: true, repId: 5, repName: 'คุณ ทดสอบ' }] });
-    vi.mocked(api.tickets.list).mockResolvedValue({ tickets: [
-      { id: 301, code: 'PR-TEST-0301', projectName: 'โครงการ ทดสอบ', lifecycle: 'ACTIVE' }, { id: 302, code: 'PR-TEST-0302', projectName: 'โครงการ อื่น', lifecycle: 'ACTIVE' }] });
-    vi.mocked(api.storedImportRequests.get).mockResolvedValue({ importRequest: { items: [{ id: 91, code: 'Slate Grey', size: '60x60', qty: 5, unit: 'แผ่น' }] } });
-    vi.mocked(api.tickets.get).mockResolvedValue({ ticket: { items: [{ id: 701, brand: 'Slate Grey', size: '60x60', qty: 5 }] } });
-    vi.mocked(api.noProjectOrders.pairToDeal).mockResolvedValue({ paired: true });
-    renderPage();
-    fireEvent.click(await screen.findByTestId('order-pair-19'));
-    const sheet = await screen.findByTestId('pair-sheet');
-    const deal = await within(sheet).findByTestId('pair-deal');
-    expect(within(deal).queryByText(/PR-TEST-0302/)).toBeNull(); // only the same project is offered
-    fireEvent.change(deal, { target: { value: '301' } });
-    const line = await within(sheet).findByTestId('pair-line-91');
-    await within(line).findByRole('option', { name: /Slate Grey/ });
-    fireEvent.change(line, { target: { value: '701' } });
-    fireEvent.click(within(sheet).getByTestId('pair-send'));
-    await waitFor(() => expect(api.noProjectOrders.pairToDeal).toHaveBeenCalledWith(19, { ticketId: 301, lines: [{ importRequestItemId: 91, ticketItemId: 701 }] }));
   });
 
   it('สั่งของไม่มีโครงการ: the send button stays disabled and names what is missing until every field is filled', async () => {

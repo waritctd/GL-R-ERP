@@ -15654,29 +15654,6 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       mockImportRequests.push(row);
       return delay({ importRequest: mockImportRequestDto(row) });
     },
-    // ImportRequestService#pairToDeal: a PROJECT order onto its deal. No undo.
-    async pairToDeal(id, request) {
-      const user = requireSession();
-      const row = mockImportRequests.find((r) => r.id === Number(id));
-      if (!row) fail('ไม่พบใบขอซื้อนี้', 404);
-      const broad = ['import', 'ceo', 'sales_manager'].includes(user.role);
-      const ticket = mockTicketOrNull({ ticketId: Number(request?.ticketId) });
-      if (!broad && !(row.requesterId === user.id && ticket && isSalesOwner(ticket, user))) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (row.ticketId != null) fail('ใบขอซื้อนี้อยู่กับงานแล้ว ย้ายกลับในระบบไม่ได้ — แจ้งผู้ดูแลระบบ', 409);
-      if (row.status !== 'ISSUED' || row.orderPurpose !== 'PROJECT') fail('ผูกกับงานได้เฉพาะคำสั่งซื้อประเภทโครงการที่ออกแล้ว', 409);
-      if (!ticket || (ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('งานนี้ไม่ได้อยู่ในสถานะที่ดำเนินการได้', 409);
-      const same = (a, b) => { const x = String(a ?? '').trim().toLowerCase(); const y = String(b ?? '').trim().toLowerCase(); return (x === y && x.length >= 3) || (Math.min(x.length, y.length) >= 6 && (x.includes(y) || y.includes(x))); };
-      if (!same(row.purposeNote, ticket.projectName) && !same(row.purposeNote, ticket.customerName)) fail('ชื่อโครงการของคำสั่งซื้อไม่ตรงกับงานนี้ — เลือกงานของโครงการเดียวกัน', 409);
-      const lines = request.lines ?? [];
-      const targets = lines.map((l) => Number(l.ticketItemId));
-      if (lines.length !== row.items.length || new Set(targets).size !== targets.length
-        || !row.items.every((it) => lines.some((l) => String(l.importRequestItemId) === String(it.id)))
-        || !targets.every((t) => (ticket.items ?? []).some((i) => i.id === t))) fail('จับคู่สินค้าให้ครบทุกรายการ แต่ละรายการต่อรายการของงานไม่ซ้ำกัน', 400);
-      row.ticketId = ticket.id;
-      row.ticketCode = ticket.code;
-      lines.forEach((l) => { row.items.find((it) => String(it.id) === String(l.importRequestItemId)).ticketItemId = Number(l.ticketItemId); });
-      return delay({ paired: true });
-    },
     // Takes back an order that is on no round: SUPERSEDED with no successor (the number stays on record).
     async withdraw(id) {
       const user = requireSession();
@@ -15714,12 +15691,11 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         const { lots, waiting } = mockIncomingForIr(ir);
         const base = {
           kind: ticket ? 'PROJECT' : ir.orderPurpose, ticketId: ticket?.id ?? null, ticketCode: ticket?.code ?? null,
-          who: ticket ? (ticket.projectName || ticket.customerName || ticket.code) : ir.purposeNote,
+          who: ticket ? (mayOpen ? (ticket.projectName || ticket.customerName || ticket.code) : (ticket.projectName || ticket.code)) : ir.purposeNote, // another rep's deal: never the customer
           requesterName: ticket ? null : ir.requestedByName, factoryName: ir.factoryName, docNumber: ir.docNumber,
-          importRequestId: ir.id, wantedBy: ticket ? ir.requiredByNote : ir.wantedBy,
+          importRequestId: ir.id, wantedBy: ticket ? (mayOpen ? ir.requiredByNote : null) : ir.wantedBy,
           repId: ticket ? ticket.createdById : ir.requesterId, repName: ticket ? ticket.createdByName ?? ticket.ownerName ?? null : ir.requestedByName,
           canOpenDeal: mayOpen,
-          canPair: !ticket && ir.orderPurpose === 'PROJECT' && (manager || ir.requesterId === user.id),
         };
         lots.filter((l) => !(l.step === 'RECEIVED' && l.receivedOn && l.receivedOn < cutoff)).forEach((l) => rows.push({
           ...base, waiting: false, product: l.product, unit: l.unit, qty: l.qty, lot: l, canWithdraw: false,

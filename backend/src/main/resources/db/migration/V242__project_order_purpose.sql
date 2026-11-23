@@ -1,6 +1,10 @@
 -- A no-project order may now be for a PROJECT: the project is known, the deal is not yet (track now, pair later). The
 -- project's name is the order's purpose_note. Pairing it to a deal (ImportRequestService#pairToDeal) sets ticket_id and the
 -- lines' ticket_item_id; the purpose columns stay as the record of where it started.
+-- Rollback: ALTER TABLE sales.import_request DROP CONSTRAINT chk_import_request_order_purpose, then re-add it as V239 defined it with
+-- order_purpose IN ('SAMPLE','SHOWROOM','STOCK') (first UPDATE any PROJECT row to STOCK with its project name kept in purpose_note);
+-- restore the column comment; DELETE FROM flyway_schema_history WHERE version = '242' (in the schema Flyway uses).
+
 ALTER TABLE sales.import_request DROP CONSTRAINT chk_import_request_order_purpose;
 ALTER TABLE sales.import_request
     ADD CONSTRAINT chk_import_request_order_purpose CHECK (order_purpose IS NULL OR order_purpose IN ('SAMPLE','SHOWROOM','STOCK','PROJECT'));

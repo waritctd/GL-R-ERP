@@ -178,6 +178,7 @@ const UI_REACHABLE_KEYS = new Set(
 // cannot see (the Python scanner agents), some are built backend-first with the UI not landed.
 // Whether to surface or retire any of them is a product decision, not something a test decides.
 const SERVER_ONLY = {
+  'POST /api/no-project-orders/{}/pair-to-deal': 'answers 409 "ยังไม่เปิดใช้" before any lock or write: pairing a PROJECT order to a deal is held for a later release (branch claude/v251-pair-to-deal); no screen calls it',
   'POST /api/import-requests/lines/{}/close-out': 'answers 409 "ยังไม่เปิดใช้": closing out an IR line is switched off until its gate edge cases are ruled on; no screen calls it',
   'POST /api/import-requests/lines/{}/reopen': 'answers 409 "ยังไม่เปิดใช้": the twin of close-out, switched off with it',
   // ── Live, via a client this harness cannot see ────────────────────────────
@@ -503,6 +504,12 @@ const UNREACHABLE_FROM_UI = new Set([
   'GET /api/deposit-notices/{}',
   'GET /api/factory-configs',
   'GET /api/factory-quotes/{}',
+  // DealFulfilmentPanel/ImportFulfilmentPage both read the stored ใบขอซื้อ list (GET
+  // .../import-requests, plural, per ticket) and every mutation returns its own full row, so this
+  // single-row-by-id GET has no screen that needs it. storedImportRequests.get stays in hrApi.js as
+  // a faithful mirror of ImportRequestController#getStored, like the other single-row GETs in this
+  // list (deposit-notices, factory-quotes, ...).
+  'GET /api/import-requests/{}',
   'GET /api/leave/review-summary',
   'GET /api/payroll/deduction-obligations',
   'GET /api/payroll/deduction-obligations/me',

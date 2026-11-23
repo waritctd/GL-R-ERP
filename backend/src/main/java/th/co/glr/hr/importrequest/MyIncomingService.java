@@ -68,8 +68,6 @@ public class MyIncomingService {
             boolean noLots = !irsWithLots.contains(first.importRequestId());
             boolean canWithdraw = first.ticketId() == null && noLots
                 && (actor.id() == (first.requesterId() == null ? -1L : first.requesterId()) || manager && "ceo".equals(role));
-            boolean canPair = first.ticketId() == null && "PROJECT".equals(first.orderPurpose())
-                && (manager || actor.id() == (first.requesterId() == null ? -1L : first.requesterId()));
             List<MyLine> withLot = item.stream().filter(l -> l.lot() != null).toList();
             BigDecimal placed = withLot.stream().map(l -> l.lot().qty()).reduce(BigDecimal.ZERO, BigDecimal::add);
             BigDecimal remaining = first.itemQty().subtract(placed);
@@ -85,23 +83,26 @@ public class MyIncomingService {
                     l.etaOn() != null ? l.etaOn() : first.expectedTo(), l.roundLabel(), l.transportMode(), l.vessel(),
                     l.voyage(), l.port(), l.etdActualOn(), l.etaOn(), l.arrivedOn(), l.customsReleasedOn(), l.contactedOn(),
                     l.orderedOn(), l.pickedUpOn(), l.inTransitOn(), l.awaitingCustomsOn(), l.receivedOn());
-                rows.add(row(first, product, false, l.qty(), lot, false, dealAccess, canPair));
+                rows.add(row(first, product, false, l.qty(), lot, false, dealAccess));
             }
             if (remaining.signum() > 0) {
-                rows.add(row(first, product, true, remaining, null, canWithdraw, dealAccess, canPair));
+                rows.add(row(first, product, true, remaining, null, canWithdraw, dealAccess));
             }
         }
         return new MyIncomingResponse(rows);
     }
 
     private static MyIncomingRow row(MyLine l, String product, boolean waiting, BigDecimal qty, IncomingLot lot, boolean canWithdraw,
-                                      boolean dealAccess, boolean canPair) {
+                                      boolean dealAccess) {
         boolean project = l.ticketId() != null;
-        String who = project ? firstNonBlank(l.projectName(), l.customerName(), l.ticketCode()) : l.purposeNote();
-        String wanted = project ? l.requiredByNote() : (l.wantedBy() == null ? null : ThaiText.date(l.wantedBy()));
+        // A deal this person cannot open is another rep's: only its project name or deal code goes out. Never the customer, and
+        // never the deal's free-text required-by note (it may name one), in any field the page can filter or search.
+        boolean openable = project && (dealAccess || l.mine());
+        String who = project ? (openable ? firstNonBlank(l.projectName(), l.customerName(), l.ticketCode()) : firstNonBlank(l.projectName(), l.ticketCode())) : l.purposeNote();
+        String wanted = project ? (openable ? l.requiredByNote() : null) : (l.wantedBy() == null ? null : ThaiText.date(l.wantedBy()));
         return new MyIncomingRow(project ? "PROJECT" : l.orderPurpose(), l.ticketId(), l.ticketCode(), who,
             project ? null : l.requesterName(), l.factoryName(), l.docNumber(), l.importRequestId(), wanted, waiting,
-            product, l.unit(), qty, lot, canWithdraw, l.repId(), l.repName(), project && (dealAccess || l.mine()), canPair);
+            product, l.unit(), qty, lot, canWithdraw, l.repId(), l.repName(), openable);
     }
 
     private static String firstNonBlank(String... values) {

@@ -661,7 +661,6 @@ export const api = {
     create: (payload) => apiRequest(API_ROUTES.noProjectOrders.create, { method: 'POST', body: payload }),
     // The requester, import or the CEO takes back an order that is on no round yet (409 once a lot rides on one).
     withdraw: (id) => apiRequest(API_ROUTES.noProjectOrders.withdraw(id), { method: 'POST' }),
-    pairToDeal: (id, payload) => apiRequest(API_ROUTES.noProjectOrders.pairToDeal(id), { method: 'POST', body: payload }),
   },
   myIncoming: {
     get: () => apiRequest(API_ROUTES.myIncoming.get),

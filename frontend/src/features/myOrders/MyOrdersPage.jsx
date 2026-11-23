@@ -16,7 +16,6 @@ import { formatQty, PURPOSE_LABELS, stepLabel, stepTone } from '../fulfilment/sh
 import { LotSheet } from '../tickets/IncomingGoodsPanel.jsx';
 import { useMediaQuery } from '../../hooks/useIsMobile.js';
 import { ShippingSwitch } from '../fulfilment/ShippingSwitch.jsx';
-import { PairToDealSheet } from './PairToDealSheet.jsx';
 import { NewOrderPanel, NewOrderSheet, useNewOrderForm } from './NewOrderSheet.jsx';
 
 // Whole literal, one track per column (7): for / who, product + lot, factory, quantity, status, expected, the open control.
@@ -55,7 +54,6 @@ export function MyOrdersPage({ user, showToast }) {
   const [creating, setCreating] = useState(false);
   const [open, setOpen] = useState(null);
   const [withdrawing, setWithdrawing] = useState(null);
-  const [pairing, setPairing] = useState(null);
   const queryClient = useQueryClient();
   const withdraw = useMutation({
     mutationFn: (row) => api.noProjectOrders.withdraw(row.importRequestId),
@@ -90,7 +88,6 @@ export function MyOrdersPage({ user, showToast }) {
   const arrived = visible.filter(isArrived);
   const counts = useMemo(() => Object.fromEntries(CHIPS.map((c) => [c.key, c.key === 'ALL' ? rows.length : rows.filter((r) => r.kind === c.key).length])), [rows]);
 
-  const pairButton = (r) => (r.canPair ? <Button type="button" size="sm" variant="secondary" onClick={() => setPairing(r)} data-testid={`order-pair-${r.importRequestId}`}>ผูกกับงาน</Button> : null);
   const openControl = (r) => (r.ticketId != null
     ? (r.canOpenDeal === false ? null : <Link to={`/tickets/${r.ticketId}?tab=ship`} className={cn(buttonVariants({ variant: 'secondary', size: 'sm' }), 'no-underline')}>เปิดงาน</Link>)
     : (
@@ -98,7 +95,6 @@ export function MyOrdersPage({ user, showToast }) {
         {r.waiting
           ? (r.canWithdraw ? <Button type="button" size="sm" variant="secondary" onClick={() => setWithdrawing(r)} data-testid={`order-withdraw-${r.importRequestId}`}>ยกเลิกคำขอ</Button> : null)
           : <Button type="button" size="sm" variant="secondary" onClick={() => setOpen(r)} data-testid={`order-open-${r.lot.lotId}`}>ดู</Button>}
-        {pairButton(r)}
       </span>));
 
   const columns = [
@@ -194,7 +190,6 @@ export function MyOrdersPage({ user, showToast }) {
         onConfirm={() => withdraw.mutate(withdrawing)}
         onCancel={() => setWithdrawing(null)}
       />
-      {pairing ? <PairToDealSheet row={pairing} showToast={showToast} onClose={() => setPairing(null)} /> : null}
       {creating && !sidePanel ? <NewOrderSheet form={orderForm} onClose={() => setCreating(false)} /> : null}
       {open ? <LotSheet ticketId={null} ir={{ docNumber: open.docNumber }} lot={open.lot} wantedBy={open.wantedBy} canMessage={false} showToast={showToast} onClose={() => setOpen(null)} /> : null}
     </PageStack>

@@ -474,6 +474,9 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(others).extracting(r -> r.kind()).contains("SHOWROOM", "SAMPLE", "PROJECT");
         assertThat(others).filteredOn(r -> "PROJECT".equals(r.kind())).isNotEmpty().allMatch(r -> !r.canOpenDeal());
         assertThat(others).allMatch(r -> !r.canWithdraw());
+        // another rep's deal never shows its customer or its free-text note, in any field
+        assertThat(others).filteredOn(r -> "PROJECT".equals(r.kind()) && !r.canOpenDeal())
+            .allMatch(r -> !"ลูกค้า".equals(r.who()) && r.wantedBy() == null);
         assertThat(myIncoming.myIncoming(owner).rows()).filteredOn(r -> "PROJECT".equals(r.kind())).allMatch(r -> r.canOpenDeal());
         assertThat(myIncoming.myIncoming(salesManager).rows()).extracting(r -> r.importRequestId()).contains(order, sample);
         assertRefused(() -> myIncoming.myIncoming(importUser), HttpStatus.FORBIDDEN);
@@ -1399,41 +1402,6 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     void closeOutIsNotSwitchedOn() {
         // the endpoints answer 409; no service reaches the closed_out columns
         assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.import_request_item WHERE closed_out_at IS NOT NULL", Map.of(), Integer.class)).isZero();
-    }
-
-    @Test
-        void projectOrderPairsToItsDeal_keepsLotsAndFiresGoodsReceivedOnce() {
-        long order = noProject.create(new NoProjectOrderService.CreateRequest("PROJECT", "ลูกค้า", factoryId(), tomorrow(), lines(40)), owner).id();
-        long irItem = itemOf(order);
-        long r = round("ORDERED");
-        insertLot(r, order, irItem, 40);
-        rounds.advance(r, receiveRequest(List.of(new LotReceipt(lotIdOf(r, irItem), new BigDecimal("40")))), importUser);
-
-        long deal = deal(owner.id(), "PAIR-1");
-        long dealItem = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", deal), Long.class);
-        jdbc.update("UPDATE sales.ticket SET fulfillment_status = NULL WHERE ticket_id = :t", Map.of("t", deal));
-        var request = new ImportRequestService.PairToDealRequest(deal, List.of(new ImportRequestService.PairLine(irItem, dealItem)));
-
-        assertRefused(() -> irService.pairToDeal(order, request, principal(employee("RND-PAIR-OTH"), "sales")), HttpStatus.FORBIDDEN);
-        long wrong = deal(owner.id(), "PAIR-2");
-        jdbc.update("UPDATE sales.ticket SET customer_name = 'อีกบริษัท' WHERE ticket_id = :t", Map.of("t", wrong));
-        assertRefused(() -> irService.pairToDeal(order, new ImportRequestService.PairToDealRequest(wrong,
-            List.of(new ImportRequestService.PairLine(irItem, jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", wrong), Long.class)))), owner), HttpStatus.CONFLICT);
-        long closed = deal(owner.id(), "PAIR-3");
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :t", Map.of("t", closed));
-        assertRefused(() -> irService.pairToDeal(order, new ImportRequestService.PairToDealRequest(closed,
-            List.of(new ImportRequestService.PairLine(irItem, jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", closed), Long.class)))), owner), HttpStatus.CONFLICT);
-        assertRefused(() -> irService.pairToDeal(order, new ImportRequestService.PairToDealRequest(deal, List.of()), owner), HttpStatus.BAD_REQUEST);
-
-        irService.pairToDeal(order, request, owner);
-        assertThat(jdbc.queryForObject("SELECT ticket_id FROM sales.import_request WHERE import_request_id = :i", Map.of("i", order), Long.class)).isEqualTo(deal);
-        assertThat(jdbc.queryForObject("SELECT ticket_item_id FROM sales.import_request_item WHERE import_request_item_id = :i", Map.of("i", irItem), Long.class)).isEqualTo(dealItem);
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.shipment_lot WHERE import_request_id = :i", Map.of("i", order), Integer.class)).isEqualTo(1);
-        assertThat(events(deal, "GOODS_RECEIVED")).isEqualTo(1);
-        assertThat(fulfilment(deal)).isEqualTo("GOODS_RECEIVED");
-        assertThat(ticketService.warehouseRemaining(deal, owner).get(dealItem)).isEqualByComparingTo("40");
-        assertRefused(() -> irService.pairToDeal(order, request, owner), HttpStatus.CONFLICT); // no second pairing, no second event
-        assertThat(events(deal, "GOODS_RECEIVED")).isEqualTo(1);
     }
 
     private void unlink(long irItem) {

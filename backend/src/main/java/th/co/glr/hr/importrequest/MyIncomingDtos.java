@@ -14,7 +14,7 @@ public final class MyIncomingDtos {
     public record MyIncomingRow(String kind, Long ticketId, String ticketCode, String who, String requesterName,
                                 String factoryName, String docNumber, long importRequestId, String wantedBy,
                                 boolean waiting, String product, String unit, BigDecimal qty, IncomingLot lot,
-                                boolean canWithdraw, Long repId, String repName, boolean canOpenDeal, boolean canPair) {}
+                                boolean canWithdraw, Long repId, String repName, boolean canOpenDeal) {}
 
     public record MyIncomingResponse(List<MyIncomingRow> rows) {}
 }
