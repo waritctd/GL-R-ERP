@@ -115,12 +115,17 @@ export const lotWhoSub = (lot) => {
   return ['ไม่มีโครงการ', lot.purposeNote].filter(Boolean).join(' · ');
 };
 
-/** The date line under a round's step on the queue card (vessel / departure / ETA / arrival). */
-export function roundSummaryLine(round) {
+/** The vessel and date line on the queue card. */
+export const roundSummaryLine = (round) => [
+  round.facts?.vessel && `${MODE_LABELS[round.facts.transportMode]?.vessel ?? 'เรือ'} ${round.facts.vessel}`,
+  roundDatesLine(round),
+].filter(Boolean).join(' · ');
+
+/** A round's dates: departure / ETA, or customs release and goods receipt once it has arrived. */
+export function roundDatesLine(round) {
   const f = round.facts ?? {};
   const parts = [];
-  if (f.vessel) parts.push(`เรือ ${f.vessel}`);
-  if (f.etdActualOn) parts.push(`เรือออก ${formatThaiDate(f.etdActualOn)}`);
+  if (f.etdActualOn) parts.push(`${MODE_LABELS[f.transportMode]?.etdActualOn ? 'ออกจากต้นทาง' : 'เรือออก'} ${formatThaiDate(f.etdActualOn)}`);
   if (f.etaOn && round.importStep !== 'RECEIVED') parts.push(`คาดว่าถึง ${formatThaiDate(f.etaOn)}`);
   if (round.importStep === 'RECEIVED') {
     if (f.customsReleasedOn || round.receivedOn) parts.push(`ออกของ ${formatThaiDate(f.customsReleasedOn ?? round.receivedOn)}`);
@@ -133,9 +138,8 @@ export function roundSummaryLine(round) {
 export const roundSubline = (round) => [round.source === 'BACKFILL' ? 'จากตารางของเข้า' : null,
   (round.documents ?? []).find((d) => d.kind === 'PROFORMA' && d.docNo)?.docNo ?? round.facts?.grNumber].filter(Boolean).join(' · ');
 
-/** "n ใบ · qty" and "x โครงการ · y ตัวอย่าง" for the IRs on a round (quantity only when every line shares a unit). */
+/** The quantity ("n รายการ" unless every line shares a unit) and "x โครงการ · y ตัวอย่าง" for the IRs on a round. */
 export function roundIrSummary(round) {
-  const rows = irRows(round);
   const kinds = new Map();
   const seen = new Set();
   (round.lots ?? []).forEach((l) => {
@@ -153,15 +157,15 @@ export function roundIrSummary(round) {
       ? `ถึงโกดัง ${formatQty(got)} จาก ${formatQty(planned)} ${unit} · ขาด ${formatQty(planned - got)}`.replace(/\s+·/, ' ·')
       : `${formatQty(planned)} ${unit}`.trim();
   return {
-    head: [`${rows.length} ใบ`, qty].filter(Boolean).join(' · '),
+    qty: qty ?? `${(round.lots ?? []).length} รายการ`,
     mix: [...kinds].map(([k, n]) => `${n} ${k}`).join(' · '),
   };
 }
 
 export const roundIrCount = (round) => new Set((round.lots ?? []).map((l) => l.importRequestId)).size;
 
-export const STEP_CHIPS = [{ key: 'ALL', label: 'ทั้งหมด' }, { key: 'WAITING', label: 'รอจัดรอบ' },
-  ...IMPORT_STEPS.map((s) => ({ key: s.code, label: s.label }))];
+export const STEP_CHIPS = [{ key: 'ALL', label: 'ทั้งหมด', s: 'ทุกขั้น' },
+  ...IMPORT_STEPS.map((s) => ({ key: s.code, label: s.label, s: s.s }))];
 
 /** Lots can be planned, changed, removed or moved only until the round leaves (before IN_TRANSIT). */
 export const lotsEditable = (round) => importStepIndex(round.importStep) < importStepIndex('IN_TRANSIT');
