@@ -137,6 +137,15 @@ export function IncomingGoodsPanel({ ticketId, canMessage = false, showToast }) 
         {data.totalUnit ? <>ถึงโกดังแล้ว <b className="text-text">{formatQty(data.totalReceived)} / {formatQty(data.totalOrdered)}</b> {data.totalUnit} · </> : null}
         ฝ่ายนำเข้าเป็นผู้อัปเดต
       </p>
+      {data.unlinked?.length > 0 && (
+        <div role="alert" className="mb-3 rounded-md border border-warning-border bg-warning-bg-soft p-3 text-sm text-text" data-testid="incoming-unlinked">
+          <b>สินค้าเหล่านี้อยู่ใน IR แต่ไม่อยู่ในรายการของงาน จึงยังส่งมอบครบไม่ได้</b>
+          <ul className="my-1 pl-5">
+            {data.unlinked.map((g, i) => <li key={i}>{g.product} {formatQty(g.qty)}{g.unit ? ` ${g.unit}` : ''} ({g.docNumber})</li>)}
+          </ul>
+          สินค้านี้ถูกพักไว้ ยังส่งมอบครบไม่ได้ — ติดต่อฝ่ายนำเข้าหรือผู้ดูแลระบบ (ฝ่ายขายดูได้อย่างเดียว)
+        </div>
+      )}
       <div className="flex flex-col gap-4">
         {data.irs.map((ir) => {
           const rows = [...ir.lots, ...ir.waiting.map((w, i) => ({ ...w, waiting: true, lotId: `w${i}` }))];

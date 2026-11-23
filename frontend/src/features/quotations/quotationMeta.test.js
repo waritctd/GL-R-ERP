@@ -680,3 +680,17 @@ describe('deal parties — the per-party live-quotation block (V204)', () => {
     expect(quotationTargetParty(undefined, { customerId: 5 })).toBeNull();
   });
 });
+
+describe('printedContactLine (DealQuotationRenderAdapter header rules)', () => {
+  const base = { customerName: 'บริษัท ตัวอย่าง จำกัด', phone: 'โทร. 081', email: 'a@example.test' };
+  it('prints the name as typed, or with the older คุณ rule for an untouched draft', () => {
+    expect(meta.printedContactLine({ ...base, contactName: 'Khun Kan' })).toBe('เรียน Khun Kan   /   บริษัท ตัวอย่าง จำกัด · Email a@example.test · Phone 081');
+    expect(meta.printedContactLine({ ...base, contactName: 'ปรีชา', omitHonorific: false })).toContain('เรียน คุณปรีชา   /');
+    expect(meta.printedContactLine({ ...base, contactName: 'คุณากร', omitHonorific: false })).toContain('เรียน คุณคุณากร   /');
+    expect(meta.printedContactLine({ ...base, contactName: 'นางสาวดาว', omitHonorific: false })).toContain('เรียน นางสาวดาว   /');
+  });
+  it('drops a contact equal to the customer, and uses the English labels', () => {
+    expect(meta.printedContactLine({ ...base, contactName: 'บริษัท  ตัวอย่าง จำกัด.' })).toMatch(/^เรียน บริษัท ตัวอย่าง จำกัด ·/);
+    expect(meta.printedContactLine({ ...base, contactName: 'Kan', english: true, omitHonorific: false })).toBe('Attn : Kan   /   บริษัท ตัวอย่าง จำกัด · E : a@example.test · Tel. 081');
+  });
+});

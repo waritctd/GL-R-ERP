@@ -8,6 +8,7 @@ import java.util.Map;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestCoverageResponse;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto;
@@ -39,8 +41,10 @@ public class ImportRequestController {
 
     private final ImportRequestService service;
     private final SessionContext sessions;
+    private final IrLineLinkService links;
 
-    public ImportRequestController(ImportRequestService service, SessionContext sessions) {
+    public ImportRequestController(ImportRequestService service, SessionContext sessions, IrLineLinkService links) {
+        this.links = links;
         this.service = service;
         this.sessions = sessions;
     }
@@ -188,6 +192,28 @@ public class ImportRequestController {
     /** Sets lead time on an ISSUED row (owner decision 09-18 #2) — import/CEO only. The DRAFT-stage edit for the
      * owning rep/CEO goes through PATCH .../import-requests/{id} instead
      * (UpdateImportRequestRequest#leadTimeMinDays/MaxDays). */
+    /** Import/CEO: an IR line that points at no deal line gets its deal line (the stuck-deal exit). */
+    @PostMapping("/import-requests/lines/{lineId}/link")
+    Map<String, Boolean> linkLine(@PathVariable long lineId, @RequestBody LinkLineRequest request, HttpSession session) {
+        links.link(lineId, request.ticketItemId(), sessions.requireUser(session));
+        return Map.of("linked", true);
+    }
+
+    record LinkLineRequest(long ticketItemId) {}
+
+    /** Closing out an IR line is not switched on yet (the gate blocked it): the line stays on hold until a deal line carries it, then import links it. */
+    @PostMapping("/import-requests/lines/{lineId}/close-out")
+    Map<String, Boolean> closeOutLine(@PathVariable long lineId, HttpSession session) {
+        sessions.requireUser(session);
+        throw new ApiException(HttpStatus.CONFLICT, "ยังไม่เปิดใช้: ปิดรายการนี้ไม่ได้ — ติดต่อผู้ดูแลระบบ");
+    }
+
+    @PostMapping("/import-requests/lines/{lineId}/reopen")
+    Map<String, Boolean> reopenLine(@PathVariable long lineId, HttpSession session) {
+        sessions.requireUser(session);
+        throw new ApiException(HttpStatus.CONFLICT, "ยังไม่เปิดใช้");
+    }
+
     @PostMapping("/import-requests/{id}/lead-time")
     Map<String, ImportRequestDto> setLeadTime(@PathVariable long id,
             @Valid @RequestBody SetLeadTimeRequest request, HttpSession session) {

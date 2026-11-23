@@ -5,10 +5,13 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 
-const CONTACT_EDIT_FIELDS = ['phone', 'email'];
+const CONTACT_EDIT_FIELDS = ['firstName', 'lastName', 'phone', 'email'];
 
 function contactEditsFrom(contact) {
-  return { phone: contact?.phone ?? '', email: contact?.email ?? '' };
+  return {
+    firstName: contact?.firstName ?? '', lastName: contact?.lastName ?? '',
+    phone: contact?.phone ?? '', email: contact?.email ?? '',
+  };
 }
 
 function contactDisplayName(contact) {
@@ -44,6 +47,11 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
   // PricingRequestCreateModal.
   omitContactHonorific = false, onChangeOmitContactHonorific,
   label = 'ผู้ติดต่อ', hint = 'ชื่อจะพิมพ์ต่อจาก “เรียน” บนใบเสนอราคา',
+  // The quotation editor's one contact card (feedback #71). `renderPrintFields({ onFieldFocus, onFieldBlur })` draws the one
+  // โทร./อีเมล pair, which is what prints and, once really changed to a non-blank value, writes back to the picked contact.
+  // `onRecordChange` takes a saved contact record (it must not touch the printed values). `preview(typedName)` is the printed
+  // line. `onNameEdit()` runs when a name edit is saved and returns its undo. `canWriteContact`: false leaves the card print-only.
+  renderPrintFields = null, onRecordChange = null, preview = null, onNameEdit = null, canWriteContact = true,
 }, ref) {
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -136,10 +144,14 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
   // PUT. Without this, a rep who blurs อีเมล then immediately confirms submit could have the
   // quotation's own pre-save PUT (which re-reads the LIVE contact row server-side) land before this
   // field's PUT commits, freezing the OLD email into an approved document.
-  const pendingContactSaveRef = useRef(null);
+  const pendingContactSavesRef = useRef(new Set());
   useImperativeHandle(ref, () => ({
-    flushPendingContactSave: () => pendingContactSaveRef.current ?? Promise.resolve(),
+    flushPendingContactSave: () => Promise.allSettled([...pendingContactSavesRef.current]),
   }), []);
+  // What each printed box held when it took focus. Only a real change writes back: a reopened draft's one-off number
+  // must never reach the contact on a blur, or on a type-and-undo.
+  const printValueAtFocusRef = useRef({});
+  const recordChanged = onRecordChange ?? onChange;
 
   useEffect(() => {
     // Still resolving (see the onResolve effect above) — โทร./อีเมล are unknown, not editable yet.
@@ -147,6 +159,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
     const record = contactEditsFrom(selected);
     const wasSeeded = lastSeededContactRef.current;
     const idChanged = selected.id !== wasSeeded.id;
+    if (idChanged) printValueAtFocusRef.current = {}; // a focus taken on the previous contact says nothing about this one
     setContactEdits((prev) => {
       if (idChanged) return record; // a different contact — the rep's dirty text belonged to the old one
       const merged = { ...prev };
@@ -157,10 +170,10 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
     });
     lastSeededContactRef.current = { id: selected.id, ...record };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.phone, selected?.email]);
+  }, [selected?.id, selected?.firstName, selected?.lastName, selected?.phone, selected?.email]);
 
   /** Persists ONE field on blur, sending only that field (PATCH semantics — an omitted key is left alone). */
-  function saveContactField(field) {
+  function saveContactField(field, typed = contactEdits[field]) {
     if (!selected?.id) return;
     // Without a customer to save against (a quotation-grant holder who cannot load the ticket:
     // `contactCustomerId` stays null though the frozen snapshot already seeded a `selected` contact
@@ -172,35 +185,59 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
       return;
     }
     const previous = (selected[field] ?? '').toString();
-    const next = (contactEdits[field] ?? '').trim();
+    const next = (typed ?? '').trim();
     if (next === previous.trim()) return; // untouched — no request at all
+    if (field === 'firstName' && !next) { // first_name is NOT NULL: keep the name it had
+      setContactEdits((prev) => ({ ...prev, firstName: previous }));
+      showToast?.('error', 'กรุณาระบุชื่อผู้ติดต่อ');
+      return;
+    }
     const restore = selected;
+    const undoNameEdit = field === 'firstName' || field === 'lastName' ? onNameEdit?.() : null;
     setSavingContactField(field);
     lastSeededContactRef.current = { ...lastSeededContactRef.current, [field]: next };
     setContactEdits((prev) => ({ ...prev, [field]: next }));
-    const optimistic = { ...selected, [field]: next || null };
-    setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? { ...c, [field]: next || null } : c)));
-    onChange(optimistic);
+    const optimistic = { ...selected, [field]: next || (field === 'lastName' ? '' : null) };
+    setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? optimistic : c)));
+    recordChanged(optimistic);
     // Tracked so the editor's submit pre-save can await this exact request — see `flushPendingContactSave` above.
     const promise = (async () => {
       try {
         const res = await api.customers.updateContact(customerId, selected.id, { [field]: next });
         const updated = res?.contact ?? optimistic;
         setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? updated : c)));
-        onChange(updated);
+        recordChanged(updated);
       } catch (err) {
         setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? restore : c)));
         setContactEdits((prev) => ({ ...prev, [field]: previous }));
         lastSeededContactRef.current = { ...lastSeededContactRef.current, [field]: previous };
-        onChange(restore);
+        recordChanged(restore);
+        undoNameEdit?.();
         showToast?.('error', err.message || 'บันทึกข้อมูลผู้ติดต่อไม่สำเร็จ');
       } finally {
         setSavingContactField(null);
-        if (pendingContactSaveRef.current === promise) pendingContactSaveRef.current = null;
+        pendingContactSavesRef.current.delete(promise);
       }
     })();
-    pendingContactSaveRef.current = promise;
+    pendingContactSavesRef.current.add(promise);
   }
+
+  const printFieldHandlers = {
+    onFieldFocus: (field, value) => { printValueAtFocusRef.current[field] = value ?? ''; },
+    onFieldBlur: (field, value) => {
+      const atFocus = printValueAtFocusRef.current[field];
+      delete printValueAtFocusRef.current[field];
+      const next = (value ?? '').trim();
+      // A blank stays print-only: clearing it on this document must not erase the customer's contact.
+      if (atFocus === undefined || !next || next === atFocus.trim()) return;
+      if (selected && customerId && canWriteContact) saveContactField(field, value);
+    },
+  };
+  // The real record has loaded: a frozen `{ id, firstName }` stand-in holds the whole name in one field, so it is not editable.
+  const nameEditable = !disabled && canWriteContact && Boolean(customerId)
+    && options.some((c) => String(c.id) === String(selectedId));
+  const typedName = selected ? `${contactEdits.firstName ?? ''} ${contactEdits.lastName ?? ''}`.trim() : '';
+  const previewText = preview ? preview(typedName) : null;
 
   function closeList({ restoreFocus = false } = {}) {
     restoreFocusRef.current = restoreFocus;
@@ -274,7 +311,27 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
           {selected ? (
             <div className="rounded-md border border-border bg-surface-muted px-3.5 py-3">
               <div className="flex items-start justify-between gap-3">
-                <span className="min-w-0 break-words text-base font-bold text-text">{contactDisplayName(selected)}</span>
+                {renderPrintFields && nameEditable ? (
+                  <span className="grid min-w-0 flex-1 grid-cols-2 gap-2 mobile:grid-cols-1" data-testid={`${idPrefix}-name`}>
+                    {[['firstName', 'ชื่อ'], ['lastName', 'นามสกุล']].map(([field, fieldLabel]) => (
+                      <label key={field} className="m-0 min-w-0">
+                        <span className="text-2xs text-text-muted">{fieldLabel}</span>
+                        <input
+                          aria-label={`แก้ไข${fieldLabel}ผู้ติดต่อ`}
+                          className="mobile:min-h-[44px]"
+                          value={contactEdits[field]}
+                          maxLength={100}
+                          disabled={savingContactField === field}
+                          onChange={(e) => setContactEdits((prev) => ({ ...prev, [field]: e.target.value }))}
+                          onBlur={() => saveContactField(field)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
+                        />
+                      </label>
+                    ))}
+                  </span>
+                ) : (
+                  <span className="min-w-0 break-words text-base font-bold text-text">{contactDisplayName(selected)}</span>
+                )}
                 <span className="flex shrink-0 gap-3">
                   <Button
                     ref={triggerRef} id={idPrefix} variant="text" size="sm" className="mobile:min-h-[44px]"
@@ -296,7 +353,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
                   never gain one) and saved back to PUT /api/customers/{customerId}/contacts/
                   {contactId} on blur — same pattern as CustomerDetailsFields' ที่อยู่/โทร. fields.
                   A missing one is muted info, never a warning (owner ruling 2026-10-18). */}
-              {selected.phone === undefined && selected.email === undefined ? (
+              {renderPrintFields ? <div className="mt-2 grid">{renderPrintFields(printFieldHandlers)}</div> : selected.phone === undefined && selected.email === undefined ? (
                 <span className="mt-1.5 block text-2xs text-text-muted" data-testid={`${idPrefix}-details`}>
                   กำลังโหลดเบอร์โทร/อีเมล…
                 </span>
@@ -416,6 +473,16 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
           ) : null}
         </div>
       </FormField>
+      {renderPrintFields ? (
+        <div className="mt-2 grid gap-2">
+          {selected ? null : renderPrintFields(printFieldHandlers)}
+          {previewText ? (
+            <div className="rounded-md bg-surface-muted px-3 py-2 text-xs text-text-secondary" data-testid={`${idPrefix}-print-preview`}>
+              <span className="[overflow-wrap:anywhere]">จะพิมพ์: {previewText}</span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {/* The ไม่เติม “คุณ” option, directly under
           the picker, per the owner's own placement. No sub-line: the field's hint is the only
           explanatory text (owner ruling 2026-10-18). Whole row is the tappable label

@@ -2688,7 +2688,7 @@ public class DealQuotationService {
         if (isPricingRequestOrigin(quotation)
                 // V204: a contractor recorded as "ยังรอผล" is still bidding after the winner's order was confirmed; its own
                 // document may still be submitted and approved, and a later bid outcome forks it to a child deal.
-                || Set.of("ACTIVE", "QUOTED", "NEGOTIATING").contains(quotation.partyStatus())
+                || (quotation.partyStatus() != null && Set.of("ACTIVE", "QUOTED", "NEGOTIATING").contains(quotation.partyStatus()))
                 || !tickets.hasPromotionFromQuotationEvent(quotation.ticketId())
                 || tickets.isOrderConfirmedFromQuotation(quotation.ticketId(), quotation.id())) {
             return;

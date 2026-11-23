@@ -92,7 +92,10 @@ public class IncomingService {
             .filter(n -> !n.isBlank()).orElse(null);
         return new IncomingResponse(wantedBy, allOne ? out.get(0).unit() : null,
             allOne ? out.stream().map(IncomingIr::ordered).reduce(BigDecimal.ZERO, BigDecimal::add) : null,
-            allOne ? out.stream().map(IncomingIr::received).reduce(BigDecimal.ZERO, BigDecimal::add) : null, out);
+            allOne ? out.stream().map(IncomingIr::received).reduce(BigDecimal.ZERO, BigDecimal::add) : null, out,
+            irs.stream().flatMap(ir -> ir.items().stream().filter(i -> i.ticketItemId() == null)
+                .map(i -> new IncomingDtos.IncomingUnlinked(ir.id(), i.id(), ir.docNumber(), product(i), unitOf(i), i.qty()))).toList());
+
     }
 
     private static String unitOf(ImportRequestItemDto item) {

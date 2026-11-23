@@ -322,7 +322,7 @@ describe('/quotations/new?copyFrom= — saving it', () => {
       // ── as on any new quotation ──
       offerDate: bangkokTodayIso(),
       deptCode: null,
-      omitContactHonorific: false,
+      omitContactHonorific: true,
       // Slice 2 (S2-B1): a direct quotation always states its recipient — the one chosen above.
       recipientType: 'DESIGNER',
       items: [

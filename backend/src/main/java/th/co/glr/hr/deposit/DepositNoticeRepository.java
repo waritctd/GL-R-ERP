@@ -100,6 +100,12 @@ public class DepositNoticeRepository {
  THEN 0 ELSE 1 END, q.quotation_id DESC LIMIT 1) qc ON TRUE
         """;
 
+    /** The deal's own customer, to tell a joined default branch from an address that really ends with the word. */
+    private static final String OWN_CUSTOMER_JOIN = """
+        LEFT JOIN sales.ticket own_t ON own_t.ticket_id = d.ticket_id
+        LEFT JOIN customers.customer own ON own.customer_id = own_t.customer_id
+        """;
+
     // ── Deposit notice CRUD ─────────────────────────────────────────────────────────
 
     public Optional<DepositNoticeDto> findById(long docId) {
@@ -109,8 +115,8 @@ public class DepositNoticeRepository {
                    d.issue_date, d.status,
                    CASE WHEN qc.name IS NOT NULL THEN qc.name ELSE d.customer_name END AS customer_name,
                    CASE WHEN qc.name IS NOT NULL THEN qc.tax_id ELSE d.customer_tax_id END AS customer_tax_id,
-                   CASE WHEN qc.name IS NOT NULL THEN NULLIF(concat_ws(' ', NULLIF(qc.address, ''), NULLIF(qc.branch, '')), '')
-                        ELSE d.customer_address END AS customer_address,
+                   CASE WHEN qc.name IS NOT NULL THEN qc.address ELSE d.customer_address END AS customer_address,
+                   qc.branch AS quotation_customer_branch, own.address AS own_customer_address, own.branch AS own_customer_branch,
                    d.project_name, d.reference, d.currency,
                    d.deposit_percent, d.subtotal, d.deposit_amount,
                    d.vat_percent, d.vat_amount, d.total_payable,
@@ -118,7 +124,7 @@ public class DepositNoticeRepository {
                    d.issued_by_name, d.preparer_name, d.preparer_id,
                    d.created_at, d.updated_at, (qc.name IS NOT NULL) AS customer_from_quotation
               FROM sales.deposit_notice d
-              """ + QUOTATION_CUSTOMER_JOIN + """
+              """ + QUOTATION_CUSTOMER_JOIN + OWN_CUSTOMER_JOIN + """
              WHERE d.deposit_notice_id = :id
             """,
             Map.of("id", docId),
@@ -137,8 +143,8 @@ public class DepositNoticeRepository {
                    d.issue_date, d.status,
                    CASE WHEN qc.name IS NOT NULL THEN qc.name ELSE d.customer_name END AS customer_name,
                    CASE WHEN qc.name IS NOT NULL THEN qc.tax_id ELSE d.customer_tax_id END AS customer_tax_id,
-                   CASE WHEN qc.name IS NOT NULL THEN NULLIF(concat_ws(' ', NULLIF(qc.address, ''), NULLIF(qc.branch, '')), '')
-                        ELSE d.customer_address END AS customer_address,
+                   CASE WHEN qc.name IS NOT NULL THEN qc.address ELSE d.customer_address END AS customer_address,
+                   qc.branch AS quotation_customer_branch, own.address AS own_customer_address, own.branch AS own_customer_branch,
                    d.project_name, d.reference, d.currency,
                    d.deposit_percent, d.subtotal, d.deposit_amount,
                    d.vat_percent, d.vat_amount, d.total_payable,
@@ -146,7 +152,7 @@ public class DepositNoticeRepository {
                    d.issued_by_name, d.preparer_name, d.preparer_id,
                    d.created_at, d.updated_at, (qc.name IS NOT NULL) AS customer_from_quotation
               FROM sales.deposit_notice d
-              """ + QUOTATION_CUSTOMER_JOIN + """
+              """ + QUOTATION_CUSTOMER_JOIN + OWN_CUSTOMER_JOIN + """
              WHERE d.ticket_id = :ticketId
              ORDER BY d.version DESC
             """,
@@ -668,6 +674,16 @@ public class DepositNoticeRepository {
         );
     }
 
+    /** The quotation customer's address and branch, or the stored address, under the one print rule (feedback #72). */
+    private static String printedAddress(ResultSet rs) throws SQLException {
+        String address = rs.getString("customer_address");
+        String taxId = rs.getString("customer_tax_id");
+        return rs.getBoolean("customer_from_quotation")
+            ? th.co.glr.hr.customer.CustomerPrintRule.addressWithBranch(address, rs.getString("quotation_customer_branch"), taxId)
+            : th.co.glr.hr.customer.CustomerPrintRule.joinedAddress(address, taxId,
+                rs.getString("own_customer_address"), rs.getString("own_customer_branch"));
+    }
+
     private DepositNoticeDto mapDoc(ResultSet rs) throws SQLException {
         Array notesArr = rs.getArray("notes");
         List<String> notes = notesArr != null
@@ -684,7 +700,7 @@ public class DepositNoticeRepository {
             rs.getString("status"),
             rs.getString("customer_name"),
             rs.getString("customer_tax_id"),
-            rs.getString("customer_address"),
+            printedAddress(rs),
             rs.getString("project_name"),
             rs.getString("reference"),
             rs.getString("currency"),
