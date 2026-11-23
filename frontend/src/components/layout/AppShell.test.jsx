@@ -79,8 +79,14 @@ describe('AppShell navigation (role-scoped views)', () => {
 
   // การขนส่ง's actors are canActOnFulfilment {import, ceo}; sales_manager and a read-all holder open it read only (v2.3.0).
   // Wrong-way-round: the refusals are what matter, since a nav item pointing at a page the guard refuses is worse than no item.
-  it('shows การขนส่ง (/fulfilment) to import, ceo and the sales manager only', async () => {
-    for (const role of ['sales', 'account', 'hr', 'employee']) {
+  it('shows ONE การขนส่ง item: rounds for import/ceo/manager, the team list for a rep; none for account, hr, employee', async () => {
+    const hrefOf = () => screen.getByText('การขนส่ง').closest('a')?.getAttribute('href');
+    const rep = renderShell({ role: 'sales', employeeId: 4, name: 'ทดสอบ', email: 'sales@test.local' });
+    await screen.findByText('เนื้อหา');
+    expect(screen.getAllByText('การขนส่ง')).toHaveLength(1);
+    expect(hrefOf()).toBe('/my-orders');
+    rep.unmount();
+    for (const role of ['account', 'hr', 'employee']) {
       const { unmount } = renderShell({ role, employeeId: 4, name: 'ทดสอบ', email: `${role}@test.local` });
       await screen.findByText('เนื้อหา');
       expect(screen.queryByText('การขนส่ง'), `${role} must not see การขนส่ง`).toBeNull();
@@ -89,7 +95,8 @@ describe('AppShell navigation (role-scoped views)', () => {
 
     renderShell({ role: 'ceo', employeeId: 1, name: 'ซีอีโอ ทดสอบ', email: 'ceo@test.local' });
     await screen.findByText('เนื้อหา');
-    expect(screen.getByText('การขนส่ง')).toBeTruthy();
+    expect(screen.getAllByText('การขนส่ง')).toHaveLength(1); // ceo reaches both screens: one item, the switch is inside the page
+    expect(hrefOf()).toBe('/fulfilment');
   });
 
   // v2.3.0 read-all: the 7 oversight pages show for a sales manager and a flag holder on ANY role but import/account,
@@ -248,7 +255,7 @@ describe('AppShell navigation under the release lockdown', () => {
     expect(screen.getByText('นัดเข้าพบ')).toBeTruthy();
     expect(screen.getByText('แคตตาล็อกสินค้า')).toBeTruthy();
     expect(screen.queryByText('งานการเงิน')).toBeNull();
-    expect(screen.queryByText('การขนส่ง')).toBeNull();
+    expect(screen.getAllByText('การขนส่ง')).toHaveLength(1); // the rep's own view of shipments
 
     expect(screen.getByText('บุคคลของฉัน')).toBeTruthy();
     expect(screen.getByText('แดชบอร์ด')).toBeTruthy();

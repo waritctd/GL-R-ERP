@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { SALES_ENABLED } from '../../app/features.js';
-import { hasPermission, isDivisionManager, isMyOrdersGrantUser, isOversightReader, isQuotationReleaseUser, isReaderPath, isReleasedPath, isSelfServiceLocked } from '../../app/permissions.js';
+import { canAccessPath, hasPermission, isDivisionManager, isMyOrdersGrantUser, isOversightReader, isQuotationReleaseUser, isReaderPath, isReleasedPath, isSelfServiceLocked } from '../../app/permissions.js';
 import { PRODUCT_NAME } from '../../app/product.js';
 import { cn } from '../../utils/cn.js';
 import { displayRole, roleLabel } from '../../utils/format.js';
@@ -166,8 +166,6 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // นัดเข้าพบ — after เอกสารขาย (was ใบเสนอราคา until 2026-11-20), where the design's NAV puts it for sales. Same audience as the '/visits'
     // PATH_GUARDS entry (canViewVisits = VisitService.VISIT_ROLES): a rep's own week; sales_manager / ceo the team's.
     { path: '/visits', label: 'นัดเข้าพบ', helper: 'Visits', icon: 'calendar', group: 'sales', show: (hasPermission(user.role, 'canViewVisits') || reader) && SALES_ENABLED },
-    // ของที่ฉันสั่ง: the rep's one page of all incoming goods (the ONLY new sales page for shipments), from the menu.
-    { path: '/my-orders', label: 'ของที่ฉันสั่ง', helper: 'My incoming orders', icon: 'building', group: 'sales', show: (hasPermission(user.role, 'canViewMyOrders') || reader || Boolean(user.canCreateQuotation) || Boolean(user.canSeeShowroomOrders)) && SALES_ENABLED },
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'settings', show: user.role === 'ceo' && SALES_ENABLED },
     // Catalog browsing is scoped to the sales/CRM audience (canViewCatalog), not just the
     // feature flag.
@@ -179,7 +177,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // Import's stream-2 workspace, placed immediately after stream 1 so its two obligations to Sales read as two
     // adjacent items in the order a deal travels (price, then goods). `building`, not `clipboard`: the neighbour
     // already owns that glyph, and the chain ends at the warehouse.
-    { path: '/fulfilment', label: 'การขนส่ง', helper: 'Import shipments — the one place a step is advanced', icon: 'building', group: 'sales', show: (hasPermission(user.role, 'canActOnFulfilment') || reader) && SALES_ENABLED },
+    // การขนส่ง: ONE item for everyone. Import / CEO / readers land on the rounds (/fulfilment); a rep or a grant holder on the
+    // team's list (/my-orders, v2.5.0). A person who may open both gets a switch inside the page (ShippingSwitch).
+    { path: canAccessPath('/fulfilment', user) ? '/fulfilment' : '/my-orders', match: ['/fulfilment', '/my-orders'], label: 'การขนส่ง', helper: 'Shipments — rounds for import, incoming orders for sales', icon: 'building', group: 'sales',
+      show: (hasPermission(user.role, 'canActOnFulfilment') || hasPermission(user.role, 'canViewMyOrders') || reader || Boolean(user.canCreateQuotation) || Boolean(user.canSeeShowroomOrders)) && SALES_ENABLED },
     // Account has NO ค่าคอมมิชชัน nav item: the invoice+commission step (บันทึกใบกำกับ /
     // create-from-deal at close) is the LAST STAGE of the งานการเงิน money lifecycle + the
     // Overview worklist (รับมัดจำ → รับชำระส่วนที่เหลือ → ยืนยันพร้อมปิดงาน → บันทึกใบกำกับ), not a
@@ -262,7 +263,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       // import's งานนำเข้า + คิวขอราคา and account's งานการเงิน survive the lock: the same
       // allowlist canAccessPath applies.
       || (reader && isReaderPath(item.path))
-      || (item.path === '/my-orders' && isMyOrdersGrantUser(user))
+      || ((item.path === '/my-orders' || item.match?.includes('/my-orders')) && isMyOrdersGrantUser(user))
       || isReleasedPath(item.path, user));
 
   const closeTopbarPopover = useCallback(() => setActiveTopbarPopover(null), []);

@@ -36,6 +36,13 @@ public class NoProjectOrderController {
         return Map.of("importRequest", orders.withdraw(id, sessions.requireUser(session)));
     }
 
+    /** Pairing a PROJECT order to a deal is not switched on yet: answers 409 before any lock or write. */
+    @PostMapping("/no-project-orders/{id}/pair-to-deal")
+    Map<String, Boolean> pairToDeal(@org.springframework.web.bind.annotation.PathVariable long id, HttpSession session) {
+        sessions.requireUser(session);
+        throw new th.co.glr.hr.common.ApiException(org.springframework.http.HttpStatus.CONFLICT, "ยังไม่เปิดใช้");
+    }
+
     @GetMapping("/my-incoming")
     MyIncomingResponse myIncoming(HttpSession session) {
         return incoming.myIncoming(sessions.requireUser(session));
