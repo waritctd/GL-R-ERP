@@ -15,6 +15,7 @@ import { formatThaiDate } from '../../utils/format.js';
 import { formatQty, PURPOSE_LABELS, stepLabel, stepTone } from '../fulfilment/shipmentRounds.js';
 import { LotSheet } from '../tickets/IncomingGoodsPanel.jsx';
 import { useMediaQuery } from '../../hooks/useIsMobile.js';
+import { ShippingSwitch } from '../fulfilment/ShippingSwitch.jsx';
 import { NewOrderPanel, NewOrderSheet, useNewOrderForm } from './NewOrderSheet.jsx';
 
 // Whole literal, one track per column (7): for / who, product + lot, factory, quantity, status, expected, the open control.
@@ -25,6 +26,7 @@ const CHIPS = [{ key: 'ALL', label: 'ทั้งหมด' }, { key: 'PROJECT',
 
 const kindLabel = (kind) => (kind === 'PROJECT' ? 'โครงการ' : PURPOSE_LABELS[kind] ?? kind);
 const rowKey = (r) => (r.waiting ? `w-${r.importRequestId}-${r.product}` : `l-${r.lot.lotId}`);
+const statusKey = (r) => (r.waiting ? 'WAITING' : r.lot.step);
 const isArrived = (r) => !r.waiting && r.lot?.step === 'RECEIVED';
 const lotNote = (r) => (r.waiting ? 'ส่วนที่ยังไม่จัดรอบ' : r.lot.lotCount > 1 ? `ล็อต ${r.lot.lotNo} จาก ${r.lot.lotCount}` : 'ครบทั้งใบ');
 const whenText = (r) => {
@@ -39,13 +41,16 @@ const qtyText = (r) => {
 };
 
 /**
- * ของที่ฉันสั่ง — the ONE sales page for all incoming goods: every lot of every IR on the rep's project deals AND their
+ * การขนส่ง (sales view, was ของที่ฉันสั่ง) — the ONE sales page for all incoming goods: every lot of every IR on the rep's project deals AND their
  * no-project orders (sample / showroom / stock), with unplanned quantity as a รอจัดรอบ row. A project row opens that deal's
  * ส่งของ tab; a no-project row opens the lot sheet. The sales manager sees the team's; the showroom grant sees SHOWROOM orders.
  */
 export function MyOrdersPage({ user, showToast }) {
   const [chip, setChip] = useState('ALL');
   const [search, setSearch] = useState('');
+  const [rep, setRep] = useState('');
+  const [project, setProject] = useState('');
+  const [status, setStatus] = useState('');
   const [creating, setCreating] = useState(false);
   const [open, setOpen] = useState(null);
   const [withdrawing, setWithdrawing] = useState(null);
@@ -72,22 +77,31 @@ export function MyOrdersPage({ user, showToast }) {
   const term = search.trim().toLowerCase();
   const visible = useMemo(() => rows
     .filter((r) => chip === 'ALL' || r.kind === chip)
-    .filter((r) => !term || [r.who, r.ticketCode, r.docNumber, r.product, r.factoryName, r.requesterName].some((f) => (f ?? '').toLowerCase().includes(term))), [rows, chip, term]);
+    .filter((r) => !rep || String(r.repId) === rep)
+    .filter((r) => !project || (r.kind === 'PROJECT' && r.who === project))
+    .filter((r) => !status || statusKey(r) === status)
+    .filter((r) => !term || [r.who, r.ticketCode, r.docNumber, r.product, r.factoryName, r.requesterName, r.repName].some((f) => (f ?? '').toLowerCase().includes(term))), [rows, chip, term, rep, project, status]);
+  const reps = useMemo(() => [...new Map(rows.filter((r) => r.repId != null).map((r) => [String(r.repId), r.repName ?? `#${r.repId}`])).entries()].sort((a, b) => a[1].localeCompare(b[1], 'th')), [rows]);
+  const projects = useMemo(() => [...new Set(rows.filter((r) => r.kind === 'PROJECT').map((r) => r.who))].sort((a, b) => a.localeCompare(b, 'th')), [rows]);
+  const statuses = useMemo(() => [...new Set(rows.map(statusKey))], [rows]);
   const incoming = visible.filter((r) => !isArrived(r));
   const arrived = visible.filter(isArrived);
   const counts = useMemo(() => Object.fromEntries(CHIPS.map((c) => [c.key, c.key === 'ALL' ? rows.length : rows.filter((r) => r.kind === c.key).length])), [rows]);
 
-  const openControl = (r) => (r.kind === 'PROJECT'
-    ? <Link to={`/tickets/${r.ticketId}?tab=ship`} className={cn(buttonVariants({ variant: 'secondary', size: 'sm' }), 'no-underline')}>เปิดงาน</Link>
-    : (r.waiting
-      ? (r.canWithdraw ? <Button type="button" size="sm" variant="secondary" onClick={() => setWithdrawing(r)} data-testid={`order-withdraw-${r.importRequestId}`}>ยกเลิกคำขอ</Button> : null)
-      : <Button type="button" size="sm" variant="secondary" onClick={() => setOpen(r)} data-testid={`order-open-${r.lot.lotId}`}>ดู</Button>));
+  const openControl = (r) => (r.ticketId != null
+    ? (r.canOpenDeal === false ? null : <Link to={`/tickets/${r.ticketId}?tab=ship`} className={cn(buttonVariants({ variant: 'secondary', size: 'sm' }), 'no-underline')}>เปิดงาน</Link>)
+    : (
+      <span className="flex flex-col items-end gap-1">
+        {r.waiting
+          ? (r.canWithdraw ? <Button type="button" size="sm" variant="secondary" onClick={() => setWithdrawing(r)} data-testid={`order-withdraw-${r.importRequestId}`}>ยกเลิกคำขอ</Button> : null)
+          : <Button type="button" size="sm" variant="secondary" onClick={() => setOpen(r)} data-testid={`order-open-${r.lot.lotId}`}>ดู</Button>}
+      </span>));
 
   const columns = [
     { key: 'who', header: 'เพื่อ', render: (r) => (
       <span className="flex flex-col gap-0.5">
         <b className="text-sm">{r.who}</b>
-        <small className="text-text-muted">{kindLabel(r.kind)}{r.ticketCode ? ` · ${r.ticketCode}` : ''}{r.requesterName ? ` · ${r.requesterName}` : ''}</small>
+        <small className="text-text-muted">{kindLabel(r.kind)}{r.ticketCode ? ` · ${r.ticketCode}` : ''}{r.repName ?? r.requesterName ? ` · ${r.repName ?? r.requesterName}` : ''}</small>
       </span>
     ) },
     { key: 'product', header: 'สินค้า', render: (r) => <span className="flex flex-col"><b className="text-sm">{r.product}</b><small className="text-text-muted"><code>{r.docNumber}</code> · {lotNote(r)}</small></span> },
@@ -101,7 +115,7 @@ export function MyOrdersPage({ user, showToast }) {
     <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-surface p-3" data-testid="order-card">
       <span className="flex min-w-0 flex-col gap-0.5">
         <b className="text-sm">{r.who}</b>
-        <small className="text-text-muted">{kindLabel(r.kind)}{r.requesterName ? ` · ${r.requesterName}` : ''} · <code>{r.docNumber}</code></small>
+        <small className="text-text-muted">{kindLabel(r.kind)}{r.repName ?? r.requesterName ? ` · ${r.repName ?? r.requesterName}` : ''} · <code>{r.docNumber}</code></small>
         <small className="text-text-muted">{r.product} · {lotNote(r)}</small>
         <small className="text-text-muted">{r.waiting ? 'รอจัดรอบ' : stepLabel(r.lot.step)} · {whenText(r)}</small>
       </span>
@@ -117,9 +131,10 @@ export function MyOrdersPage({ user, showToast }) {
 
   return (
     <PageStack>
+      <ShippingSwitch user={user} current="orders" />
       <PageHeader
-        title="ของที่ฉันสั่ง"
-        subtitle="ของนำเข้าทุกออเดอร์ของคุณในที่เดียว ทั้งงานโครงการ ตัวอย่าง โชว์รูม และสต็อก"
+        title="การขนส่ง"
+        subtitle="ของนำเข้าของทั้งทีมขายในที่เดียว กรองดูตามผู้ดูแล โครงการ หรือสถานะได้"
         actions={canCreate && !sidePanel ? <Button type="button" variant="primary" onClick={() => setCreating(true)} data-testid="new-order">+ สั่งของไม่มีโครงการ</Button> : null}
       />
       <div className={cn('grid grid-cols-1 gap-4', sidePanel && 'min-[1041px]:grid-cols-[minmax(0,1fr)_24rem] min-[1041px]:items-start')}>
@@ -134,9 +149,20 @@ export function MyOrdersPage({ user, showToast }) {
             </button>
           ))}
         </div>
+        {[['rep', 'ผู้ดูแล', rep, setRep, reps], ['project', 'โครงการ', project, setProject, projects.map((p) => [p, p])],
+          ['status', 'สถานะ', status, setStatus, statuses.map((s) => [s, s === 'WAITING' ? 'รอจัดรอบ' : stepLabel(s)])]].map(([key, label, value, set, options]) => (
+          options.length > 1 ? (
+            <label key={key} className="flex min-w-0 items-center gap-2 mobile:w-full">
+              <span className="sr-only">{label}</span>
+              <select value={value} onChange={(e) => set(e.target.value)} className="min-h-11 min-w-0 rounded-md border border-border-input px-2 text-sm mobile:w-full" data-testid={`orders-filter-${key}`}>
+                <option value="">{label}: ทั้งหมด</option>
+                {options.map(([v, text]) => <option key={v} value={v}>{text}</option>)}
+              </select>
+            </label>
+          ) : null))}
         <label className="ml-auto flex items-center gap-2 mobile:ml-0 mobile:w-full">
           <span className="sr-only">ค้นหา</span>
-          <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นหาสินค้า / ใบขอซื้อ / ลูกค้า"
+          <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นหาสินค้า / ใบขอซื้อ / ลูกค้า / ผู้ดูแล"
             className="min-h-11 w-64 rounded-md border border-border-input px-3 text-sm mobile:w-full" data-testid="orders-search" />
         </label>
       </FilterBar>
@@ -153,7 +179,7 @@ export function MyOrdersPage({ user, showToast }) {
         </div>
         {sidePanel ? <NewOrderPanel form={orderForm} /> : null}
       </div>
-      <p className="text-2xs text-text-muted">แตะรายการของงานโครงการเพื่อไปที่แท็บ ส่งของ ของงานนั้น · ผู้จัดการฝ่ายขายเห็นของทุกคนในทีม</p>
+      <p className="text-2xs text-text-muted">แตะรายการของงานโครงการเพื่อไปที่แท็บ ส่งของ ของงานนั้น · เปิดได้เฉพาะงานของคุณ ส่วนของคนอื่นดูได้อย่างเดียว</p>
       <ConfirmDialog
         open={Boolean(withdrawing)}
         title="ยกเลิกคำขอสั่งของ"

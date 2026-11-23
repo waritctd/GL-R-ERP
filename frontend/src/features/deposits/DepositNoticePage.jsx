@@ -364,6 +364,16 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
 
   // payloadKey of what the page would save, as of the last load/seed or successful save.
   const savedKeyRef = useRef(null);
+  // The customer whose address the form filled in: its branch follows the tax id the document ends up printing.
+  const autoAddressCustomerRef = useRef(null);
+  function changeTaxId(value) {
+    const auto = autoAddressCustomerRef.current;
+    setField('customerTaxId', value);
+    // Only while the address is still the filled one: an address the rep typed is theirs.
+    if (auto && form.customerAddress === printedCustomerAddress(auto.address, auto.branch, form.customerTaxId)) {
+      setField('customerAddress', printedCustomerAddress(auto.address, auto.branch, value));
+    }
+  }
 
   function populateForm(d, customerList = []) {
     // The tax id / address filled from the customer master below are NOT "as loaded": savedKeyRef is seeded from the
@@ -372,15 +382,14 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
     // master
     let taxId   = d.customerTaxId   ?? '';
     let address = d.customerAddress ?? '';
-    if (d.customerName && (!taxId || !address)) {
-      const match = customerList.find(
-        (c) => c.name.trim().toLowerCase() === d.customerName.trim().toLowerCase()
-      );
-      if (match) {
-        taxId   = taxId   || match.taxId   || '';
-        address = address || printedCustomerAddress(match.address, match.branch, taxId);
-      }
+    const match = d.customerName ? customerList.find(
+      (c) => c.name.trim().toLowerCase() === d.customerName.trim().toLowerCase()
+    ) : null;
+    if (match && (!taxId || !address)) {
+      taxId   = taxId   || match.taxId   || '';
+      address = address || printedCustomerAddress(match.address, match.branch, taxId);
     }
+    autoAddressCustomerRef.current = match && address === printedCustomerAddress(match.address, match.branch, taxId) ? match : null;
     const seeded = {
       customerName:    d.customerName   ?? '',
       customerTaxId:   taxId,
@@ -542,6 +551,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
   }
 
   function selectCustomer(c) {
+    autoAddressCustomerRef.current = c;
     setForm((f) => ({
       ...f,
       customerName:    c.name,
@@ -818,7 +828,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                 </FormField>
                 <FormField label="เลขประจำตัวผู้เสียภาษี" htmlFor="doc-customer-tax">
                   <input id="doc-customer-tax" value={form.customerTaxId} readOnly={customerFromQuotation}
-                    onChange={(e) => setField('customerTaxId', e.target.value)} placeholder="0000000000000" />
+                    onChange={(e) => changeTaxId(e.target.value)} placeholder="0000000000000" />
                 </FormField>
                 <div className="col-span-full">
                   <FormField label="ที่อยู่" htmlFor="doc-customer-address">

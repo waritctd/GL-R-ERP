@@ -73,7 +73,7 @@ public class ImportRequestRepository {
         Map<Long, List<ImportRequestItemDto>> byParent = new LinkedHashMap<>();
         jdbc.query("""
             SELECT import_request_item_id, import_request_id, ticket_item_id, seq, code, size,
-                   qty, unit, note, color, texture, brand, model
+                   qty, unit, note, color, texture, brand, model, closed_out_reason
               FROM sales.import_request_item
              WHERE import_request_id IN (:ids)
              ORDER BY import_request_id, seq
@@ -92,7 +92,8 @@ public class ImportRequestRepository {
                         rs.getString("color"),
                         rs.getString("texture"),
                         rs.getString("brand"),
-                        rs.getString("model")));
+                        rs.getString("model"),
+                        rs.getString("closed_out_reason")));
             });
         return rows.stream()
             .map(r -> withItems(r, byParent.getOrDefault(r.id(), List.of())))
@@ -582,5 +583,32 @@ public class ImportRequestRepository {
              WHERE import_request_id = :id AND ticket_id IS NULL AND status = 'ISSUED'
                AND NOT EXISTS (SELECT 1 FROM sales.shipment_lot WHERE import_request_id = :id)
             """, Map.of("id", importRequestId));
+    }
+
+    /** One IR line as the link action sees it. */
+    public record LineToLink(long importRequestId, Long ticketId, String status, Long ticketItemId, String code, String size) {}
+
+    public LineToLink findLine(long lineId) {
+        return jdbc.query("""
+            SELECT i.import_request_id, ir.ticket_id, ir.status, i.ticket_item_id, i.code, i.size
+              FROM sales.import_request_item i JOIN sales.import_request ir ON ir.import_request_id = i.import_request_id
+             WHERE i.import_request_item_id = :i
+            """, Map.of("i", lineId), (rs, n) -> new LineToLink(rs.getLong("import_request_id"), (Long) rs.getObject("ticket_id"),
+                rs.getString("status"), (Long) rs.getObject("ticket_item_id"), rs.getString("code"), rs.getString("size"))).stream().findFirst().orElse(null);
+    }
+
+    /** Size text of a deal line, to check the link is the same product. */
+    public String ticketItemSize(long ticketId, long ticketItemId) {
+        return jdbc.queryForList("SELECT size FROM sales.ticket_item WHERE item_id = :i AND ticket_id = :t",
+            Map.of("i", ticketItemId, "t", ticketId), String.class).stream().findFirst().orElse(null);
+    }
+
+    public void linkLine(long lineId, long ticketItemId) {
+        jdbc.update("UPDATE sales.import_request_item SET ticket_item_id = :ti WHERE import_request_item_id = :i AND ticket_item_id IS NULL",
+            Map.of("ti", ticketItemId, "i", lineId));
+    }
+
+    public List<Long> ticketItemIds(long ticketId) {
+        return jdbc.queryForList("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId), Long.class);
     }
 }

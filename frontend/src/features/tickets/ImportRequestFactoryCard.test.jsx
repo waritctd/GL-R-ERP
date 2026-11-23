@@ -34,6 +34,17 @@ describe('ImportRequestFactoryCard — what the deal page changed stays on the d
     expect(screen.getByText('ดูอย่างเดียว')).toBeTruthy();
   });
 
+  it('an IR line on no deal line says so on a RECEIVED IR: import gets the link button, the rep only the notice', () => {
+    const row = { ...issued, importStep: 'RECEIVED', items: [{ id: 5, code: 'LOOSE', size: '20x20', qty: 10, unit: 'แผ่น', ticketItemId: null }] };
+    const { unmount } = renderCard({ row, canSetLeadTime: true });
+    expect(screen.getByTestId('ir-link-5')).toBeTruthy();
+    expect(screen.queryByTestId('ir-close-out-5')).toBeNull(); // closing out is not switched on
+    unmount();
+    renderCard({ row });
+    expect(screen.queryByTestId('ir-link-5')).toBeNull();
+    expect(screen.getByTestId('ir-unlinked-5').textContent).toContain('ติดต่อฝ่ายนำเข้าหรือผู้ดูแลระบบ');
+  });
+
   it('part of the order in the warehouse: the card says ถึงโกดัง 70 / 140, not a step that reads as nothing arrived', () => {
     renderCard({ row: issued, arrival: { received: '70', ordered: '140', unit: 'แผ่น' } });
     expect(screen.getByText('ถึงโกดัง 70 / 140 แผ่น')).toBeTruthy();

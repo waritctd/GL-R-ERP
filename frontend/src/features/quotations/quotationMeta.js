@@ -2264,6 +2264,49 @@ export function generateClientRequestId() {
 export const outcomeKeyFor = (map, scope, outcome) => (map[`${scope}:${outcome}`] ??= generateClientRequestId());
 export const dropOutcomeKey = (map, scope, outcome) => { delete map[`${scope}:${outcome}`]; };
 
+// ── the printed contact line: DealQuotationRenderAdapter's rules, for the editor's "จะพิมพ์" preview ──
+const ORG_NAME_PREFIXES = ['บริษัท', 'บจก', 'บ.จ.ก', 'หจก', 'ห.จ.ก', 'ห้างหุ้นส่วน', 'ร้าน', 'สำนักงาน', 'มูลนิธิ', 'สมาคม', 'โรงแรม', 'โรงเรียน', 'โรงพยาบาล', 'องค์การ', 'การไฟฟ้า', 'การประปา'];
+const ORG_NAME_MARKERS = ['จำกัด', '(มหาชน)', 'co., ltd', 'co.,ltd'];
+const ORG_NAME_WORD = /\b(company|limited|ltd|inc|llc)\b/;
+const THAI_HONORIFIC_PREFIXES = ['นางสาว', 'นาย', 'นาง', 'คุณ', 'ดร.'];
+const normalizePrintName = (s) => String(s ?? '').trim().replace(/\s+/g, ' ').replace(/[.,]+$/, '');
+
+function looksLikeOrganisation(name) {
+  const trimmed = normalizePrintName(name);
+  if (!trimmed) return false;
+  if (ORG_NAME_PREFIXES.some((p) => trimmed.startsWith(p))) return true;
+  const lower = trimmed.toLowerCase();
+  return ORG_NAME_MARKERS.some((m) => lower.includes(m)) || ORG_NAME_WORD.test(lower);
+}
+
+// A prefix counts only when the next character is not a following Thai vowel or tone mark ("คุณากร" is a name).
+function hasThaiHonorificPrefix(name) {
+  const trimmed = normalizePrintName(name);
+  return THAI_HONORIFIC_PREFIXES.some((p) => {
+    if (!trimmed.startsWith(p)) return false;
+    const next = trimmed.charAt(p.length);
+    return !next || !((next >= '\u0E30' && next <= '\u0E3A') || (next >= '\u0E47' && next <= '\u0E4E'));
+  });
+}
+
+/** The customer line as the PDF prints it. `omitHonorific`: the name prints exactly as typed. */
+export function printedContactLine({ contactName, customerName, customerTaxId, phone, email, english = false, omitHonorific = true }) {
+  const name = String(contactName ?? '').trim();
+  const customer = String(customerName ?? '').trim();
+  const showContact = Boolean(name)
+    && normalizePrintName(name).toLowerCase() !== normalizePrintName(customer).toLowerCase();
+  const honorific = english || omitHonorific || looksLikeOrganisation(name) || hasThaiHonorificPrefix(name) ? '' : 'คุณ';
+  const taxId = !english && String(customerTaxId ?? '').trim() ? `   เลขที่ผู้เสียภาษี : ${String(customerTaxId).trim()}` : '';
+  const who = `${showContact ? `${honorific}${name}   /   ` : ''}${customer}${taxId}`;
+  const typedPhone = stripPhoneLabel(phone);
+  const typedEmail = String(email ?? '').trim();
+  return [
+    `${english ? 'Attn :' : 'เรียน'} ${who}`.trim(),
+    typedEmail ? `${english ? 'E :' : 'Email'} ${typedEmail}` : null,
+    typedPhone ? `${english ? 'Tel.' : 'Phone'} ${typedPhone}` : null,
+  ].filter(Boolean).join(' · ');
+}
+
 // The PDF prints only terms.orderedByPhone/Email, so a picked contact's values fill a box the rep left
 // blank or never changed from the previous contact's; typed text is kept.
 export function carryContactDetails(terms, prev, next) {
