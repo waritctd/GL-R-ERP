@@ -120,7 +120,7 @@ class ImportSheetBackfillIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(created.get("order_purpose")).isEqualTo("SAMPLE");
         assertThat(created.get("ticket_id")).isNull();
         assertThat(created.get("import_step")).isEqualTo(ImportRequestStep.IN_TRANSIT);
-        assertThat(string("SELECT order_purpose FROM sales.import_request WHERE doc_number = 'IR69902'")).isEqualTo("CUSTOMER");
+        assertThat(string("SELECT order_purpose FROM sales.import_request WHERE doc_number = 'IR69902'")).isEqualTo("PROJECT");
         Map<String, Object> round = row("SELECT source, backfill_key, import_step, transship_eta_on, insured_on FROM sales.shipment_round WHERE backfill_key = 'IR69901#1'");
         assertThat(round.get("source")).isEqualTo("BACKFILL");
         assertThat(round.get("import_step")).isEqualTo(ImportRequestStep.IN_TRANSIT);

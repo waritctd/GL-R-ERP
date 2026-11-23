@@ -143,7 +143,7 @@ export function IncomingGoodsPanel({ ticketId, canMessage = false, showToast }) 
           <ul className="my-1 pl-5">
             {data.unlinked.map((g, i) => <li key={i}>{g.product} {formatQty(g.qty)}{g.unit ? ` ${g.unit}` : ''} ({g.docNumber})</li>)}
           </ul>
-          สินค้านี้รออยู่จนกว่าใบเสนอราคาหรือออเดอร์เพิ่มของงานจะมีรายการนี้ แล้วฝ่ายนำเข้าหรือ CEO ผูกรายการให้ที่การ์ดใบขอซื้อ — ฝ่ายขายดูได้อย่างเดียว
+          สินค้านี้ถูกพักไว้ ยังส่งมอบครบไม่ได้ — ติดต่อฝ่ายนำเข้าหรือผู้ดูแลระบบ (ฝ่ายขายดูได้อย่างเดียว)
         </div>
       )}
       <div className="flex flex-col gap-4">

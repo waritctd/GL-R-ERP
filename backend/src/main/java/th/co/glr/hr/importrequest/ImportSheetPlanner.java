@@ -51,7 +51,7 @@ class ImportSheetPlanner {
     static final String SKIP = "SKIP";
 
     private static final Set<String> NEEDS_BLOCK_ROUND = Set.of(CREATE, CREATE_MORE, ADOPT);
-    private static final Set<String> PURPOSES = Set.of("SAMPLE", "SHOWROOM", "STOCK", "CUSTOMER");
+    private static final Set<String> PURPOSES = Set.of("SAMPLE", "SHOWROOM", "STOCK", "PROJECT");
     private static final Pattern MONTH_ORDER = Pattern.compile(
         "^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[-\\s]*\\d{0,4}(\\s*order|\\s+ครั้งที่.*)?$", Pattern.CASE_INSENSITIVE);
 
@@ -475,7 +475,7 @@ class ImportSheetPlanner {
             || MONTH_ORDER.matcher(t).matches()) {
             return "STOCK";
         }
-        return "CUSTOMER";
+        return "PROJECT";
     }
 
     private void addDifferences(long roundId, SheetBlock b, List<Difference> out) {

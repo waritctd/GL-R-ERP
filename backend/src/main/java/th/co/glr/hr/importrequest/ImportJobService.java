@@ -53,7 +53,7 @@ import th.co.glr.hr.notification.NotificationRepository;
 @Service
 public class ImportJobService {
 
-    static final Map<String, String> PURPOSE_LABELS = Map.of("CUSTOMER", "งานลูกค้า", "SAMPLE", "ตัวอย่าง", "SHOWROOM", "โชว์รูม",
+    static final Map<String, String> PURPOSE_LABELS = Map.of("PROJECT", "โครงการ", "SAMPLE", "ตัวอย่าง", "SHOWROOM", "โชว์รูม",
         "STOCK", "สต็อก");
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
     private static final BigDecimal MAX_QTY = new BigDecimal("9999999999.99");

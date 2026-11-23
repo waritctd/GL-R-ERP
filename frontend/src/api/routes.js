@@ -298,7 +298,7 @@ export const API_ROUTES = {
   },
   // สั่งของไม่มีโครงการ (create) and ของที่ฉันสั่ง (every incoming lot of the caller's orders and project deals).
   noProjectOrders: { create: '/api/no-project-orders', withdraw: (id) => `/api/no-project-orders/${id}/withdraw` },
-  myIncoming: { get: '/api/my-incoming', all: '/api/incoming/all' },
+  myIncoming: { get: '/api/my-incoming' },
   // งานนำเข้า (ImportJobController): an issued IR with no sales job. Writes are import and the CEO only.
   importJobs: {
     list: '/api/import-jobs',

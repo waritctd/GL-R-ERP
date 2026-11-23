@@ -664,12 +664,12 @@ public class ImportRequestRepository {
             Map.of("i", ticketItemId, "t", ticketId), String.class).stream().findFirst().orElse(null);
     }
 
-    public List<Long> dealItemIds(long ticketId) {
-        return jdbc.queryForList("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId), Long.class);
-    }
-
     public void linkLine(long lineId, long ticketItemId) {
         jdbc.update("UPDATE sales.import_request_item SET ticket_item_id = :ti WHERE import_request_item_id = :i AND ticket_item_id IS NULL",
             Map.of("ti", ticketItemId, "i", lineId));
+    }
+
+    public List<Long> ticketItemIds(long ticketId) {
+        return jdbc.queryForList("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId), Long.class);
     }
 }

@@ -42,7 +42,7 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/** งานนำเข้า and the company wide list through the real services and SQL: who may write, who may read, and what never widens. */
+/** งานนำเข้า through the real services and SQL: who may write, and what never widens. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
@@ -53,7 +53,6 @@ class ImportJobIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final String LATE = String.format(java.util.Locale.ROOT, "IR%02d987", (TODAY.getYear() + 543) % 100);
 
     private ImportJobService jobs;
-    private CompanyIncomingService company;
     private NoProjectOrderService orders;
     private ImportRequestService irService;
     private ShipmentRoundService roundService;
@@ -84,7 +83,6 @@ class ImportJobIntegrationTest extends AbstractPostgresIntegrationTest {
         jobs = transactional(new ImportJobService(new ImportJobRepository(jdbc), stored, irService, roundRepo, roundService,
             new ImportSheetRepository(jdbc), factories, new EmployeeAuthRepository(jdbc), notifications,
             new AuditService(new AuditLogRepository(jdbc), json), json));
-        company = new CompanyIncomingService(roundRepo, new EmployeeAuthRepository(jdbc));
         orders = transactional(new NoProjectOrderService(stored, factories, notifications, new EmployeeAuthRepository(jdbc)));
 
         importUser = user("JOB-IMP", "import");
@@ -132,7 +130,7 @@ class ImportJobIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(edited.importRequest().docNumber()).isEqualTo("IR69988");
         assertThat(edited.importRequest().requestedByName()).isNotBlank();
         assertThat(edited.history().get(0).action()).isEqualTo("IMPORT_JOB_UPDATED");
-        assertThat(edited.history().get(0).before()).contains("CUSTOMER");
+        assertThat(edited.history().get(0).before()).contains("PROJECT");
         assertThat(edited.history().get(0).after()).contains("STOCK");
 
         ImportJobDto cleared = jobs.update(id, new UpdateImportJobRequest(null, null, null, null, null, null, null, null,
@@ -218,74 +216,28 @@ class ImportJobIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void everySalesRepSeesEveryIrsProgress_butNoMoneyOrDocuments_andNothingElseOpensUp() throws Exception {
-        long othersDeal = deal("JOB-2", otherRep.id());
-        long othersIr = issuedIr(othersDeal, otherRep);
-        long othersRound = round("IN_TRANSIT");
-        lotAll(othersRound, othersIr);
-        jdbc.update("UPDATE sales.shipment_round SET note = 'SECRET-NOTE', vessel = 'SHOWN VESSEL' WHERE shipment_round_id = " + othersRound, Map.of());
-        jdbc.update("INSERT INTO sales.shipment_round_document (shipment_round_id, kind, doc_no, uploaded_by) VALUES (:r, 'INVOICE', 'SECRET-INV', :by)",
-            Map.of("r", othersRound, "by", importUser.id()));
-        long othersOrder = orders.create(new NoProjectOrderService.CreateRequest("SAMPLE", "ตัวอย่างของคนอื่น", factory, TODAY.plusDays(2),
-            List.of(new NoProjectOrderService.Line("Sample", "60x60", new BigDecimal("2"), "แผ่น"))), otherRep).id();
-        long importJob = jobs.create(request(null, new RoundChoice("NONE", null), null), importUser).importRequest().id();
+    void aJobImportMadeShowsOnTheTeamListWithoutAWithdraw_andNothingElseOpensUp() {
+        long importJob = jobs.create(request(null, new RoundChoice("NONE", null), rep.id()), importUser).importRequest().id();
+        MyIncomingService mine = new MyIncomingService(new ShipmentRoundRepository(jdbc), new EmployeeAuthRepository(jdbc));
 
-        List<MyIncomingRow> rows = company.all(rep).rows();
-        MyIncomingRow dealRow = rows.stream().filter(r -> r.importRequestId() == othersIr).findFirst().orElseThrow();
-        assertThat(dealRow.repName()).contains("ทดสอบ");
-        assertThat(dealRow.canOpen()).isFalse();
-        assertThat(dealRow.canWithdraw()).isFalse();
-        assertThat(dealRow.lot().vessel()).isEqualTo("SHOWN VESSEL");
-        assertThat(rows.stream().filter(r -> r.importRequestId() == othersOrder).findFirst().orElseThrow().canOpen()).isFalse();
-        MyIncomingRow jobRow = rows.stream().filter(r -> r.importRequestId() == importJob).findFirst().orElseThrow();
-        assertThat(jobRow.kind()).isEqualTo("CUSTOMER");
-        String wire = new ObjectMapper().registerModule(new JavaTimeModule()).writeValueAsString(rows);
-        assertThat(wire).doesNotContain("SECRET-NOTE").doesNotContain("SECRET-INV");
-
-        // the list opened nothing: the same rep is still refused on each of them by id
-        refused(() -> irService.get(othersIr, rep), HttpStatus.FORBIDDEN);
-        refused(() -> irService.get(othersOrder, rep), HttpStatus.FORBIDDEN);
-        refused(() -> jobs.get(importJob, rep), HttpStatus.FORBIDDEN);
-        refused(() -> roundService.get(othersRound, rep), HttpStatus.FORBIDDEN);
-
-        UserPrincipal grantedAccount = user("JOB-AC2", "account");
-        UserPrincipal grantedImport = user("JOB-IM2", "import");
-        jdbc.update("UPDATE hr.employee SET can_read_all_sales = true WHERE employee_id IN (" + grantedAccount.id() + "," + grantedImport.id() + ")", Map.of());
-        for (UserPrincipal who : List.of(user("JOB-H2", "hr"), user("JOB-W2", "warehouse"), user("JOB-Q2", "qc"), user("JOB-E2", "employee"),
-            grantedAccount, grantedImport)) {
-            refused(() -> company.all(who), HttpStatus.FORBIDDEN);
-        }
-        UserPrincipal holder = user("JOB-H3", "qc");
-        jdbc.update("UPDATE hr.employee SET can_read_all_sales = true WHERE employee_id = " + holder.id(), Map.of());
-        assertThat(company.all(holder).rows()).isNotEmpty();
-        assertThat(company.all(user("JOB-SM2", "sales_manager")).rows()).isNotEmpty();
-        assertThat(company.all(user("JOB-CEO", "ceo")).rows()).isNotEmpty();
-    }
-
-    @Test
-    void goodsReceivedOverThirtyDaysAgoDropOffTheList() {
-        long oldJob = jobs.create(request(null, new RoundChoice("NEW", null), null), importUser).importRequest().id();
-        long newJob = jobs.create(request(null, new RoundChoice("NEW", null), null), importUser).importRequest().id();
-        received(oldJob, TODAY.minusDays(31));
-        received(newJob, TODAY.minusDays(29));
-        List<Long> seen = company.all(rep).rows().stream().map(MyIncomingRow::importRequestId).toList();
-        assertThat(seen).contains(newJob).doesNotContain(oldJob);
-    }
-
-    private void received(long ir, LocalDate on) {
-        jdbc.update("""
-            UPDATE sales.shipment_round SET import_step = 'RECEIVED', received_on = :on
-             WHERE shipment_round_id IN (SELECT shipment_round_id FROM sales.shipment_lot WHERE import_request_id = :ir)
-            """, Map.of("on", on, "ir", ir));
+        MyIncomingRow seenByAnother = mine.myIncoming(otherRep).rows().stream().filter(r -> r.importRequestId() == importJob)
+            .findFirst().orElseThrow();
+        assertThat(seenByAnother.kind()).isEqualTo("PROJECT");
+        assertThat(seenByAnother.repName()).isNotBlank();
+        assertThat(seenByAnother.canWithdraw()).isFalse();
+        // the rep named on it cannot take it back either: it is import's job
+        assertThat(mine.myIncoming(rep).rows().stream().filter(r -> r.importRequestId() == importJob).findFirst().orElseThrow().canWithdraw()).isFalse();
+        // reading the list opened nothing: the other rep is still refused the job by id
+        refused(() -> jobs.get(importJob, otherRep), HttpStatus.FORBIDDEN);
     }
 
     private CreateImportJobRequest request(String doc, RoundChoice round, Long requester) {
-        return new CreateImportJobRequest("CUSTOMER", "บ้านทดสอบ", factory, TODAY.minusDays(5), requester, null, null, doc,
+        return new CreateImportJobRequest("PROJECT", "บ้านทดสอบ", factory, TODAY.minusDays(5), requester, null, null, doc,
             List.of(new JobLine("Tile A", "60x60", new BigDecimal("10"), "แผ่น")), round);
     }
 
     private CreateImportJobRequest requestWithLines(RoundChoice round) {
-        return new CreateImportJobRequest("CUSTOMER", "บ้านทดสอบ", factory, TODAY.minusDays(5), null, null, null, null,
+        return new CreateImportJobRequest("PROJECT", "บ้านทดสอบ", factory, TODAY.minusDays(5), null, null, null, null,
             List.of(new JobLine("Tile A", "60x60", new BigDecimal("10"), "แผ่น"), new JobLine("Tile B", null, new BigDecimal("20"), "แผ่น")), round);
     }
 

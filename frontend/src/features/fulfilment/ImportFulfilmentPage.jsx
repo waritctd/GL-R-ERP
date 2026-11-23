@@ -1,3 +1,4 @@
+import { ShippingSwitch } from './ShippingSwitch.jsx';
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
@@ -206,6 +207,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
     && (ticketsQuery.data ?? []).every((t) => !['IR_ISSUED', 'IR_SENT', 'SHIPPING'].includes(t.fulfillmentStatus));
   return (
     <PageStack>
+      <ShippingSwitch user={user} current="rounds" />
       <PageHeader
         title="การขนส่ง"
         subtitle="เลื่อนขั้นตอนทีละรอบขนส่ง · ทุกใบขอซื้อในรอบขยับพร้อมกัน · สร้างงานนำเข้าเองได้เมื่อยังไม่มีงานขายในระบบ"

@@ -1,32 +1,26 @@
--- V242: งานนำเข้า that import creates themselves, and the one time backfill of the import team's sheet (spec 0001).
+-- V243: งานนำเข้า that import creates themselves, and the one time backfill of the import team's sheet (spec 0001).
 --
 -- An import job is the existing no-project import request (V239) with a new source mark and a new purpose:
 --   source   PORTAL (raised by sales, every row until now), IMPORT (import created it), BACKFILL (loaded from the sheet)
---   purpose  CUSTOMER: goods ordered for a customer whose job is not in the portal yet
+--   purpose  PROJECT (added by V242): goods ordered for a customer's project whose deal is not in the portal yet
 -- An IMPORT or BACKFILL row may have no requester and no wanted-by date, because the sheet often has neither.
 -- A shipment round gains the two dates the sheet tracks and the portal did not, and backfill_key, which lets a later run
 -- find the same block of the sheet again.
 --
--- Deploy order: the branch claude/quotation-sample-mark holds V241. Deploy V241 before or with this migration, because
--- production does not validate on migrate and would skip a lower version without an error.
+-- Deploy order: V241 and V242 must be applied before or with this migration, because production does not validate on
+-- migrate and would skip a lower version without an error.
 --
 -- Rollback, in this order, and only after every IMPORT and BACKFILL row is gone:
 --   1. DROP TABLE sales.import_sheet_backfill_run;
 --   2. DROP INDEX sales.ux_shipment_round_backfill_key;
 --      ALTER TABLE sales.shipment_round DROP COLUMN backfill_key, DROP COLUMN insured_on, DROP COLUMN transship_eta_on;
---   3. ALTER TABLE sales.import_request DROP CONSTRAINT chk_import_request_project_or_order,
---        DROP CONSTRAINT chk_import_request_order_purpose, DROP COLUMN source;
---   4. Re-add the two checks exactly as V239 declared them.
---   Flyway history keeps version 242: a rollback is a new migration that does steps 1 to 4, or a restore from the backup.
+--   3. ALTER TABLE sales.import_request DROP CONSTRAINT chk_import_request_project_or_order, DROP COLUMN source;
+--   4. Re-add the check exactly as V239 declared it.
+--   Flyway history keeps version 243: a rollback is a new migration that does steps 1 to 4, or a restore from the backup.
 
 ALTER TABLE sales.import_request
     ADD COLUMN source VARCHAR(10) NOT NULL DEFAULT 'PORTAL'
         CONSTRAINT chk_import_request_source CHECK (source IN ('PORTAL', 'IMPORT', 'BACKFILL'));
-
-ALTER TABLE sales.import_request
-    DROP CONSTRAINT chk_import_request_order_purpose,
-    ADD CONSTRAINT chk_import_request_order_purpose
-        CHECK (order_purpose IS NULL OR order_purpose IN ('SAMPLE', 'SHOWROOM', 'STOCK', 'CUSTOMER'));
 
 ALTER TABLE sales.import_request
     DROP CONSTRAINT chk_import_request_project_or_order,
@@ -36,7 +30,6 @@ ALTER TABLE sales.import_request
             AND (source IN ('IMPORT', 'BACKFILL') OR (requester_id IS NOT NULL AND wanted_by IS NOT NULL))));
 
 COMMENT ON COLUMN sales.import_request.source IS 'PORTAL = raised by sales; IMPORT = a งานนำเข้า import created; BACKFILL = loaded from the import sheet.';
-COMMENT ON COLUMN sales.import_request.order_purpose IS 'SAMPLE / SHOWROOM / STOCK / CUSTOMER for an import request with no deal (ticket_id NULL); NULL on a deal IR.';
 
 ALTER TABLE sales.shipment_round
     ADD COLUMN transship_eta_on DATE,

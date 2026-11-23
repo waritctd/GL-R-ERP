@@ -664,8 +664,6 @@ export const api = {
   },
   myIncoming: {
     get: () => apiRequest(API_ROUTES.myIncoming.get),
-    // ทั้งบริษัท: every IR's progress for the whole sales team, read only (CompanyIncomingService).
-    all: () => apiRequest(API_ROUTES.myIncoming.all),
   },
   // Mirrors ImportJobController: งานนำเข้า import creates and corrects. `update` sends only what changed, plus
   // `clear: ['requesterId' | 'depositReceivedOn' | 'wantedBy']` to empty an optional field. latestRun is null until a sheet load ran.

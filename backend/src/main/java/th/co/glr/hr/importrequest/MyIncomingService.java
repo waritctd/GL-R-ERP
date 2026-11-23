@@ -31,7 +31,7 @@ import th.co.glr.hr.importrequest.ShipmentRoundRepository.TicketLot;
 public class MyIncomingService {
 
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
-    static final int ARRIVED_DAYS = 30;
+    private static final int ARRIVED_DAYS = 30;
 
     private final ShipmentRoundRepository rounds;
     private final EmployeeAuthRepository employeeAuth;
@@ -50,21 +50,12 @@ public class MyIncomingService {
             && !DealEntryAccess.canEnterDeal(actor, employeeAuth)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        boolean allDeals = manager || reader || employeeAuth.canManageAllSalesDocuments(actor);
+        // Opening a deal stays as before; READING the import row is open to the whole sales team (Ploy 11-23).
+        boolean dealAccess = manager || reader || employeeAuth.canManageAllSalesDocuments(actor);
+        boolean allDeals = dealAccess || "sales".equals(role);
         LocalDate cutoff = LocalDate.now(BANGKOK).minusDays(ARRIVED_DAYS);
-        List<MyLine> lines = rounds.myLines(actor.id(), allDeals, manager || reader, showroomGrant, cutoff);
-        boolean ceo = "ceo".equals(role);
-        return new MyIncomingResponse(toRows(lines, cutoff, l -> canWithdraw(l, actor.id(), ceo), l -> true));
-    }
+        List<MyLine> lines = rounds.myLines(actor.id(), allDeals, manager || reader || "sales".equals(role), showroomGrant, cutoff);
 
-    /** Only a rep's own order, or the CEO: a job import created or loaded from the sheet is theirs to take back. */
-    private static boolean canWithdraw(MyLine l, long actorId, boolean ceo) {
-        return ceo || ("PORTAL".equals(l.source()) && l.requesterId() != null && l.requesterId() == actorId);
-    }
-
-    /** Turns IR lines into rows: one per lot, plus one for what is on no round. */
-    static List<MyIncomingRow> toRows(List<MyLine> lines, LocalDate cutoff, java.util.function.Predicate<MyLine> mayWithdraw,
-                                      java.util.function.Predicate<MyLine> mayOpen) {
         // lots of one line, in order, to number them and find what is still on no round
         Map<Long, List<MyLine>> byItem = new LinkedHashMap<>();
         lines.forEach(l -> byItem.computeIfAbsent(l.itemId(), k -> new ArrayList<>()).add(l));
@@ -75,8 +66,10 @@ public class MyIncomingService {
         for (List<MyLine> item : byItem.values()) {
             MyLine first = item.get(0);
             boolean noLots = !irsWithLots.contains(first.importRequestId());
-            boolean canWithdraw = first.ticketId() == null && noLots && mayWithdraw.test(first);
-            boolean canOpen = mayOpen.test(first);
+            // only a rep's own order, or the CEO: a job import created, or one loaded from the sheet, is theirs to take back
+            boolean canWithdraw = first.ticketId() == null && noLots
+                && ("PORTAL".equals(first.source()) && actor.id() == (first.requesterId() == null ? -1L : first.requesterId())
+                    || manager && "ceo".equals(role));
             List<MyLine> withLot = item.stream().filter(l -> l.lot() != null).toList();
             BigDecimal placed = withLot.stream().map(l -> l.lot().qty()).reduce(BigDecimal.ZERO, BigDecimal::add);
             BigDecimal remaining = first.itemQty().subtract(placed);
@@ -89,27 +82,46 @@ public class MyIncomingService {
                 IncomingLot lot = new IncomingLot(l.lotId(), product, first.unit(), l.qty(),
                     "RECEIVED".equals(l.roundStep()) ? (l.receivedQty() != null ? l.receivedQty() : l.qty()) : null,
                     i + 1, remaining.signum() > 0 ? withLot.size() + 1 : withLot.size(), l.roundStep(),
-                    l.etaOn() != null ? l.etaOn() : first.expectedTo(), l.roundLabel(), l.transportMode(), l.vessel(),
+                    l.etaOn() != null ? l.etaOn() : first.expectedTo(), IncomingService.roundLabelFor(actor, l.roundId(), l.roundLabel()), l.transportMode(), l.vessel(),
                     l.voyage(), l.port(), l.etdActualOn(), l.etaOn(), l.arrivedOn(), l.customsReleasedOn(), l.contactedOn(),
                     l.orderedOn(), l.pickedUpOn(), l.inTransitOn(), l.awaitingCustomsOn(), l.receivedOn());
-                rows.add(row(first, product, false, l.qty(), lot, false, canOpen));
+                rows.add(row(first, product, false, l.qty(), lot, false, dealAccess));
             }
             if (remaining.signum() > 0) {
-                rows.add(row(first, product, true, remaining, null, canWithdraw, canOpen));
+                rows.add(row(first, product, true, remaining, null, canWithdraw, dealAccess));
             }
         }
-        return rows;
+        return new MyIncomingResponse(rows);
     }
 
     private static MyIncomingRow row(MyLine l, String product, boolean waiting, BigDecimal qty, IncomingLot lot, boolean canWithdraw,
-                                     boolean canOpen) {
+                                      boolean dealAccess) {
         boolean project = l.ticketId() != null;
-        String who = project ? firstNonBlank(l.projectName(), l.customerName(), l.ticketCode()) : l.purposeNote();
-        String wanted = project ? l.requiredByNote() : (l.wantedBy() == null ? l.requiredByNote() : ThaiText.date(l.wantedBy()));
-        String rep = project ? l.ownerName() : firstNonBlank(l.requesterName(), l.requestedByName());
+        // A deal this person cannot open is another rep's: only its project name or deal code goes out. Never the customer, and
+        // never the deal's free-text required-by note (it may name one), in any field the page can filter or search.
+        boolean openable = project && (dealAccess || l.mine());
+        String who = project ? (openable ? firstNonBlank(l.projectName(), l.customerName(), l.ticketCode()) : hiddenCustomerSafe(l.projectName(), l.customerName(), l.ticketCode())) : l.purposeNote();
+        String wanted = project ? (openable ? l.requiredByNote() : null) : (l.wantedBy() == null ? null : ThaiText.date(l.wantedBy()));
         return new MyIncomingRow(project ? "PROJECT" : l.orderPurpose(), l.ticketId(), l.ticketCode(), who,
             project ? null : l.requesterName(), l.factoryName(), l.docNumber(), l.importRequestId(), wanted, waiting,
-            product, l.unit(), qty, lot, canWithdraw, rep, canOpen);
+            product, l.unit(), qty, lot, canWithdraw, l.repId(), l.repName(), openable);
+    }
+
+    /**
+     * The project name of a deal the caller cannot open, or the deal code when that name could reveal the customer. The name is
+     * free text, so it may equal the customer's name or contain it ("บจก. X สาขา Y"): both are compared after the sales
+     * normaliser (company-form words and punctuation dropped). A customer name that normalises to nothing cannot be revealed.
+     * A very short customer name matches many project names: that only hides more, which is the safe side.
+     */
+    static String hiddenCustomerSafe(String projectName, String customerName, String ticketCode) {
+        if (projectName == null || projectName.isBlank()) {
+            return ticketCode;
+        }
+        // spaces and hyphens are dropped from both, and either name inside the other hides: "AcmeHome" / "Acme Home Co., Ltd.",
+        // "Acme-Home" / "Acme Home", a short "Acme" inside the customer. A short project name then hides more, the safe side.
+        String c = th.co.glr.hr.salesboard.SalesNames.normaliseCustomer(customerName).replaceAll("[\\s-]", "");
+        String p = th.co.glr.hr.salesboard.SalesNames.normaliseCustomer(projectName).replaceAll("[\\s-]", "");
+        return !c.isEmpty() && (p.contains(c) || !p.isEmpty() && c.contains(p)) ? ticketCode : projectName;
     }
 
     private static String firstNonBlank(String... values) {

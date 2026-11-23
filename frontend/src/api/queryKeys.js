@@ -156,8 +156,6 @@ export const queryKeys = {
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],
   // ของที่ฉันสั่ง (GET /api/my-incoming).
   myIncoming: () => ['myIncoming'],
-  // ทั้งบริษัท on ของที่ฉันสั่ง (GET /api/incoming/all).
-  companyIncoming: () => ['myIncoming', 'company'],
   // งานนำเข้า (GET /api/import-jobs/{id}), who it can be named for, and what the sheet load left to check.
   importJob: (id) => ['importJobs', 'detail', Number(id)],
   importJobReps: () => ['importJobs', 'reps'],

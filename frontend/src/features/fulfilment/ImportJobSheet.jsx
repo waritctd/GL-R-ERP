@@ -50,7 +50,7 @@ export function ImportJobSheet({ job, onClose, onSaved, showToast }) {
   useEffect(() => () => { live.current = false; }, []);
   const editing = Boolean(job);
   const ir = job?.importRequest;
-  const [purpose, setPurpose] = useState(job?.purpose ?? 'CUSTOMER');
+  const [purpose, setPurpose] = useState(job?.purpose ?? 'PROJECT');
   const [note, setNote] = useState(job?.purposeNote ?? '');
   const [requesterId, setRequesterId] = useState(job?.requesterId ? String(job.requesterId) : '');
   const [factoryId, setFactoryId] = useState(ir?.factoryId ? String(ir.factoryId) : '');
@@ -61,7 +61,7 @@ export function ImportJobSheet({ job, onClose, onSaved, showToast }) {
   const [wantedBy, setWantedBy] = useState(job?.wantedBy ?? '');
   // what the sheet showed when it opened: a save sends only what the editor changed from this, so a stale blank never erases a newer value
   const [initial] = useState(() => ({
-    purpose: job?.purpose ?? 'CUSTOMER', note: job?.purposeNote ?? '', requesterId: job?.requesterId ? String(job.requesterId) : '',
+    purpose: job?.purpose ?? 'PROJECT', note: job?.purposeNote ?? '', requesterId: job?.requesterId ? String(job.requesterId) : '',
     factoryId: ir?.factoryId ? String(ir.factoryId) : '', docNumber: ir?.docNumber ?? '', receivedOn: ir?.firstIssuedDate ?? '',
     depositOn: ir?.depositReceivedDate ?? '', wantedBy: job?.wantedBy ?? '',
   }));
@@ -137,8 +137,8 @@ export function ImportJobSheet({ job, onClose, onSaved, showToast }) {
       onClose={onClose} placement="sheet-on-phone" size="lg" testId="import-job-sheet" footer={footer}>
       <fieldset disabled={save.isPending} className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0">
         <div className="flex flex-col gap-1">
-          <Chips label="ประเภท *" id="job-purpose" options={Object.entries(PURPOSE_LABELS)} value={purpose} onChange={setPurpose} testPrefix="job-purpose" />
-          {purpose === 'CUSTOMER' ? <small className="text-text-muted">งานลูกค้า คือของที่สั่งให้ลูกค้าแล้ว แต่ฝ่ายขายยังไม่ได้เปิดงานในระบบ</small> : null}
+          <Chips label="ประเภท *" id="job-purpose" options={Object.entries(PURPOSE_LABELS).sort(([a], [b]) => (a === 'PROJECT' ? -1 : b === 'PROJECT' ? 1 : 0))} value={purpose} onChange={setPurpose} testPrefix="job-purpose" />
+          {purpose === 'PROJECT' ? <small className="text-text-muted">โครงการ คือของที่สั่งให้โครงการของลูกค้าแล้ว แต่ฝ่ายขายยังไม่ได้เปิดงานในระบบ</small> : null}
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field id="job-note" label="โครงการ / ลูกค้า *">

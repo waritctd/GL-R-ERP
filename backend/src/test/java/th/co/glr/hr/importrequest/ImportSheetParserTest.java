@@ -123,6 +123,6 @@ class ImportSheetParserTest {
         assertThat(ImportSheetPlanner.suggestPurpose("Samples showroom + Test")).isEqualTo("SHOWROOM");
         assertThat(ImportSheetPlanner.suggestPurpose("ตัวอย่างทีมขาย")).isEqualTo("SAMPLE");
         assertThat(ImportSheetPlanner.suggestPurpose("Aug-25 order")).isEqualTo("STOCK");
-        assertThat(ImportSheetPlanner.suggestPurpose("บ้านคุณทดสอบ")).isEqualTo("CUSTOMER");
+        assertThat(ImportSheetPlanner.suggestPurpose("บ้านคุณทดสอบ")).isEqualTo("PROJECT");
     }
 }

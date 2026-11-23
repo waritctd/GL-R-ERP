@@ -15,8 +15,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       myIncoming: { get: vi.fn() },
       noProjectOrders: { create: vi.fn(), withdraw: vi.fn() },
-      factoryConfigs: { names: vi.fn() },
       tickets: { comment: vi.fn() },
+      factoryConfigs: { names: vi.fn() },
     },
   };
 });
@@ -40,7 +40,7 @@ function renderPage(user = { id: 5, name: 'คุณ ทดสอบ', role: 'sa
 
 afterEach(() => vi.clearAllMocks());
 
-describe('ของที่ฉันสั่ง', () => {
+describe('การขนส่ง (มุมมองฝ่ายขาย)', () => {
   it('lists project and no-project rows in กำลังมา and ถึงโกดังแล้ว; a project row opens its deal tab, a no-project row the lot sheet; chips filter', async () => {
     vi.mocked(api.myIncoming.get).mockResolvedValue(data);
     renderPage();
@@ -87,6 +87,20 @@ describe('ของที่ฉันสั่ง', () => {
     await waitFor(() => expect(api.noProjectOrders.withdraw).toHaveBeenCalledWith(13));
   });
 
+  it("shows the whole team's rows: filters by rep, hides the open control on a deal the rep cannot open", async () => {
+    const row = (over) => ({ ...base, kind: 'PROJECT', ticketId: 101, ticketCode: 'PR-TEST-0001', who: 'โครงการ ก', docNumber: 'IR-TEST-001', importRequestId: 11,
+      waiting: true, product: 'Slate Grey 60x60', unit: 'แผ่น', qty: 5, lot: null, canWithdraw: false, repId: 5, repName: 'คุณ ทดสอบ', canOpenDeal: true, ...over });
+    vi.mocked(api.myIncoming.get).mockResolvedValue({ rows: [row({}),
+      row({ ticketId: 202, ticketCode: 'PR-TEST-0002', who: 'โครงการ ข', docNumber: 'IR-TEST-002', importRequestId: 12, repId: 9, repName: 'คุณ อื่น', canOpenDeal: false })] });
+    renderPage();
+    const incoming = await screen.findByTestId('orders-incoming');
+    expect(within(incoming).getAllByRole('link', { name: 'เปิดงาน' })).toHaveLength(1); // the other rep's deal has no link
+    expect(within(incoming).getAllByText('IR-TEST-002').length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByTestId('orders-filter-rep'), { target: { value: '9' } });
+    expect(screen.queryByText('IR-TEST-001')).toBeNull();
+    expect(screen.getAllByText('IR-TEST-002').length).toBeGreaterThan(0);
+  });
+
   it('สั่งของไม่มีโครงการ: the send button stays disabled and names what is missing until every field is filled', async () => {
     vi.mocked(api.myIncoming.get).mockResolvedValue({ rows: [] });
     vi.mocked(api.factoryConfigs.names).mockResolvedValue({ factories: [{ id: 3, factoryName: 'Test Stone Co.' }] });
@@ -97,6 +111,8 @@ describe('ของที่ฉันสั่ง', () => {
     const send = within(sheet).getByTestId('new-order-send');
     expect(send.disabled).toBe(true);
     expect(within(sheet).getByTestId('new-order-missing').textContent).toContain('สั่งเพื่ออะไร');
+    expect(within(sheet).queryByTestId('order-purpose-PROJECT')).toBeNull(); // PROJECT orders cannot be raised yet
+    expect(within(sheet).getByTestId('order-purpose-SAMPLE')).toBeTruthy();
 
     fireEvent.click(within(sheet).getByTestId('order-purpose-SAMPLE'));
     fireEvent.change(within(sheet).getByLabelText(/ให้ใคร/), { target: { value: 'ให้ผู้ออกแบบ' } });

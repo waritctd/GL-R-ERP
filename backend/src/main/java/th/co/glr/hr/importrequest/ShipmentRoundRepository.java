@@ -811,7 +811,7 @@ public class ShipmentRoundRepository {
                          String customerName, String projectName, String orderPurpose, String purposeNote,
                          String requesterName, Long requesterId, LocalDate wantedBy, String requiredByNote, LocalDate expectedTo,
                          long itemId, String brand, String model, String code, String size, String unit,
-                         BigDecimal itemQty, TicketLot lot, String ownerName, String requestedByName, String source) {}
+                         BigDecimal itemQty, TicketLot lot, Long repId, String repName, boolean mine, String source) {}
 
     /**
      * Every ISSUED IR line of the caller's scope with its lots, in ONE query: project deals (ACTIVE; {@code allDeals} or
@@ -823,7 +823,10 @@ public class ShipmentRoundRepository {
             SELECT ir.import_request_id, ir.doc_number, ir.factory_name, ir.ticket_id, t.code AS ticket_code,
                    t.customer_name, p.name AS project_name, ir.order_purpose, ir.purpose_note,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS requester_name, ir.requester_id, ir.wanted_by,
-                   NULLIF(TRIM(CONCAT_WS(' ', o.first_name_th, o.last_name_th)), '') AS owner_name, ir.requested_by_name, ir.source,
+                   COALESCE(t.created_by, ir.requester_id) AS rep_id,
+                   COALESCE(NULLIF(TRIM(CONCAT_WS(' ', re.first_name_th, re.last_name_th)), ''), ir.requested_by_name) AS rep_name,
+                   ir.source AS ir_source,
+                   (t.created_by = :actor OR t.keyed_by = :actor) AS mine,
                    ir.required_by_note, ir.first_issued_date + ir.lead_time_max_days AS expected_to,
                    i.import_request_item_id, i.brand, i.model, i.code, i.size, i.unit, COALESCE(w.wanted_qty, i.qty) AS item_qty,
                    l.shipment_lot_id, l.qty AS lot_qty, l.received_qty,
@@ -836,7 +839,7 @@ public class ShipmentRoundRepository {
               LEFT JOIN sales.ticket t ON t.ticket_id = ir.ticket_id
               LEFT JOIN customers.project p ON p.project_id = t.project_id
               LEFT JOIN hr.employee e ON e.employee_id = ir.requester_id
-              LEFT JOIN hr.employee o ON o.employee_id = t.created_by
+              LEFT JOIN hr.employee re ON re.employee_id = COALESCE(t.created_by, ir.requester_id)
               LEFT JOIN sales.shipment_lot l ON l.import_request_item_id = i.import_request_item_id
               LEFT JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
              WHERE ir.status = 'ISSUED'
@@ -871,8 +874,7 @@ public class ShipmentRoundRepository {
                     rs.getString("requester_name"), (Long) rs.getObject("requester_id"), date(rs, "wanted_by"), rs.getString("required_by_note"),
                     date(rs, "expected_to"), rs.getLong("import_request_item_id"), rs.getString("brand"),
                     rs.getString("model"), rs.getString("code"), rs.getString("size"), rs.getString("unit"),
-                    rs.getBigDecimal("item_qty"), lot, rs.getString("owner_name"), rs.getString("requested_by_name"),
-                    rs.getString("source"));
+                    rs.getBigDecimal("item_qty"), lot, (Long) rs.getObject("rep_id"), rs.getString("rep_name"), rs.getBoolean("mine"), rs.getString("ir_source"));
             });
     }
 

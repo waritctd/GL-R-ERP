@@ -411,6 +411,15 @@ public class ShipmentRoundService {
         applyAftermath(onActiveDeals(recomputeIrSteps(mine, actor, null), mine), actor, null);
     }
 
+    /** After a line was linked to a deal line: ONLY that line's own IR re-derives (a shared round also holds other deals' IRs,
+     * whose date, operator and note must not be rewritten); the normal rollup and its one notice follow when that completes the
+     * deal. Locks as lockTicketIrs returned. */
+    @Transactional
+    public void rederiveAfterLink(List<IrLock> irs, long importRequestId, UserPrincipal actor) {
+        List<IrLock> mine = irs.stream().filter(i -> i.id() == importRequestId).toList();
+        applyAftermath(onActiveDeals(recomputeIrSteps(mine, actor, null), mine), actor, null);
+    }
+
     /** The round for the closing read, or null when it is now held only by finished deals (hidden): the change stays
      * committed and the caller leaves the page, as for a deleted round. */
     private ShipmentRoundDto roundOrNullIfHidden(long id, UserPrincipal actor) {

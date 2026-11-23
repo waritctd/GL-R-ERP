@@ -3242,8 +3242,8 @@ function mockTicketOrNull(ir) {
 function mockIrActive(ir) {
   return ir.ticketId == null || (findTicketRaw(ir.ticketId).lifecycle ?? 'ACTIVE') === 'ACTIVE';
 }
-const MOCK_PURPOSE_LABELS = { SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก' };
-const MOCK_IMPORT_JOB_LABELS = { ...MOCK_PURPOSE_LABELS, CUSTOMER: 'งานลูกค้า' };
+const MOCK_PURPOSE_LABELS = { SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก', PROJECT: 'โครงการ' };
+const MOCK_IMPORT_JOB_LABELS = { ...MOCK_PURPOSE_LABELS };
 
 function mockOrigin(ir) {
   if (ir.ticketId != null) return 'JOB';
@@ -3270,7 +3270,7 @@ function mockIncomingForIr(ir) {
     mine.forEach(({ l, r }, i) => lots.push({
       lotId: l.lotId, product, unit: item.unit ?? null, qty: l.qty, receivedQty: r.importStep === 'RECEIVED' ? (l.receivedQty ?? l.qty) : null,
       lotNo: i + 1, lotCount: Number(item.qty) > mockSumQty(mine.map(({ l: x }) => x.qty)) ? mine.length + 1 : mine.length, step: r.importStep,
-      expectedOn: r.facts.etaOn ?? mockImportRequestDto(ir).expectedArrivalTo ?? null, roundLabel: r.facts.label, transportMode: r.facts.transportMode,
+      expectedOn: r.facts.etaOn ?? mockImportRequestDto(ir).expectedArrivalTo ?? null, roundLabel: ['import', 'ceo'].includes(sessionUser?.role) ? r.facts.label : `รอบขนส่ง #${r.id}`, transportMode: r.facts.transportMode,
       vessel: r.facts.vessel, voyage: r.facts.voyage, port: r.facts.port, etdActualOn: r.facts.etdActualOn, etaOn: r.facts.etaOn,
       arrivedOn: r.facts.arrivedOn, customsReleasedOn: r.facts.customsReleasedOn, contactedOn: r.contactedOn, orderedOn: r.orderedOn,
       pickedUpOn: r.pickedUpOn, inTransitOn: r.inTransitOn, awaitingCustomsOn: r.awaitingCustomsOn, receivedOn: r.receivedOn,
@@ -3589,33 +3589,6 @@ function mockImportJobDto(row, user) {
     requesterId: row.requesterId ?? null, wantedBy: row.wantedBy ?? null, items, rounds, history: row.history ?? [],
     canEdit: ['import', 'ceo'].includes(user.role) && row.status === 'ISSUED',
   };
-}
-
-/** The rows of ของที่ฉันสั่ง: `include` picks the IRs, `canOpen` says which the caller may open. */
-function mockIncomingRows(user, include, canOpen, withdrawable) {
-  mockEnsureMigratedRounds();
-  const cutoff = mockAddDaysIso(mockTodayIso(), -30);
-  const rows = [];
-  mockImportRequests.filter((ir) => ir.status === 'ISSUED').forEach((ir) => {
-    const ticket = mockTicketOrNull(ir);
-    if (!include(ir, ticket)) return;
-    const { lots, waiting } = mockIncomingForIr(ir);
-    const base = {
-      kind: ticket ? 'PROJECT' : ir.orderPurpose, ticketId: ticket?.id ?? null, ticketCode: ticket?.code ?? null,
-      who: ticket ? (ticket.projectName || ticket.customerName || ticket.code) : ir.purposeNote,
-      requesterName: ticket ? null : ir.requestedByName, factoryName: ir.factoryName, docNumber: ir.docNumber,
-      importRequestId: ir.id, wantedBy: ticket ? ir.requiredByNote : ir.wantedBy,
-      repName: ticket ? (ticket.salesRepName ?? ticket.createdByName ?? null) : ir.requestedByName, canOpen: canOpen(ir, ticket),
-    };
-    lots.filter((l) => !(l.step === 'RECEIVED' && l.receivedOn && l.receivedOn < cutoff)).forEach((l) => rows.push({
-      ...base, waiting: false, product: l.product, unit: l.unit, qty: l.qty, lot: l, canWithdraw: false,
-    }));
-    const noLots = lots.length === 0;
-    const own = ir.requesterId === user.id && (ir.source ?? 'PORTAL') === 'PORTAL';
-    waiting.forEach((w) => rows.push({ ...base, waiting: true, product: w.product, unit: w.unit, qty: w.remainingQty, lot: null,
-      canWithdraw: withdrawable && !ticket && noLots && (own || user.role === 'ceo') }));
-  });
-  return rows;
 }
 
 function mockShipmentWrite() {
@@ -15720,6 +15693,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async create(request) {
       const user = requireSession();
       if (!['sales', 'sales_manager'].includes(user.role) && !user.canCreateQuotation) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (request?.purpose === 'PROJECT') fail('ยังไม่เปิดใช้: สั่งของสำหรับโครงการที่ยังไม่มีงานยังไม่เปิดให้สร้าง', 409);
       if (!Object.hasOwn(MOCK_PURPOSE_LABELS, request?.purpose)) fail('เลือกว่าสั่งเพื่ออะไร (ตัวอย่าง / โชว์รูม / สต็อก)', 400);
       const note = String(request.purposeNote ?? '').trim();
       if (!note) fail('ระบุว่าให้ใคร / ใช้ที่ไหน', 400);
@@ -15770,26 +15744,40 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     },
   },
 
-  // Mirrors MyIncomingService (ของที่ฉันสั่ง) and CompanyIncomingService (ทั้งบริษัท). Authorization here is an approximation:
-  // the Java services decide who reads what.
+  // Mirrors MyIncomingService (ของที่ฉันสั่ง): every lot and unplanned quantity of the caller's orders and project deals.
   myIncoming: {
     async get() {
       const user = requireSession();
       const manager = ['sales_manager', 'ceo'].includes(user.role);
       const reader = user.readAllSales === true && !['import', 'account'].includes(user.role);
       if (user.role !== 'sales' && !manager && !reader && !user.canCreateQuotation && user.canSeeShowroomOrders !== true) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      const mine = (ir, ticket) => (ticket
-        ? (mockIrActive(ir) && (manager || reader || isSalesOwner(ticket, user)))
-        : (manager || ir.requesterId === user.id || (ir.orderPurpose === 'SHOWROOM' && user.canSeeShowroomOrders === true)));
-      return delay({ rows: mockIncomingRows(user, mine, () => true, true) });
-    },
-    async all() {
-      const user = requireSession();
-      const reader = user.readAllSales === true && !['import', 'account'].includes(user.role);
-      if (!['sales', 'sales_manager', 'ceo'].includes(user.role) && !reader) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      const open = (ir, ticket) => ['sales_manager', 'ceo'].includes(user.role) || reader
-        || (ticket ? isSalesOwner(ticket, user) : ir.requesterId === user.id);
-      return delay({ rows: mockIncomingRows(user, (ir, ticket) => (ticket ? mockIrActive(ir) : true), open, false) });
+      mockEnsureMigratedRounds();
+      const cutoff = mockAddDaysIso(mockTodayIso(), -30);
+      const rows = [];
+      mockImportRequests.filter((ir) => ir.status === 'ISSUED').forEach((ir) => {
+        const ticket = mockTicketOrNull(ir);
+        const mine = ticket ? mockIrActive(ir) : (manager || reader || user.role === 'sales' || ir.requesterId === user.id
+          || (ir.orderPurpose === 'SHOWROOM' && user.canSeeShowroomOrders === true)); // sales reads the whole team (v2.5.0)
+        const mayOpen = Boolean(ticket) && (manager || reader || isSalesOwner(ticket, user));
+        if (ticket && !(manager || reader || user.role === 'sales' || isSalesOwner(ticket, user))) return;
+        if (!mine) return;
+        const { lots, waiting } = mockIncomingForIr(ir);
+        const base = {
+          kind: ticket ? 'PROJECT' : ir.orderPurpose, ticketId: ticket?.id ?? null, ticketCode: ticket?.code ?? null,
+          who: ticket ? (mayOpen ? (ticket.projectName || ticket.customerName || ticket.code) : (ticket.projectName || ticket.code)) : ir.purposeNote, // another rep's deal: never the customer
+          requesterName: ticket ? null : ir.requestedByName, factoryName: ir.factoryName, docNumber: ir.docNumber,
+          importRequestId: ir.id, wantedBy: ticket ? (mayOpen ? ir.requiredByNote : null) : ir.wantedBy,
+          repId: ticket ? ticket.createdById : ir.requesterId, repName: ticket ? ticket.createdByName ?? ticket.ownerName ?? null : ir.requestedByName,
+          canOpenDeal: mayOpen,
+        };
+        lots.filter((l) => !(l.step === 'RECEIVED' && l.receivedOn && l.receivedOn < cutoff)).forEach((l) => rows.push({
+          ...base, waiting: false, product: l.product, unit: l.unit, qty: l.qty, lot: l, canWithdraw: false,
+        }));
+        const noLots = lots.length === 0;
+        waiting.forEach((w) => rows.push({ ...base, waiting: true, product: w.product, unit: w.unit, qty: w.remainingQty, lot: null,
+          canWithdraw: !ticket && noLots && (((ir.source ?? 'PORTAL') === 'PORTAL' && ir.requesterId === user.id) || user.role === 'ceo') }));
+      });
+      return delay({ rows });
     },
   },
 

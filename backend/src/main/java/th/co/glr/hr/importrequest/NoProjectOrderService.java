@@ -29,7 +29,7 @@ import th.co.glr.hr.ticket.TicketEventKind;
 @Service
 public class NoProjectOrderService {
 
-    static final Map<String, String> PURPOSE_LABELS = Map.of("SAMPLE", "ตัวอย่าง", "SHOWROOM", "โชว์รูม", "STOCK", "สต็อก");
+    static final Map<String, String> PURPOSE_LABELS = Map.of("SAMPLE", "ตัวอย่าง", "SHOWROOM", "โชว์รูม", "STOCK", "สต็อก", "PROJECT", "โครงการ");
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
     /** sales.import_request_item.qty is NUMERIC(12,2). */
     private static final BigDecimal MAX_QTY = new BigDecimal("9999999999.99");
@@ -55,7 +55,11 @@ public class NoProjectOrderService {
     public ImportRequestDto create(CreateRequest request, UserPrincipal actor) {
         DealEntryAccess.requireCanEnterDeal(actor, employeeAuth);
         if (request == null || request.purpose() == null || !PURPOSE_LABELS.containsKey(request.purpose())) {
-            throw bad("เลือกว่าสั่งเพื่ออะไร (ตัวอย่าง / โชว์รูม / สต็อก)");
+            throw bad("เลือกว่าสั่งเพื่ออะไร (ตัวอย่าง / โชว์รูม / สต็อก / โครงการ)");
+        }
+        if ("PROJECT".equals(request.purpose())) {
+            // Existing PROJECT rows still show; new ones wait for pairing, or the deal would raise its own IR and the goods be ordered twice.
+            throw new ApiException(HttpStatus.CONFLICT, "ยังไม่เปิดใช้: สั่งของสำหรับโครงการที่ยังไม่มีงานยังไม่เปิดให้สร้าง");
         }
         String note = request.purposeNote() == null ? "" : request.purposeNote().trim();
         if (note.isEmpty()) {

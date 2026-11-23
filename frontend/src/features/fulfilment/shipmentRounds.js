@@ -99,21 +99,19 @@ export const lotArrivalText = (lot, roundStep) => {
 export const lotProduct = (lot) => [[lot.brand, lot.model].filter(Boolean).join(' ') || lot.code, lot.size].filter(Boolean).join(' ');
 
 /** Who the lot is for: the deal's customer/project. */
-export const PURPOSE_LABELS = { CUSTOMER: 'งานลูกค้า', SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก' };
-/** What a rep may order on สั่งของไม่มีโครงการ: งานลูกค้า comes only from import or the sheet. */
-export const ORDER_PURPOSE_LABELS = { SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก' };
+export const PURPOSE_LABELS = { SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก', PROJECT: 'โครงการ' };
 /** Where an import request came from, on การขนส่ง. */
 export const ORIGIN_LABELS = { JOB: 'งานขาย', SALES_ORDER: 'ฝ่ายขายสั่ง', IMPORT: 'ฝ่ายนำเข้าสร้าง', BACKFILL: 'จากตารางของเข้า' };
 
 /** Who a lot (or a waiting IR) is for: the deal's project/customer, or for an order with no project "ตัวอย่าง · requester". */
 export const lotWho = (lot) => (lot.ticketId == null
-  ? lot.orderPurpose === 'CUSTOMER' ? lot.purposeNote : [PURPOSE_LABELS[lot.orderPurpose], lot.requesterName].filter(Boolean).join(' · ') || lot.purposeNote
+  ? lot.orderPurpose === 'PROJECT' ? lot.purposeNote : [PURPOSE_LABELS[lot.orderPurpose], lot.requesterName].filter(Boolean).join(' · ') || lot.purposeNote
   : lot.projectName || lot.customerName || lot.ticketCode);
 
 /** The second line under who: the deal's code, or "ไม่มีโครงการ" (with who it is for) for an order with no project. */
 export const lotWhoSub = (lot) => {
   if (lot.ticketId != null) return `งาน ${lot.ticketCode}`;
-  if (lot.orderPurpose === 'CUSTOMER') return ['งานลูกค้า · ยังไม่มีงานขาย', lot.requesterName].filter(Boolean).join(' · ');
+  if (lot.orderPurpose === 'PROJECT') return ['โครงการ · ยังไม่มีงานขาย', lot.requesterName].filter(Boolean).join(' · ');
   return ['ไม่มีโครงการ', lot.purposeNote].filter(Boolean).join(' · ');
 };
 

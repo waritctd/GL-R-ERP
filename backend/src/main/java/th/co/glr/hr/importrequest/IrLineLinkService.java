@@ -62,7 +62,7 @@ public class IrLineLinkService {
         if (!DealLifecycle.ACTIVE.equals(lifecycle)) {
             throw new ApiException(HttpStatus.CONFLICT, "งานนี้ไม่ได้อยู่ในสถานะที่ดำเนินการได้");
         }
-        if (!stored.dealItemIds(ticketId).contains(ticketItemId)) {
+        if (!stored.ticketItemIds(ticketId).contains(ticketItemId)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "รายการนี้ไม่ใช่รายการของงานเดียวกัน");
         }
         String dealSize = stored.ticketItemSize(ticketId, ticketItemId);
@@ -74,7 +74,7 @@ public class IrLineLinkService {
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.IMPORT_STEP_ADVANCED, null, null,
             "ผูกรายการ " + line.code() + " ของใบขอซื้อ " + ir.docNumber() + " เข้ากับรายการของงาน",
             RelatedDocumentType.IMPORT_REQUEST, ir.id());
-        rounds.rederiveAfterNotDelivered(irs, ticketItemId, actor);
+        rounds.rederiveAfterLink(irs, line.importRequestId(), actor);
         irService.receiptCorrected(ticketId, ir.docNumber(), ir.factoryName(), actor);
         ticketService.completeDeliveryAfterIrRevision(ticketId, actor);
     }

@@ -18,14 +18,11 @@ public class NoProjectOrderController {
 
     private final NoProjectOrderService orders;
     private final MyIncomingService incoming;
-    private final CompanyIncomingService companyIncoming;
     private final SessionContext sessions;
 
-    public NoProjectOrderController(NoProjectOrderService orders, MyIncomingService incoming,
-                                    CompanyIncomingService companyIncoming, SessionContext sessions) {
+    public NoProjectOrderController(NoProjectOrderService orders, MyIncomingService incoming, SessionContext sessions) {
         this.orders = orders;
         this.incoming = incoming;
-        this.companyIncoming = companyIncoming;
         this.sessions = sessions;
     }
 
@@ -39,14 +36,15 @@ public class NoProjectOrderController {
         return Map.of("importRequest", orders.withdraw(id, sessions.requireUser(session)));
     }
 
+    /** Pairing a PROJECT order to a deal is not switched on yet: answers 409 before any lock or write. */
+    @PostMapping("/no-project-orders/{id}/pair-to-deal")
+    Map<String, Boolean> pairToDeal(@org.springframework.web.bind.annotation.PathVariable long id, HttpSession session) {
+        sessions.requireUser(session);
+        throw new th.co.glr.hr.common.ApiException(org.springframework.http.HttpStatus.CONFLICT, "ยังไม่เปิดใช้");
+    }
+
     @GetMapping("/my-incoming")
     MyIncomingResponse myIncoming(HttpSession session) {
         return incoming.myIncoming(sessions.requireUser(session));
-    }
-
-    /** ทั้งบริษัท: every IR's progress for the whole sales team, read only. */
-    @GetMapping("/incoming/all")
-    MyIncomingResponse allIncoming(HttpSession session) {
-        return companyIncoming.all(sessions.requireUser(session));
     }
 }

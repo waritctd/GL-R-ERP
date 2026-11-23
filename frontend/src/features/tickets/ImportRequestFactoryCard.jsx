@@ -409,7 +409,7 @@ export function ImportRequestFactoryCard({
                 ยังไม่อยู่ในรายการของงาน
                 {canSetLeadTime
                   ? <Button type="button" size="sm" variant="secondary" onClick={() => setLinking(it)} data-testid={`ir-link-${it.id}`}>ผูกกับรายการของงาน</Button>
-                  : <span>· ให้ฝ่ายนำเข้าหรือ CEO ผูกให้</span>}
+                  : <span>· ติดต่อฝ่ายนำเข้าหรือผู้ดูแลระบบ</span>}
               </span>
             ) : null}
           </div>

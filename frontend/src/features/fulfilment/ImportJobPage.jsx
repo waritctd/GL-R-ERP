@@ -228,7 +228,7 @@ function ImportJobPageBody({ id, showToast }) {
       />
       <div className="flex flex-wrap items-center gap-2">
         <code>{ir.docNumber}</code>
-        <StatusBadge tone="info">{PURPOSE_LABELS[job.purpose] ?? job.purpose}{job.purpose === 'CUSTOMER' ? ' · ยังไม่มีงานขาย' : ''}</StatusBadge>
+        <StatusBadge tone="info">{PURPOSE_LABELS[job.purpose] ?? job.purpose}{job.purpose === 'PROJECT' ? ' · ยังไม่มีงานขาย' : ''}</StatusBadge>
         <StatusBadge tone="neutral">{ORIGIN_LABELS[job.source === 'PORTAL' ? 'SALES_ORDER' : job.source]}</StatusBadge>
       </div>
 
