@@ -229,6 +229,7 @@ class ImportSheetPlanner {
         Set<String> taken = new HashSet<>();
         parsed.blocks().forEach(b -> b.irs().forEach(ir -> taken.add(ir.docNumber())));
         Map<String, Set<String>> anchorCodes = new HashMap<>();
+        Map<String, List<Map.Entry<Set<String>, String>>> renamedByDoc = new HashMap<>();
         Map<Integer, Map<String, String>> renames = new HashMap<>();
         Map<Integer, String> noSuffix = new HashMap<>();
         for (SheetBlock b : parsed.blocks()) {
@@ -241,6 +242,13 @@ class ImportSheetPlanner {
                 if (anchor == null) {
                     anchorCodes.put(ir.docNumber(), codes);
                 } else if (!anchor.isEmpty() && !codes.isEmpty() && anchor.stream().noneMatch(codes::contains)) {
+                    // a later block under the same codes as an earlier renumbered one belongs to that same IR
+                    String again = renamedByDoc.getOrDefault(ir.docNumber(), List.of()).stream()
+                        .filter(e -> e.getKey().stream().anyMatch(codes::contains)).map(Map.Entry::getValue).findFirst().orElse(null);
+                    if (again != null) {
+                        renames.computeIfAbsent(b.firstRow(), k -> new HashMap<>()).put(ir.docNumber(), again);
+                        continue;
+                    }
                     String base = ir.docNumber().replaceAll("-\\d{1,2}$", "");
                     String fresh = null;
                     // a number an earlier run gave this very block is reused, so a repeat load adds nothing: look for it first
@@ -259,6 +267,7 @@ class ImportSheetPlanner {
                     if (fresh != null) {
                         taken.add(fresh);
                         renames.computeIfAbsent(b.firstRow(), k -> new HashMap<>()).put(ir.docNumber(), fresh);
+                        renamedByDoc.computeIfAbsent(ir.docNumber(), k -> new ArrayList<>()).add(Map.entry(codes, fresh));
                     } else {
                         noSuffix.put(b.firstRow(), "เลข " + ir.docNumber() + " ซ้ำกับกลุ่มแถวอื่นและไม่มีเลขสำรอง (-90 ถึง -99) ว่างแล้ว");
                     }

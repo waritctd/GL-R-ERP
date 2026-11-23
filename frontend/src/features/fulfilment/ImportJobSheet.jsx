@@ -82,7 +82,7 @@ export function ImportJobSheet({ job, onClose, onSaved, showToast }) {
     !factoryId && 'โรงงาน',
     !receivedOn && 'วันที่ได้รับใบขอซื้อ',
     receivedOn !== initial.receivedOn && receivedOn > bangkokTodayIso() && 'วันที่ได้รับต้องไม่เป็นวันในอนาคต',
-    numberMode === 'TYPED' && typed !== initial.docNumber && !DOC_NUMBER.test(typed) && 'เลขใบขอซื้อ (เช่น IR69412)',
+    numberMode === 'TYPED' && (!editing || typed !== initial.docNumber) && !DOC_NUMBER.test(typed) && 'เลขใบขอซื้อ (เช่น IR69412)',
     !editing && (!lines.some(lineOk) || lines.some((l) => (l.code.trim() || l.qty) && !lineOk(l))) && 'สินค้าและจำนวน',
     !editing && roundMode === 'EXISTING' && !roundId && 'รอบขนส่ง',
   ].filter(Boolean);

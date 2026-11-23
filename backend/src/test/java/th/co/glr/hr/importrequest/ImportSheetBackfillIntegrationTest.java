@@ -284,6 +284,23 @@ class ImportSheetBackfillIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     @Test
+    void laterBlocksUnderTheSameClashingCodesShareOneRenumberedIr() throws IOException {
+        Path file = file(new ImportSheetTestBook()
+            .row("IR NO.", "69991", "ยี่ห้อ", "Round Factory", "Sale", "S1", "PROJECT", "งานหนึ่ง", "รายชื่อสินค้าและจำนวน", "x = 1 pcs")
+            .blank()
+            .row("IR NO.", "69991", "ยี่ห้อ", "Round Factory", "Sale", "S2", "PROJECT", "งานสอง", "รายชื่อสินค้าและจำนวน", "y = 2 pcs")
+            .blank()
+            .row("IR NO.", "69991", "ยี่ห้อ", "Round Factory", "Sale", "S2", "PROJECT", "งานสอง", "รายชื่อสินค้าและจำนวน", "z = 3 pcs"));
+
+        Result dry = service.dryRun(file, null, dir.resolve("r1"));
+        Result done = service.commit(file, null, dir.resolve("r2"), actorId, dry.planSha256());
+
+        assertThat(done.failed()).isEmpty();
+        assertThat(count("SELECT count(*) FROM sales.import_request WHERE doc_number LIKE 'IR69991%'")).isEqualTo(2);
+        assertThat(count("SELECT count(DISTINCT shipment_round_id) FROM sales.shipment_lot l JOIN sales.import_request r USING (import_request_id) WHERE r.doc_number = 'IR69991-90'")).isEqualTo(2);
+    }
+
+    @Test
     void twoFactoriesWithTheSameNormalizedNameAreNeverPickedSilently() throws IOException {
         jdbc.update("INSERT INTO price_catalog.factories (name, country, default_currency) VALUES ('Twin Co', 'IT', 'EUR'), ('TWIN CO', 'IT', 'EUR')", Map.of());
         Path file = file(new ImportSheetTestBook()

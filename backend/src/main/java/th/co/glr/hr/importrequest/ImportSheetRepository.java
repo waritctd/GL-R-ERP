@@ -100,6 +100,13 @@ class ImportSheetRepository {
         return out;
     }
 
+    /** The factory a round belongs to, or null when there is no such round. */
+    Long roundFactoryId(long roundId) {
+        List<Long> found = jdbc.query("SELECT factory_id FROM sales.shipment_round WHERE shipment_round_id = :id", Map.of("id", roundId),
+            (rs, n) -> rs.getLong(1));
+        return found.isEmpty() ? null : found.get(0);
+    }
+
     Map<String, Long> roundIdsByKey(Collection<String> keys) {
         Map<String, Long> out = new HashMap<>();
         if (keys.isEmpty()) {

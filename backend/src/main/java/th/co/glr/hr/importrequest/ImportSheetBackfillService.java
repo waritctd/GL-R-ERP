@@ -285,6 +285,10 @@ class ImportSheetBackfillService {
         long factoryId = resolved;
         List<String> docs = source.irs().stream().map(SheetIr::docNumber).toList();
         Long blockRound = sheet.roundIdsByKey(List.of(block.backfillKey())).get(block.backfillKey());
+        // a round of another factory is never filled, given documents or settled by this block: the block fails and says so
+        if (blockRound != null && !Objects.equals(sheet.roundFactoryId(blockRound), factoryId)) {
+            throw new IllegalStateException("รอบที่มีอยู่ของกลุ่มแถวนี้เป็นของโรงงานอื่น");
+        }
 
         // lock in the round service's order (rounds, then IRs), then decide again from what is true under the locks
         Map<String, PortalIr> portal = sheet.findIrs(docs);
