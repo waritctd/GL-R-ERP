@@ -17,6 +17,15 @@ class MyIncomingServiceTest {
     }
 
     @Test
+    void spacingHyphensAndAProjectInsideTheCustomerStillHide() {
+        assertThat(MyIncomingService.hiddenCustomerSafe("Acme", "Acme Development Co., Ltd.", "PR-1")).isEqualTo("PR-1"); // project inside customer
+        assertThat(MyIncomingService.hiddenCustomerSafe("AcmeHome", "Acme Home Co., Ltd.", "PR-1")).isEqualTo("PR-1"); // spacing
+        assertThat(MyIncomingService.hiddenCustomerSafe("Acme-Home", "Acme Home", "PR-1")).isEqualTo("PR-1"); // hyphen
+        assertThat(MyIncomingService.hiddenCustomerSafe("ทดสอบเอ็กซ์", "บริษัท ทดสอบ เอ็กซ์ จำกัด", "PR-1")).isEqualTo("PR-1"); // Thai, spaced vs not
+        assertThat(MyIncomingService.hiddenCustomerSafe("ทดสอบ เอ็กซ์", "บริษัท ทดสอบเอ็กซ์ จำกัด", "PR-1")).isEqualTo("PR-1");
+    }
+
+    @Test
     void anUnrelatedProjectNameIsKept_andNoNameMeansTheCode() {
         assertThat(MyIncomingService.hiddenCustomerSafe("โครงการ คอนโดริมน้ำ", "ทดสอบ เอ็กซ์", "PR-1")).isEqualTo("โครงการ คอนโดริมน้ำ");
         assertThat(MyIncomingService.hiddenCustomerSafe("โครงการ คอนโดริมน้ำ", null, "PR-1")).isEqualTo("โครงการ คอนโดริมน้ำ");

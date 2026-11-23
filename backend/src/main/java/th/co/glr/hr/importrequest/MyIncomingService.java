@@ -115,9 +115,11 @@ public class MyIncomingService {
         if (projectName == null || projectName.isBlank()) {
             return ticketCode;
         }
-        String customer = th.co.glr.hr.salesboard.SalesNames.normaliseCustomer(customerName);
-        String project = th.co.glr.hr.salesboard.SalesNames.normaliseCustomer(projectName);
-        return !customer.isEmpty() && project.contains(customer) ? ticketCode : projectName;
+        // spaces and hyphens are dropped from both, and either name inside the other hides: "AcmeHome" / "Acme Home Co., Ltd.",
+        // "Acme-Home" / "Acme Home", a short "Acme" inside the customer. A short project name then hides more, the safe side.
+        String c = th.co.glr.hr.salesboard.SalesNames.normaliseCustomer(customerName).replaceAll("[\\s-]", "");
+        String p = th.co.glr.hr.salesboard.SalesNames.normaliseCustomer(projectName).replaceAll("[\\s-]", "");
+        return !c.isEmpty() && (p.contains(c) || !p.isEmpty() && c.contains(p)) ? ticketCode : projectName;
     }
 
     private static String firstNonBlank(String... values) {
