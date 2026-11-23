@@ -754,28 +754,24 @@ public class PricingRequestRepository {
                 .addValue("factoryId", factoryId));
     }
 
-    /**
-     * True if {@code factoryName} already has a CURRENT {@code sales.factory_quote} on this
-     * pricing request whose status has moved past {@code DRAFT} — i.e. an RFQ that a human has
-     * already sent (REQUESTED) or that has progressed further (a factory has answered, etc.).
-     * Used by {@code PricingRequestService#setItemFactory} to
-     * refuse filling a blank line onto a factory whose current quote can no longer safely absorb
-     * it — routed through {@link #factoryQuotes} rather than new SQL here, same one-way-dependency
-     * shape {@link #cancelOpenChildrenForDeadRequest} already uses to reach {@code
-     * sales.factory_quote} (see this class's field-level Javadoc on {@link #factoryQuotes}).
-     *
-     * <p>Companion to {@code FactoryQuoteService#generateDrafts}'s own half of the same invariant,
-     * which ADDS a newly-resolved item to the existing quote instead of stranding it — but only
-     * while that quote is still DRAFT. This method is what stops a NEW line from ever being routed
-     * onto a factory once that window has closed, so the two guards protect one invariant from
-     * both directions: {@code setItemFactory} refuses the write that would create the
-     * unrecoverable case; {@code generateDrafts} handles the case gracefully when it is still
-     * safe to.
-     */
-    public boolean hasFactoryQuotePastDraft(long pricingRequestId, String factoryName) {
-        return factoryQuotes.findCurrentByFactory(pricingRequestId, factoryName)
-            .filter(quote -> !FactoryQuoteStatus.DRAFT.equals(quote.status()))
-            .isPresent();
+    /** The factory's current quote, read again after taking its chain lock, for {@code setItemFactory}. */
+    public Optional<FactoryQuoteDto> lockCurrentFactoryQuote(long pricingRequestId, String factoryName) {
+        Optional<FactoryQuoteDto> quote = factoryQuotes.findCurrentByFactory(pricingRequestId, factoryName);
+        if (quote.isEmpty()) {
+            return quote;
+        }
+        factoryQuotes.lockQuoteChain(quote.get());
+        return factoryQuotes.findCurrentByFactory(pricingRequestId, factoryName);
+    }
+
+    public boolean hasPendingLeadTimeChange(long factoryQuoteId) {
+        return factoryQuotes.hasPendingLeadTimeChange(factoryQuoteId);
+    }
+
+    /** See {@link FactoryQuoteRepository#addItemToContactedQuote}. */
+    public boolean addItemToContactedQuote(FactoryQuoteDto quote, long pricingRequestItemId, String revisionReason,
+                                           long actorId) {
+        return factoryQuotes.addItemToContactedQuote(quote, pricingRequestItemId, revisionReason, actorId);
     }
 
     public List<Long> findUnresolvableCatalogItemIds(long pricingRequestId) {

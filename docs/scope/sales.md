@@ -47,3 +47,17 @@ Three calls are still open and belong in the spec: keep or drop the side preview
 The portal writes the weekly sales report that reps now write by hand, so keeping deals current in the portal is all a rep has to do. Deal lists by date range and the receipts import already exist (features 21 and 32).
 **Done when:** each rep's weekly report is produced from portal data with an expected payment date per deal, late dates are shown as slips and not as errors, the received amount matches the accounting receipts, and managers and the CEO have a view that shows which deals have gone quiet.
 - [ ] Design it (spec): `/architect weekly report replacement`
+
+## Slice 4: Import corrects factory lines
+
+### 36. Import adds or moves a line on a contacted factory · in-progress
+Import can add a missed line to a factory it already contacted, or move a line to another factory, without waiting for Sales to start a new round. Prices already entered stay, and the quote is confirmed again before it reaches the CEO. Spec: [0002](../specs/0002-import-add-move-quote-items.md)
+**Done when:** a line with no factory can join a contacted factory, a line can move with a reason, costs use the right thickness and origin, and the CEO gate stays closed until every changed quote is confirmed.
+- [x] Design it (spec): `/architect import adds or moves a line on a contacted factory`
+- [ ] Build it: `/develop import adds or moves a line on a contacted factory`
+  - [x] Add a missed line to a contacted factory (AC-1, AC-2, AC-3, AC-10, AC-11)
+  - [ ] History, notices and the follow up email (AC-4, AC-9)
+  - [ ] Move a line, including catalog lines (AC-5, AC-6, AC-7, AC-8, AC-9)
+  - [ ] Mock API, API digests and revised tests (AC-1, AC-5, AC-10)
+- [ ] Verify it: `/check verify import adds or moves a line on a contacted factory`
+- [ ] Test it: `/test import adds or moves a line on a contacted factory`

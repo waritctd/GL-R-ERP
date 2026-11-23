@@ -19471,11 +19471,36 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const item = pr.items.find((candidate) => candidate.id === itemId);
       if (!item) fail('ไม่พบรายการสินค้านี้ในคำขอราคานี้', 404);
       const existing = pricingRequestItemFactory(item);
+      if (existing === factoryMaster.name) return delay({ pricingRequest: buildPricingRequestDetail(pr) });
       if (existing) {
         fail(`รายการนี้ระบุโรงงานไว้แล้ว (${existing}) — หากต้องการเปลี่ยนโรงงาน ต้องสร้างคำขอราคารอบใหม่`, 409);
       }
+      const quote = mockFactoryQuotes.find((q) => q.pricingRequestId === pr.id
+        && q.factoryName === factoryMaster.name && q.current && q.status !== 'CANCELLED');
+      if (quote?.status === 'NOT_AVAILABLE') {
+        fail(`โรงงาน '${factoryMaster.name}' แจ้งว่าเสนอราคาไม่ได้ กรุณาเลือกโรงงานอื่น`, 409);
+      }
       item.factory = factoryMaster.name;
       item.resolvedFactoryId = factoryMaster.factoryId;
+      if (quote && quote.status !== 'DRAFT') {
+        // shortcut: the Java creates a new revision for an answered quote; the mock edits the row, enough for the screen.
+        const answered = quote.status !== 'REQUESTED';
+        quote.items.push({
+          id: mockFactoryQuoteItemSeq++,
+          factoryQuoteId: quote.id,
+          pricingRequestItemId: item.id,
+          quotedQuantity: item.requestedQty,
+          quotedUnit: item.requestedPriceUnitBasis ?? item.requestedUnitBasis,
+          unitBasis: item.requestedPriceUnitBasis ?? item.requestedUnitBasis,
+          rawUnitPrice: null,
+          currency: answered ? quote.defaultCurrency : item.requestedCurrency ?? null,
+          sortOrder: quote.items.length,
+        });
+        if (answered) {
+          quote.status = 'RESPONSE_RECEIVED';
+          quote.revisionNo += 1;
+        }
+      }
       pr.updatedAt = new Date().toISOString();
       pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_FACTORY_SET', pr.status, pr.status);
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });

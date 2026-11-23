@@ -169,9 +169,11 @@ function apiStatus(error) {
  * Seeds Import's answer. A line Import already priced keeps Import's own currency and unit; an
  * unpriced line starts from Sales' requested terms. The last fallback matters: `catalogCurrency`
  * (EUR for the European factories) must win over a hardcoded 'THB', which once stored a price
- * typed as 46 as ฿46 instead of €46 (a 38.5x error in the landed cost).
+ * typed as 46 as ฿46 instead of €46 (a 38.5x error in the landed cost). A line added to a quote
+ * that already has prices takes that quote's currency, because the factory answers in one.
  */
 function defaultResponseItems(quote, requestItemById = new Map()) {
+  const quoteHasPrices = (quote?.items ?? []).some((item) => item.rawUnitPrice != null);
   return (quote?.items ?? []).map((item) => {
     const requestItem = requestItemById.get(item.pricingRequestItemId) ?? {};
     // unitBasis (what LandedCostCalculator does math on: PER_SQM/PER_PIECE/...) and quotedUnit
@@ -198,7 +200,7 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
     quotedUnit,
     unitBasis,
     rawUnitPrice: item.rawUnitPrice ?? '',
-    currency: (item.rawUnitPrice != null ? item.currency : requestItem.requestedCurrency) || item.currency || requestItem.requestedCurrency || quote.defaultCurrency || requestItem.catalogCurrency || 'THB',
+    currency: (item.rawUnitPrice != null ? item.currency : quoteHasPrices ? quote.defaultCurrency : requestItem.requestedCurrency) || item.currency || requestItem.requestedCurrency || quote.defaultCurrency || requestItem.catalogCurrency || 'THB',
     minimumOrderQuantity: item.minimumOrderQuantity ?? '',
     // Falls back to the request item's own ตร.ม./แผ่น (required on every item since V185) so import is not asked
     // for a figure the system already holds; a value saved on the quote still wins.
@@ -2804,14 +2806,24 @@ export function PricingRequestDetailPage({ user, showToast }) {
       value={factoryDrafts[item.id] ?? ''}
       onChangeValue={(code) => setFactoryDrafts((current) => ({ ...current, [item.id]: code }))}
       saving={setItemFactory.isPending}
-      onSave={() => setItemFactory.mutate(
-        { itemId: item.id, factoryId: Number(factoryDrafts[item.id]) },
-        { onSuccess: () => setFactoryDrafts((current) => {
-          const next = { ...current };
-          delete next[item.id];
-          return next;
-        }) },
-      )}
+      onSave={() => {
+        const factoryId = Number(factoryDrafts[item.id]);
+        // Adding a line can renumber the quote, which would orphan prices typed under the old id.
+        // By name: quotes are keyed on it, and a quote from a typed factory has no factoryId.
+        const factoryName = factoriesQuery.data?.find((f) => f.factoryId === factoryId)?.name;
+        if (factoryGroups.some((group) => group.current.factoryName === factoryName && responseDrafts[group.current.id])) {
+          showToast?.('error', 'โรงงานนี้มีราคาที่ยังไม่ได้ยืนยัน กรุณายืนยันหรือยกเลิกการแก้ไขก่อนเพิ่มรายการ');
+          return;
+        }
+        setItemFactory.mutate(
+          { itemId: item.id, factoryId },
+          { onSuccess: () => setFactoryDrafts((current) => {
+            const next = { ...current };
+            delete next[item.id];
+            return next;
+          }) },
+        );
+      }}
       onFactoryAdded={(saved) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.priceImportFactories() });
         setFactoryDrafts((current) => ({ ...current, [item.id]: String(saved.factoryId) }));
@@ -2828,8 +2840,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
     const quoteCards = factoryGroups.map((group) => {
       const current = group.current;
       const quoteStatus = factoryQuoteStatusLabel(current.status);
-      const unsavedDraft = inResponseWindow ? responseDrafts[current.id] : undefined;
       const seededItems = defaultResponseItems(current, requestItemById);
+      // A line added to this quote after typing began must join the draft: the save needs every line.
+      const withAddedLines = (typed) => typed && {
+        ...typed,
+        items: [...typed.items, ...seededItems.filter((seed) => !typed.items.some(
+          (line) => line.pricingRequestItemId === seed.pricingRequestItemId,
+        ))],
+      };
+      const unsavedDraft = inResponseWindow ? withAddedLines(responseDrafts[current.id]) : undefined;
       // A priced quote keeps its saved default; a fresh one takes its first line's seeded currency.
       const seededDefaultCurrency = (current.items?.some((item) => item.rawUnitPrice != null)
         ? current.defaultCurrency : seededItems[0]?.currency) || current.defaultCurrency || 'THB';
@@ -2873,11 +2892,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       // Functional updates: two edits in one batch must both land, so build from the LATEST draft.
       function updateDraft(patch) {
-        setResponseDrafts((cur) => ({ ...cur, [current.id]: { ...(cur[current.id] ?? seedDraft()), ...patch } }));
+        setResponseDrafts((cur) => ({ ...cur, [current.id]: { ...(withAddedLines(cur[current.id]) ?? seedDraft()), ...patch } }));
       }
       function updateLine(index, patch) {
         setResponseDrafts((cur) => {
-          const latest = cur[current.id] ?? seedDraft();
+          const latest = withAddedLines(cur[current.id]) ?? seedDraft();
           const items = [...latest.items];
           items[index] = { ...items[index], ...patch };
           return { ...cur, [current.id]: { ...latest, items } };
@@ -3027,7 +3046,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           // Only currencies costing can convert (THB + a rate on file); the current one stays so the select shows it.
           options: [...new Set(['THB', ...(fxRatesQuery.data ?? []).map((fx) => fx.currency), ...lineCurrencies])],
           onCurrency: (currency) => setResponseDrafts((cur) => {
-            const latest = cur[current.id] ?? seedDraft();
+            const latest = withAddedLines(cur[current.id]) ?? seedDraft();
             return { ...cur, [current.id]: { ...latest, defaultCurrency: currency, items: latest.items.map((line) => ({ ...line, currency })) } };
           }),
           requestedCurrencies: [...new Set(groupRequestItems.map((item) => item?.requestedCurrency).filter(Boolean))].join(', '),
