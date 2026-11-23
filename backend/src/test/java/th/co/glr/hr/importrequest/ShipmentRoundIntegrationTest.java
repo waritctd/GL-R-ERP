@@ -1404,6 +1404,12 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.import_request_item WHERE closed_out_at IS NOT NULL", Map.of(), Integer.class)).isZero();
     }
 
+    @Test
+    void aNewProjectOrderCannotBeCreatedYet() {
+        assertRefused(() -> noProject.create(new NoProjectOrderService.CreateRequest("PROJECT", "โครงการ ทดสอบ", factoryId(), tomorrow(), lines(5)), owner), HttpStatus.CONFLICT);
+        assertRefused(() -> noProject.create(new NoProjectOrderService.CreateRequest("PROJECT", "โครงการ ทดสอบ", factoryId(), tomorrow(), lines(5)), salesManager), HttpStatus.CONFLICT);
+    }
+
     private void unlink(long irItem) {
         jdbc.update("UPDATE sales.import_request_item SET ticket_item_id = NULL WHERE import_request_item_id = :i", Map.of("i", irItem));
     }

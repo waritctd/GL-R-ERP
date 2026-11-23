@@ -111,6 +111,8 @@ describe('การขนส่ง (มุมมองฝ่ายขาย)', (
     const send = within(sheet).getByTestId('new-order-send');
     expect(send.disabled).toBe(true);
     expect(within(sheet).getByTestId('new-order-missing').textContent).toContain('สั่งเพื่ออะไร');
+    expect(within(sheet).queryByTestId('order-purpose-PROJECT')).toBeNull(); // PROJECT orders cannot be raised yet
+    expect(within(sheet).getByTestId('order-purpose-SAMPLE')).toBeTruthy();
 
     fireEvent.click(within(sheet).getByTestId('order-purpose-SAMPLE'));
     fireEvent.change(within(sheet).getByLabelText(/ให้ใคร/), { target: { value: 'ให้ผู้ออกแบบ' } });

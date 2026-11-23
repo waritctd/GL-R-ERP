@@ -15622,6 +15622,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async create(request) {
       const user = requireSession();
       if (!['sales', 'sales_manager'].includes(user.role) && !user.canCreateQuotation) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (request?.purpose === 'PROJECT') fail('ยังไม่เปิดใช้: สั่งของสำหรับโครงการที่ยังไม่มีงานยังไม่เปิดให้สร้าง', 409);
       if (!Object.hasOwn(MOCK_PURPOSE_LABELS, request?.purpose)) fail('เลือกว่าสั่งเพื่ออะไร (ตัวอย่าง / โชว์รูม / สต็อก)', 400);
       const note = String(request.purposeNote ?? '').trim();
       if (!note) fail('ระบุว่าให้ใคร / ใช้ที่ไหน', 400);

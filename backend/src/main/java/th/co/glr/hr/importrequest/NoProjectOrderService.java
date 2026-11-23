@@ -57,6 +57,10 @@ public class NoProjectOrderService {
         if (request == null || request.purpose() == null || !PURPOSE_LABELS.containsKey(request.purpose())) {
             throw bad("เลือกว่าสั่งเพื่ออะไร (ตัวอย่าง / โชว์รูม / สต็อก / โครงการ)");
         }
+        if ("PROJECT".equals(request.purpose())) {
+            // Existing PROJECT rows still show; new ones wait for pairing, or the deal would raise its own IR and the goods be ordered twice.
+            throw new ApiException(HttpStatus.CONFLICT, "ยังไม่เปิดใช้: สั่งของสำหรับโครงการที่ยังไม่มีงานยังไม่เปิดให้สร้าง");
+        }
         String note = request.purposeNote() == null ? "" : request.purposeNote().trim();
         if (note.isEmpty()) {
             throw bad("ระบุว่าให้ใคร / ใช้ที่ไหน");

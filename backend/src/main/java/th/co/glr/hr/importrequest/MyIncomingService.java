@@ -98,11 +98,26 @@ public class MyIncomingService {
         // A deal this person cannot open is another rep's: only its project name or deal code goes out. Never the customer, and
         // never the deal's free-text required-by note (it may name one), in any field the page can filter or search.
         boolean openable = project && (dealAccess || l.mine());
-        String who = project ? (openable ? firstNonBlank(l.projectName(), l.customerName(), l.ticketCode()) : firstNonBlank(l.projectName(), l.ticketCode())) : l.purposeNote();
+        String who = project ? (openable ? firstNonBlank(l.projectName(), l.customerName(), l.ticketCode()) : hiddenCustomerSafe(l.projectName(), l.customerName(), l.ticketCode())) : l.purposeNote();
         String wanted = project ? (openable ? l.requiredByNote() : null) : (l.wantedBy() == null ? null : ThaiText.date(l.wantedBy()));
         return new MyIncomingRow(project ? "PROJECT" : l.orderPurpose(), l.ticketId(), l.ticketCode(), who,
             project ? null : l.requesterName(), l.factoryName(), l.docNumber(), l.importRequestId(), wanted, waiting,
             product, l.unit(), qty, lot, canWithdraw, l.repId(), l.repName(), openable);
+    }
+
+    /**
+     * The project name of a deal the caller cannot open, or the deal code when that name could reveal the customer. The name is
+     * free text, so it may equal the customer's name or contain it ("บจก. X สาขา Y"): both are compared after the sales
+     * normaliser (company-form words and punctuation dropped). A customer name that normalises to nothing cannot be revealed.
+     * A very short customer name matches many project names: that only hides more, which is the safe side.
+     */
+    static String hiddenCustomerSafe(String projectName, String customerName, String ticketCode) {
+        if (projectName == null || projectName.isBlank()) {
+            return ticketCode;
+        }
+        String customer = th.co.glr.hr.salesboard.SalesNames.normaliseCustomer(customerName);
+        String project = th.co.glr.hr.salesboard.SalesNames.normaliseCustomer(projectName);
+        return !customer.isEmpty() && project.contains(customer) ? ticketCode : projectName;
     }
 
     private static String firstNonBlank(String... values) {
