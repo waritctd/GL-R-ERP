@@ -3263,7 +3263,7 @@ function mockIncomingForIr(ir) {
     mine.forEach(({ l, r }, i) => lots.push({
       lotId: l.lotId, product, unit: item.unit ?? null, qty: l.qty, receivedQty: r.importStep === 'RECEIVED' ? (l.receivedQty ?? l.qty) : null,
       lotNo: i + 1, lotCount: Number(item.qty) > mockSumQty(mine.map(({ l: x }) => x.qty)) ? mine.length + 1 : mine.length, step: r.importStep,
-      expectedOn: r.facts.etaOn ?? mockImportRequestDto(ir).expectedArrivalTo ?? null, roundLabel: r.facts.label, transportMode: r.facts.transportMode,
+      expectedOn: r.facts.etaOn ?? mockImportRequestDto(ir).expectedArrivalTo ?? null, roundLabel: ['import', 'ceo'].includes(sessionUser?.role) ? r.facts.label : `รอบขนส่ง #${r.id}`, transportMode: r.facts.transportMode,
       vessel: r.facts.vessel, voyage: r.facts.voyage, port: r.facts.port, etdActualOn: r.facts.etdActualOn, etaOn: r.facts.etaOn,
       arrivedOn: r.facts.arrivedOn, customsReleasedOn: r.facts.customsReleasedOn, contactedOn: r.contactedOn, orderedOn: r.orderedOn,
       pickedUpOn: r.pickedUpOn, inTransitOn: r.inTransitOn, awaitingCustomsOn: r.awaitingCustomsOn, receivedOn: r.receivedOn,

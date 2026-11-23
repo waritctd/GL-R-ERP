@@ -66,7 +66,7 @@ public class IncomingService {
                     lotDtos.add(new IncomingLot(l.lotId(), product, unitOf(item), l.qty(),
                         "RECEIVED".equals(l.roundStep()) ? (l.receivedQty() != null ? l.receivedQty() : l.qty()) : null,
                         i + 1, item.qty().compareTo(placed) > 0 ? mine.size() + 1 : mine.size(), l.roundStep(), // a marked rest still counts: this lot is not the whole line
-                        l.etaOn() != null ? l.etaOn() : expectedTo, l.roundLabel(), l.transportMode(),
+                        l.etaOn() != null ? l.etaOn() : expectedTo, roundLabelFor(actor, l.roundId(), l.roundLabel()), l.transportMode(),
                         l.vessel(), l.voyage(), l.port(), l.etdActualOn(), l.etaOn(), l.arrivedOn(),
                         l.customsReleasedOn(), l.contactedOn(), l.orderedOn(), l.pickedUpOn(), l.inTransitOn(),
                         l.awaitingCustomsOn(), l.receivedOn()));
@@ -96,6 +96,12 @@ public class IncomingService {
             irs.stream().flatMap(ir -> ir.items().stream().filter(i -> i.ticketItemId() == null)
                 .map(i -> new IncomingDtos.IncomingUnlinked(ir.id(), i.id(), ir.docNumber(), product(i), unitOf(i), i.qty()))).toList());
 
+    }
+
+    /** A backfilled round is labelled with its proforma number, and round document numbers are import and CEO only: everyone else
+     * gets a neutral label. */
+    static String roundLabelFor(UserPrincipal actor, long roundId, String label) {
+        return "import".equals(actor.role()) || "ceo".equals(actor.role()) ? label : "รอบขนส่ง #" + roundId;
     }
 
     private static String unitOf(ImportRequestItemDto item) {

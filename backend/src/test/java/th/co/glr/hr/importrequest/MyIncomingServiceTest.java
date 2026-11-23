@@ -23,4 +23,16 @@ class MyIncomingServiceTest {
         assertThat(MyIncomingService.hiddenCustomerSafe(" ", "ทดสอบ เอ็กซ์", "PR-1")).isEqualTo("PR-1");
         assertThat(MyIncomingService.hiddenCustomerSafe(null, "ทดสอบ เอ็กซ์", "PR-1")).isEqualTo("PR-1");
     }
+
+    private static th.co.glr.hr.auth.UserPrincipal as(String role) {
+        return new th.co.glr.hr.auth.UserPrincipal(1L, "t@test.invalid", "ทดสอบ", role, null, true, null, false, null, false);
+    }
+
+    @Test
+    void aRoundLabelIsRealOnlyForImportAndTheCeo() {
+        assertThat(IncomingService.roundLabelFor(as("sales"), 42, "PI-TEST-1")).isEqualTo("รอบขนส่ง #42");
+        assertThat(IncomingService.roundLabelFor(as("sales_manager"), 42, "PI-TEST-1")).isEqualTo("รอบขนส่ง #42");
+        assertThat(IncomingService.roundLabelFor(as("import"), 42, "PI-TEST-1")).isEqualTo("PI-TEST-1");
+        assertThat(IncomingService.roundLabelFor(as("ceo"), 42, "PI-TEST-1")).isEqualTo("PI-TEST-1");
+    }
 }

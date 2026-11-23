@@ -80,7 +80,7 @@ public class MyIncomingService {
                 IncomingLot lot = new IncomingLot(l.lotId(), product, first.unit(), l.qty(),
                     "RECEIVED".equals(l.roundStep()) ? (l.receivedQty() != null ? l.receivedQty() : l.qty()) : null,
                     i + 1, remaining.signum() > 0 ? withLot.size() + 1 : withLot.size(), l.roundStep(),
-                    l.etaOn() != null ? l.etaOn() : first.expectedTo(), l.roundLabel(), l.transportMode(), l.vessel(),
+                    l.etaOn() != null ? l.etaOn() : first.expectedTo(), IncomingService.roundLabelFor(actor, l.roundId(), l.roundLabel()), l.transportMode(), l.vessel(),
                     l.voyage(), l.port(), l.etdActualOn(), l.etaOn(), l.arrivedOn(), l.customsReleasedOn(), l.contactedOn(),
                     l.orderedOn(), l.pickedUpOn(), l.inTransitOn(), l.awaitingCustomsOn(), l.receivedOn());
                 rows.add(row(first, product, false, l.qty(), lot, false, dealAccess));
