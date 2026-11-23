@@ -205,7 +205,7 @@ public class ImportRequestController {
     @PostMapping("/import-requests/lines/{lineId}/close-out")
     Map<String, Boolean> closeOutLine(@PathVariable long lineId, HttpSession session) {
         sessions.requireUser(session);
-        throw new ApiException(HttpStatus.CONFLICT, "ยังไม่เปิดใช้: ปิดรายการนี้ไม่ได้ ให้รอจนกว่าใบเสนอราคาหรือออเดอร์เพิ่มของงานมีรายการนี้ แล้วฝ่ายนำเข้าผูกให้");
+        throw new ApiException(HttpStatus.CONFLICT, "ยังไม่เปิดใช้: ปิดรายการนี้ไม่ได้ — ติดต่อผู้ดูแลระบบ");
     }
 
     @PostMapping("/import-requests/lines/{lineId}/reopen")

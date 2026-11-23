@@ -1377,6 +1377,20 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void linking_leavesAnotherDealsIrOnTheSameRoundAlone() {
+        Line a = line("LK-6");
+        Line b = line("LK-7");
+        jdbc.update("INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model) VALUES (:ir, NULL, 2, 'LOOSE', '20x20', 10, 'pcs', 'Round Factory', 'Raku')", Map.of("ir", a.ir));
+        long r = round("RECEIVED");
+        insertLot(r, a.ir, a.irItem, 100);
+        insertLot(r, b.ir, b.irItem, 100);
+        jdbc.update("UPDATE sales.import_request SET import_step = 'ORDERED' WHERE import_request_id = :i", Map.of("i", b.ir)); // out of step on purpose
+        long loose = jdbc.queryForObject("SELECT import_request_item_id FROM sales.import_request_item WHERE import_request_id = :i AND code = 'LOOSE'", Map.of("i", a.ir), Long.class);
+        links.link(loose, a.item, importUser);
+        assertThat(irStep(b.ir)).isEqualTo(ImportRequestStep.ORDERED); // a neighbour on the shared round is not re-derived
+    }
+
+    @Test
     void closeOutIsNotSwitchedOn() {
         // the endpoints answer 409; no service reaches the closed_out columns
         assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.import_request_item WHERE closed_out_at IS NOT NULL", Map.of(), Integer.class)).isZero();

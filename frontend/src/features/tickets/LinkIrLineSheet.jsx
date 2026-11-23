@@ -12,7 +12,7 @@ const itemName = (i) => [i.brand, i.model, i.size].filter(Boolean).join(' ') || 
  */
 export function LinkIrLineSheet({ ticketId, line, onClose, onLinked, showToast }) {
   const [pick, setPick] = useState('');
-  const detail = useQuery({ queryKey: ['linkLineDeal', ticketId], queryFn: () => api.tickets.get(ticketId).then((r) => r.ticket) });
+  const detail = useQuery({ queryKey: ['linkLineDeal', ticketId], queryFn: () => api.importDeals.get(ticketId).then((r) => r.deal) }); // the price-free import view: import may not read the ticket
   const items = detail.data?.items ?? [];
   const link = useMutation({
     mutationFn: () => api.storedImportRequests.linkLine(line.id, Number(pick)),
@@ -24,7 +24,7 @@ export function LinkIrLineSheet({ ticketId, line, onClose, onLinked, showToast }
       onClose={onClose} placement="sheet-on-phone" testId="link-line-sheet"
       footer={<Button type="button" variant="primary" disabled={!pick || link.isPending} onClick={() => link.mutate()} data-testid="link-line-send">ผูก</Button>}>
       <div className="flex flex-col gap-3">
-        {items.length === 0 && !detail.isLoading ? <p className="m-0 text-sm text-text-muted" data-testid="link-line-none">งานนี้ไม่มีรายการสินค้าให้ผูก</p> : (
+        {detail.isError ? <p className="m-0 text-sm text-danger-dark" data-testid="link-line-error">โหลดรายการของงานไม่สำเร็จ — {detail.error?.message ?? 'ลองใหม่อีกครั้ง'}</p> : items.length === 0 && !detail.isLoading ? <p className="m-0 text-sm text-text-muted" data-testid="link-line-none">งานนี้ไม่มีรายการสินค้าให้ผูก</p> : (
           <label className="flex flex-col gap-1">
             <span className="text-xs font-bold text-text-secondary">รายการของงาน *</span>
             <select className="min-h-11 rounded-md border border-border-input px-2 text-base" value={pick} onChange={(e) => setPick(e.target.value)} data-testid="link-line-pick">

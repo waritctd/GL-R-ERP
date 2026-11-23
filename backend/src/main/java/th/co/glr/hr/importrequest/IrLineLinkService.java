@@ -74,7 +74,7 @@ public class IrLineLinkService {
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.IMPORT_STEP_ADVANCED, null, null,
             "ผูกรายการ " + line.code() + " ของใบขอซื้อ " + ir.docNumber() + " เข้ากับรายการของงาน",
             RelatedDocumentType.IMPORT_REQUEST, ir.id());
-        rounds.rederiveAfterNotDelivered(irs, ticketItemId, actor);
+        rounds.rederiveAfterLink(irs, line.importRequestId(), actor);
         irService.receiptCorrected(ticketId, ir.docNumber(), ir.factoryName(), actor);
         ticketService.completeDeliveryAfterIrRevision(ticketId, actor);
     }

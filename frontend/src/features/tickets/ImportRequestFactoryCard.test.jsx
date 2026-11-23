@@ -42,7 +42,7 @@ describe('ImportRequestFactoryCard — what the deal page changed stays on the d
     unmount();
     renderCard({ row });
     expect(screen.queryByTestId('ir-link-5')).toBeNull();
-    expect(screen.getByTestId('ir-unlinked-5').textContent).toContain('ให้ฝ่ายนำเข้าหรือ CEO ผูกให้');
+    expect(screen.getByTestId('ir-unlinked-5').textContent).toContain('ติดต่อฝ่ายนำเข้าหรือผู้ดูแลระบบ');
   });
 
   it('part of the order in the warehouse: the card says ถึงโกดัง 70 / 140, not a step that reads as nothing arrived', () => {
