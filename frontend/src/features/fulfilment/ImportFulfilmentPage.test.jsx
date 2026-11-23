@@ -84,7 +84,10 @@ afterEach(() => vi.clearAllMocks());
 describe('การขนส่ง queue (shipment rounds)', () => {
   it('lists the IRs still waiting for a round and the rounds, each linking to its round page', async () => {
     renderAt('/fulfilment');
+    fireEvent.click(await screen.findByTestId('waiting-toggle'));
     expect(await screen.findAllByText('IR-TEST-009')).not.toHaveLength(0);
+    fireEvent.click(screen.getByTestId('waiting-toggle'));
+    expect(screen.queryByText('IR-TEST-009')).toBeNull();
     expect(screen.getAllByText('Test Stone Co. · รอบ ทดสอบ').length).toBeGreaterThan(0);
     expect(screen.getAllByRole('link', { name: 'รายละเอียด' })[0].getAttribute('href')).toBe('/fulfilment/rounds/7');
     expect(screen.getByTestId('plan-round')).toBeTruthy(); // the filled จัดรอบขนส่ง button of the waiting section
@@ -92,7 +95,7 @@ describe('การขนส่ง queue (shipment rounds)', () => {
 
   it('searches the numbers on a round\'s documents', async () => {
     renderAt('/fulfilment');
-    await screen.findAllByText('IR-TEST-009');
+    await screen.findAllByText('Test Stone Co. · รอบ ทดสอบ');
     fireEvent.change(screen.getByTestId('fulfilment-search'), { target: { value: 'INV-TEST-B' } });
     expect(screen.getAllByText('Test Stone Co. · รอบ ทดสอบ').length).toBeGreaterThan(0);
   });
@@ -115,6 +118,7 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     expect(screen.getAllByText(/ไม่มีโครงการ/).length).toBeGreaterThan(0);
     expect(screen.getAllByText('IR-TEST-031')[0].closest('a')).toBeNull(); // no deal to open
     expect(screen.getAllByTestId('ir-pdf-31').length).toBeGreaterThan(0); // import gets the order form to send
+    expect(screen.queryByTestId('waiting-toggle')).toBeNull(); // no rounds: the list is the page, nothing to hide it for
   });
 
   it('advances a round from the queue asking only that step\'s facts, then offers the 30 s undo', async () => {
@@ -235,8 +239,9 @@ describe('การขนส่ง queue (shipment rounds)', () => {
 
   it('a read-only viewer sees the queue without the advance button', async () => {
     renderAt('/fulfilment', { id: 9, name: 'ผู้จัดการขาย', role: 'sales_manager' });
-    expect(await screen.findAllByText('IR-TEST-009')).not.toHaveLength(0);
+    expect((await screen.findAllByText('Test Stone Co. · รอบ ทดสอบ')).length).toBeGreaterThan(0);
     expect(screen.queryByTestId('round-advance-7')).toBeNull();
+    expect(screen.queryByTestId('plan-round')).toBeNull();
   });
 });
 

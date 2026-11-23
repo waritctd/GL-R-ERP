@@ -672,6 +672,64 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     @Test
+    void setItemFactory_addsTheLineToAConfirmedQuote_keepsItsPrice_andHoldsTheCeoGateUntilReconfirmed() {
+        long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
+        long blankItemId = blankFactoryItemId(pricingRequestId);
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+        long pricedItemId = draft.items().get(0).pricingRequestItemId();
+        factoryQuoteService.markContacted(draft.id(),
+            new MarkFactoryContactedRequest(LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
+        FactoryQuoteDto answered = factoryQuoteService.receive(draft.id(),
+            response("REF-A", "USD", "7.80", pricedItemId), importActor);
+        factoryQuoteService.markReadyForCosting(answered.id(), importActor);
+
+        var addLine = new PricingRequestRequests.SetItemFactoryRequest(factoryIdByName("Factory A"));
+        pricingRequestService.setItemFactory(pricingRequestId, blankItemId, addLine, importActor);
+        pricingRequestService.setItemFactory(pricingRequestId, blankItemId, addLine, importActor); // a retry is a no-op
+
+        FactoryQuoteDto revision = factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A").orElseThrow();
+        assertThat(revision.id()).isNotEqualTo(answered.id());
+        assertThat(revision.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
+        assertThat(revision.items()).hasSize(2);
+        var kept = revision.items().stream().filter(i -> i.pricingRequestItemId() == pricedItemId).findFirst().orElseThrow();
+        var added = revision.items().stream().filter(i -> i.pricingRequestItemId() == blankItemId).findFirst().orElseThrow();
+        assertThat(kept.rawUnitPrice()).isEqualByComparingTo("7.80");
+        assertThat(added.rawUnitPrice()).isNull();
+        assertThat(added.currency()).isEqualTo("USD");
+        assertThatThrownBy(() -> factoryQuoteService.markReadyForCosting(revision.id(), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
+
+        FactoryQuoteDto repriced = factoryQuoteService.receive(revision.id(), new ReceiveFactoryQuoteRequest(
+            "REF-A", "USD", "30 days", "45 days", "added line", null, List.of(
+                new ReceiveFactoryQuoteItemRequest(pricedItemId, null, null, new BigDecimal("1.00"), "piece", "piece",
+                    new BigDecimal("7.80"), "USD", null, new BigDecimal("1.00"), null, null, "45 days", null, null),
+                new ReceiveFactoryQuoteItemRequest(blankItemId, null, null, new BigDecimal("1.00"), "piece", "piece",
+                    new BigDecimal("8.10"), "USD", null, new BigDecimal("1.00"), null, null, "45 days", null, null)),
+            UUID.randomUUID().toString()), importActor);
+        factoryQuoteService.markReadyForCosting(repriced.id(), importActor);
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
+    }
+
+    @Test
+    void setItemFactory_isRefusedForAFactoryMarkedNotAvailable_andTheLineStaysBlank() {
+        long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
+        long blankItemId = blankFactoryItemId(pricingRequestId);
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+        factoryQuoteService.markContacted(draft.id(),
+            new MarkFactoryContactedRequest(LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
+        factoryQuoteService.markNotAvailable(draft.id(),
+            new th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest("no stock"), importActor);
+
+        assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
+            new PricingRequestRequests.SetItemFactoryRequest(factoryIdByName("Factory A")), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(blankFactoryItemId(pricingRequestId)).isEqualTo(blankItemId);
+    }
+
+    @Test
     void setItemFactory_isRefusedForTheSalesRepWhoOwnsTheDeal_andForTheCeo() {
         long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
         long blankItemId = blankFactoryItemId(pricingRequestId);

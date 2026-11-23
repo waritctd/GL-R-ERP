@@ -24,6 +24,8 @@ import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.factoryquote.FactoryQuoteCarryForward;
+import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
+import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
@@ -452,16 +454,10 @@ public class PricingRequestService {
      * exists would strand that quote's item list. Correcting a wrong factory is a new revision,
      * not an edit in place.
      *
-     * <p><b>The TARGET factory is checked too.</b> Filling a
-     * blank line onto a factory whose current quote has already advanced past {@code DRAFT}
-     * (REQUESTED and beyond — sent, or already answered) is refused with a 409 for the identical
-     * reason: {@code FactoryQuoteService#generateDrafts} can only safely absorb a newly-resolved
-     * item into a quote still sitting at DRAFT, so once a factory's quote has moved on, a new line
-     * routed there today would be silently unreachable forever — {@code generateDrafts} would
-     * never re-add it, and {@code receive}'s item-set check would never let the sent/answered
-     * quote change shape to cover it. See {@link PricingRequestRepository#hasFactoryQuotePastDraft}
-     * and {@code FactoryQuoteService#generateDrafts}'s own Javadoc for the other half of this same
-     * invariant.
+     * <p><b>A factory already contacted takes the line too (spec 0002).</b> A REQUESTED quote gains
+     * a blank line in place. An answered quote gets a new revision with the saved prices and a
+     * blank line, back at RESPONSE_RECEIVED, so the CEO gate stays closed until Import prices the
+     * line and confirms the quote again. A NOT_AVAILABLE factory is refused.
      *
      * <p><b>factoryId, resolved against the master row.</b> {@code request} carries a
      * {@code factoryId} rather than a free-typed name (see
@@ -494,13 +490,17 @@ public class PricingRequestService {
                 "รายการจากสต็อกไม่ส่งให้โรงงาน จึงระบุโรงงานไม่ได้");
         }
         String existing = item.resolvedFactory();
+        if (factory.equals(existing)) {
+            return detail(id); // A retried save: the line is already where the caller wants it.
+        }
         if (existing != null) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "รายการนี้ระบุโรงงานไว้แล้ว (" + existing + ") — หากต้องการเปลี่ยนโรงงาน ต้องสร้างคำขอราคารอบใหม่");
         }
-        if (requests.hasFactoryQuotePastDraft(id, factory)) {
+        FactoryQuoteDto targetQuote = requests.lockCurrentFactoryQuote(id, factory).orElse(null);
+        if (targetQuote != null && FactoryQuoteStatus.NOT_AVAILABLE.equals(targetQuote.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ได้ส่งคำขอราคาไปยังโรงงาน '" + factory + "' แล้ว — หากต้องการเพิ่มรายการนี้ให้โรงงานนี้ ต้องสร้างคำขอราคารอบใหม่");
+                "โรงงาน '" + factory + "' แจ้งว่าเสนอราคาไม่ได้ กรุณาเลือกโรงงานอื่น");
         }
 
         int rows = requests.fillItemFactory(id, itemId, factoryId, factory);
@@ -510,6 +510,22 @@ public class PricingRequestService {
             // miss in this class.
             throw new ApiException(HttpStatus.CONFLICT,
                 "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+        if (targetQuote != null && !FactoryQuoteStatus.DRAFT.equals(targetQuote.status())) {
+            boolean hadPendingLeadTime = !FactoryQuoteStatus.REQUESTED.equals(targetQuote.status())
+                && requests.hasPendingLeadTimeChange(targetQuote.id());
+            if (!requests.addItemToContactedQuote(targetQuote, itemId, "เพิ่มรายการ " + item.displayName(), actor.id())) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            }
+            if (hadPendingLeadTime) {
+                LeadTimeChangeService.notifyRepAndManagers(notifications, summary,
+                    PricingRequestEventKind.LEAD_TIME_CHANGE_WITHDRAWN,
+                    LeadTimeChangeService.notice(summary,
+                        "ระบบถอนคำขอเปลี่ยนระยะเวลานำเข้าของโรงงาน " + factory
+                            + " อัตโนมัติ — ฝ่ายนำเข้า (" + actor.name() + ") เพิ่มรายการในใบราคาโรงงาน",
+                        "แจ้งเพื่อทราบ ไม่ต้องอนุมัติแล้ว"));
+            }
         }
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_ITEM_FACTORY_SET, summary.status(), summary.status(),
