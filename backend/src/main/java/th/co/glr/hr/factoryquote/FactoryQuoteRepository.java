@@ -114,11 +114,9 @@ public class FactoryQuoteRepository {
      * deduplicate, so passing an id the quote already has would insert it a second time rather
      * than raise anything, silently corrupting the quote's item list.
      *
-     * <p>Only ever safe to call while the quote is still {@code DRAFT} — once a quote has been
-     * sent or answered its item set must never be mutated (see {@link #markContacted} and the
-     * guard {@code PricingRequestService#setItemFactory}'s Javadoc protects on the other side of
-     * this same invariant); enforcing that is the caller's job, same division of labour as every
-     * other status guard in this class.
+     * <p>Past {@code DRAFT}, go through {@link #addItemToContactedQuote}, which keeps an answered
+     * quote's history. Enforcing that is the caller's job, same division of labour as every other
+     * status guard in this class.
      */
     public void addItemsToDraft(long quoteId, List<Long> pricingRequestItemIds) {
         if (pricingRequestItemIds.isEmpty()) {
@@ -147,6 +145,71 @@ public class FactoryQuoteRepository {
               FROM sales.pricing_request_item pri
              WHERE pri.pricing_request_item_id = :pricingRequestItemId
             """, batch);
+    }
+
+    /**
+     * Adds one blank line to a quote the factory was already contacted about. A REQUESTED quote has
+     * no prices, so it gains the line in place. An answered quote is superseded by a revision at
+     * RESPONSE_RECEIVED holding every saved line unchanged plus the blank one, in the quote's own
+     * currency, so {@code markReady} refuses it until the line is priced.
+     *
+     * @return false when the quote had already moved on; the caller must treat that as a conflict.
+     */
+    public void lockQuoteChain(FactoryQuoteDto quote) {
+        long rootId = quote.rootFactoryQuoteId() != null ? quote.rootFactoryQuoteId() : quote.id();
+        jdbc.query("SELECT pg_advisory_xact_lock(:rootId)", Map.of("rootId", rootId), (rs, rowNum) -> 0);
+    }
+
+    public boolean addItemToContactedQuote(FactoryQuoteDto quote, long pricingRequestItemId, String revisionReason,
+                                           long actorId) {
+        if (FactoryQuoteStatus.REQUESTED.equals(quote.status())) {
+            int touched = jdbc.update("""
+                UPDATE sales.factory_quote SET updated_at = now()
+                 WHERE factory_quote_id = :quoteId AND status = 'REQUESTED' AND is_current = TRUE
+                """, Map.of("quoteId", quote.id()));
+            if (touched == 0) {
+                return false;
+            }
+            addItemsToDraft(quote.id(), List.of(pricingRequestItemId));
+            return true;
+        }
+        if (supersede(quote.id()) == 0) {
+            return false;
+        }
+        long revisionId = createRevision(quote, quote.supplierQuoteRef(), quote.defaultCurrency(), quote.paymentTerms(),
+            quote.leadTimeText(), revisionReason, quote.negotiationNote(), actorId);
+        // createRevision stamps received_at = now(); no new factory answer arrived here.
+        jdbc.update("""
+            UPDATE sales.factory_quote r
+               SET received_at = p.received_at, note = p.note,
+                   email_provider_message_id = p.email_provider_message_id
+              FROM sales.factory_quote p
+             WHERE r.factory_quote_id = :revisionId AND p.factory_quote_id = :parentId
+            """, Map.of("revisionId", revisionId, "parentId", quote.id()));
+        jdbc.update("""
+            INSERT INTO sales.factory_quote_item
+                (factory_quote_id, pricing_request_item_id, catalog_product_id_snapshot,
+                 supplier_product_code, supplier_product_description, quoted_quantity,
+                 quoted_unit, unit_basis, raw_unit_price, currency, minimum_order_quantity,
+                 sqm_per_unit, pieces_per_box, linear_m_per_unit, lead_time_text,
+                 availability_note, line_note, sort_order)
+            SELECT :revisionId, pricing_request_item_id, catalog_product_id_snapshot,
+                   supplier_product_code, supplier_product_description, quoted_quantity,
+                   quoted_unit, unit_basis, raw_unit_price, currency, minimum_order_quantity,
+                   sqm_per_unit, pieces_per_box, linear_m_per_unit, lead_time_text,
+                   availability_note, line_note, sort_order
+              FROM sales.factory_quote_item
+             WHERE factory_quote_id = :parentId
+            """, Map.of("revisionId", revisionId, "parentId", quote.id()));
+        addItemsToDraft(revisionId, List.of(pricingRequestItemId));
+        if (quote.defaultCurrency() != null) {
+            jdbc.update("""
+                UPDATE sales.factory_quote_item SET currency = :currency
+                 WHERE factory_quote_id = :revisionId AND pricing_request_item_id = :itemId
+                """, Map.of("currency", normalizeCurrency(quote.defaultCurrency()), "revisionId", revisionId,
+                    "itemId", pricingRequestItemId));
+        }
+        return true;
     }
 
     public boolean updateDraft(long quoteId, String emailTo, String subject, String body, String note) {

@@ -319,7 +319,7 @@ Build to the approved artboards. Thai labels, Buddhist era dates through `ThaiDa
 - **การขนส่ง** (`/fulfilment`, artboards `ID1`, `IM1`): a `+ สร้างงานนำเข้า` button beside `+ จัดรอบขนส่ง`, for import and the CEO. One info line after a backfill run, with a link that opens the "needs a check" list. A ที่มา tag on each waiting row (`งานขาย`, `ฝ่ายขายสั่ง`, `ฝ่ายนำเข้าสร้าง`, `จากตารางของเข้า`), and `จากตารางของเข้า` under the name of a backfilled round. The IR number of an import job links to its page.
 - **สร้างงานนำเข้า** (`/fulfilment/jobs/new`, artboards `ID2`, `IM2`): a dialog on desktop, a sheet on a phone. Fields in the order of the artboard: type, project or customer, rep, factory, IR number (next number or typed), the three dates, item lines, round choice. The same form, filled in, is the edit form of a job.
 - **งานนำเข้า** (`/fulfilment/jobs/:id`, artboards `ID3`, `IM3`): header with the project text, IR number, type and source tags. A card of the job's data with แก้ไข. A table of items and their lots with a per row edit, and `+ เพิ่มสินค้า`. The job's rounds with their steps and dates, read only here, each linking to the round page. A history list.
-- **ผูกกับงานขาย** is drawn on the artboards but is not built in this spec. Do not render the button until the follow up decision (scope feature 37) is made.
+- **ผูกกับงานขาย** is drawn on the artboards but is not built in this spec. Do not render the button until the follow up decision (scope feature 38) is made.
 - **Round page**: two more date fields in the facts form, `ETA ท่าเปลี่ยนเรือ` and `วันที่ทำประกัน`.
 - **ของที่ฉันสั่ง** (`/my-orders`, artboards `ID4`, `IM4`): a switch ของฉัน and ทั้งบริษัท. ทั้งบริษัท adds a rep column, a งานลูกค้า type chip, a step dropdown, shows the job code as plain text and a ดู button when `canOpen` is false, hides withdraw, and on desktop hides the side order form so the table has room.
 - **Label for `CUSTOMER`**: `งานลูกค้า`, with `ยังไม่มีงานขาย` beside it where space allows. Add it at every place that labels a purpose: the label lookup used by `NoProjectOrderService` notices (kept apart from the set its `create` accepts), the kind chips in `MyOrdersPage.jsx`, `frontend/src/utils/format.js`, and the purpose labels in the fulfilment feature. The rep's `NewOrderSheet.jsx` does not offer it.
@@ -442,7 +442,7 @@ Two threads share one migration and can run side by side after task 1: the backf
 
 ## Follow-up
 
-- [ ] Link an import job to a sales job (`/architect link a no job IR to a job`, scope feature 37). The artboards draw a ผูกกับงานขาย button, and this spec does not build it: it must settle one issued IR per job and factory, and how free text lines map to job items.
+- [ ] Link an import job to a sales job (`/architect link a no job IR to a job`, scope feature 38). The artboards draw a ผูกกับงานขาย button, and this spec does not build it: it must settle one issued IR per job and factory, and how free text lines map to job items.
 - [ ] Decide a home for the five cost columns before the sheet is fully retired.
 - [ ] Hide old received no job rounds on การขนส่ง, for example after 30 days.
 - [ ] Give `warehouse` and `account` the company wide list if they ask. Left out because the owner asked for sales.

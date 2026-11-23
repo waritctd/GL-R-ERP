@@ -168,11 +168,9 @@ public class FactoryQuoteService {
      * currently resolved to this factory (old and new alike; see {@link #groupByFactory}), so
      * filtering against the quote's existing item ids is what isolates the genuinely new ones.
      *
-     * <p>A quote already past DRAFT (REQUESTED and beyond) is left untouched — its item set is
-     * exactly what was sent to or received from the factory, and {@code
-     * PricingRequestService#setItemFactory} independently refuses to route a new line onto a
-     * factory in that state, so this method should rarely even see one; it stays defensive here
-     * regardless (e.g. a line resolved via the catalog snapshot rather than setItemFactory).
+     * <p>A quote already past DRAFT (REQUESTED and beyond) is left untouched here: {@code
+     * PricingRequestService#setItemFactory} adds a line to it in the same transaction that names
+     * the factory.
      */
     private void addNewlyResolvedItemsToExistingDraft(PricingRequestSummaryDto summary, UserPrincipal actor,
                                                        String factoryName, FactoryQuoteDto currentQuote,
@@ -378,6 +376,8 @@ public class FactoryQuoteService {
         // Serialize concurrent calls that share the same idempotency key so a racing retry blocks until the first
         // attempt's receipt is committed and visible, rather than both attempts racing into duplicate mutations.
         quotes.lockResponseIdempotencyKey(actor.id(), clientRequestId);
+        // Same lock as setItemFactory: a line added mid-save must not be dropped by replaceResponseItems.
+        quotes.lockQuoteChain(requireQuote(quoteId));
         FactoryQuoteRepository.FactoryQuoteResponseReceiptDto existingReceipt =
             quotes.findResponseReceipt(actor.id(), clientRequestId).orElse(null);
         FactoryQuoteDto current = requireQuote(quoteId);

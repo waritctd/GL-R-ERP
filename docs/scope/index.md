@@ -48,16 +48,17 @@ Code pointers are short. `hr/<package>` means `backend/src/main/java/th/co/glr/h
 | 33 | Add on orders | Slice 1 | planned |
 | 34 | Document generators follow the quotation editor | Slice 2 | planned |
 | 35 | Weekly report replacement | Slice 3 | planned |
-| 36 | Import sheet backfill, import jobs and shared IR progress | Slice 4 | in-progress |
-| 37 | Link a loaded IR to a job | Slice 4 | planned |
+| 36 | Import adds or moves a line on a contacted factory | Slice 4 | in-progress |
+| 37 | Import sheet backfill, import jobs and shared IR progress | Slice 4 | in-progress |
+| 38 | Link a loaded IR to a job | Slice 4 | planned |
 
 ## Epics
 
 - [Platform](platform.md): features 1 to 9, all existing.
 - [HR](hr.md): features 10 to 15, all existing.
 - [Payroll](payroll.md): features 16 to 19, all existing.
-- [Sales](sales.md): features 20 to 26 existing, 33 to 35 planned.
-- [Import and fulfilment](import-fulfilment.md): features 27 to 29 existing, 30 and 36 in progress, 37 planned.
+- [Sales](sales.md): features 20 to 26 existing, 33 to 35 planned, 36 in progress.
+- [Import and fulfilment](import-fulfilment.md): features 27 to 29 existing, 30 and 37 in progress, 38 planned.
 - [Finance](finance.md): features 31 and 32, both existing.
 
 ## Deferred
