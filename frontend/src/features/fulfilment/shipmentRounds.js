@@ -97,7 +97,7 @@ export const lotArrivalText = (lot, roundStep) => {
 export const lotProduct = (lot) => [[lot.brand, lot.model].filter(Boolean).join(' ') || lot.code, lot.size].filter(Boolean).join(' ');
 
 /** Who the lot is for: the deal's customer/project. */
-export const PURPOSE_LABELS = { SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก' };
+export const PURPOSE_LABELS = { SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก', PROJECT: 'โครงการ' };
 
 /** Who a lot (or a waiting IR) is for: the deal's project/customer, or for an order with no project "ตัวอย่าง · requester". */
 export const lotWho = (lot) => (lot.ticketId == null

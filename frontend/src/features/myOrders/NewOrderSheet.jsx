@@ -68,7 +68,7 @@ export function useNewOrderForm({ onDone, showToast, wide = false, enabled = tru
         <div className="flex flex-col gap-1">
           <span className="text-xs font-bold text-text-secondary" id="order-purpose">สั่งเพื่ออะไร *</span>
           <div className="flex flex-wrap gap-2" role="group" aria-labelledby="order-purpose">
-            {Object.entries(PURPOSE_LABELS).map(([code, label]) => (
+            {Object.entries(PURPOSE_LABELS).filter(([code]) => code !== 'PROJECT').map(([code, label]) => ( // PROJECT rows exist but cannot be created yet
               <button key={code} type="button" aria-pressed={purpose === code} onClick={() => setPurpose(code)} data-testid={`order-purpose-${code}`}
                 className={cn('inline-flex min-h-11 items-center rounded-full border px-4 text-sm font-bold',
                   purpose === code ? 'border-primary bg-primary/10 text-primary' : 'border-border-input bg-surface text-text-secondary')}>
@@ -78,7 +78,7 @@ export function useNewOrderForm({ onDone, showToast, wide = false, enabled = tru
           </div>
         </div>
         <div className="flex flex-col gap-1">
-          <label htmlFor="order-note" className="text-xs font-bold text-text-secondary">ให้ใคร / ใช้ที่ไหน *</label>
+          <label htmlFor="order-note" className="text-xs font-bold text-text-secondary">{purpose === 'PROJECT' ? 'ชื่อโครงการ' : 'ให้ใคร / ใช้ที่ไหน'} *</label>
           <input id="order-note" type="text" maxLength={200} className="min-h-11 w-full text-base" value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
         <div className="flex flex-col gap-1">

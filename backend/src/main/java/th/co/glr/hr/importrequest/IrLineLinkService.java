@@ -62,7 +62,7 @@ public class IrLineLinkService {
         if (!DealLifecycle.ACTIVE.equals(lifecycle)) {
             throw new ApiException(HttpStatus.CONFLICT, "งานนี้ไม่ได้อยู่ในสถานะที่ดำเนินการได้");
         }
-        if (!stored.dealItemIds(ticketId).contains(ticketItemId)) {
+        if (!stored.ticketItemIds(ticketId).contains(ticketItemId)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "รายการนี้ไม่ใช่รายการของงานเดียวกัน");
         }
         String dealSize = stored.ticketItemSize(ticketId, ticketItemId);
