@@ -3,6 +3,8 @@
 **Date**: 2026-11-23 (revised the same day after the owner changed direction)
 **Status**: In Progress
 
+> **Reworked 2026-11-23 onto develop 2.5.0.** Sales now read the whole team's imports through develop's `/api/my-incoming`, so the ทั้งบริษัท switch and `/api/incoming/all` (AC-26 to AC-30 as first written) are not built. The sheet's customer jobs use develop's `PROJECT` purpose instead of a `CUSTOMER` purpose, and the migration is V243. Read those ACs and every `CUSTOMER` and V242 mention below with that in mind.
+
 ## Summary
 
 The import team tracks every IR (import request) in an Excel sheet, so the portal is behind the real world. This spec loads that sheet into the portal once, as a backfill run done for the owner, with no upload screen. From then on import works in the portal: they can create a งานนำเข้า (an import job, meaning an IR with no sales job) by themselves and edit any of them. Every sales rep also gets a company wide, read only view of IR progress with no prices and no factory documents.
