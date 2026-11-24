@@ -232,6 +232,8 @@ public class RemainingInvoiceService {
         if (resolved.blockingReason() != null) {
             throw new ApiException(HttpStatus.CONFLICT, resolved.blockingReason());
         }
+        depositNoticeService.requireNameChangeUnbilled("REMAINING_INVOICE", id, existing.payerCustomerId(),
+            snap.payerCustomerId(), "ใบแจ้งหนี้ส่วนที่เหลือ");
 
         List<RemainingInvoiceItemDto> items = resolved.items();
         BigDecimal depositAmount = nz(resolved.depositAmount());
@@ -261,6 +263,8 @@ public class RemainingInvoiceService {
                     + "อ้างอิง \"" + Objects.toString(existing.reference(), "") + "\" → \"" + Objects.toString(updated.reference(), "") + "\""
                     + " · อ้างอิงมัดจำ \"" + Objects.toString(existing.depositReference(), "") + "\" → \"" + Objects.toString(updated.depositReference(), "") + "\""
                     + " · วันที่ " + existing.docDate() + " → " + updated.docDate()
+                    + (Objects.equals(existing.customerName(), updated.customerName()) ? ""
+                        : " · ออกในนาม \"" + Objects.toString(existing.customerName(), "") + "\" → \"" + Objects.toString(updated.customerName(), "") + "\"")
                     + " · ยอดชำระ " + ThaiText.money(existing.grandTotal()) + " → " + ThaiText.money(updated.grandTotal()));
             if (existing.grandTotal().compareTo(updated.grandTotal()) != 0) {
                 // account collects against this total, same channel as issue()

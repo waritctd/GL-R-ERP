@@ -524,6 +524,11 @@ public class DepositNoticeRepository {
 
     /** The customer of the party a new-engine quotation (this deal, this number) is addressed to; empty for a legacy
      * number or a quotation with no party. A deal can hold several BUYER parties, so this is not always the deal's. */
+    /** The live billing note (DRAFT or ISSUED line) that claims this document, if any. */
+    public Optional<th.co.glr.hr.billing.BillingNoteRepository.ClaimedBy> findLiveBillingNoteClaim(String sourceType, long sourceId) {
+        return th.co.glr.hr.billing.BillingNoteRepository.findLiveClaim(jdbc, sourceType, sourceId);
+    }
+
     public Optional<Long> findQuotationPartyCustomerId(long ticketId, String number) {
         return jdbc.queryForList("""
             SELECT dp.customer_id FROM sales.quotation q JOIN sales.deal_party dp ON dp.party_id = q.party_id

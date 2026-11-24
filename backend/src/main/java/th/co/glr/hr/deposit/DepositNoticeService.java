@@ -293,6 +293,7 @@ public class DepositNoticeService {
         // ออกในนาม (feedback #74): a customer-list name replaces the quotation's customer; null goes back to it. A re-point
         // is a new buyer's document, so it starts from that quotation's customer.
         Long payer = repointed ? null : effectivePayer(req.payerCustomerId(), doc.ticketId(), reference);
+        requireNameChangeUnbilled("DEPOSIT_NOTICE", docId, doc.payerCustomerId(), payer, "ใบแจ้งยอด");
         if (payer != null) {
             quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference, payer);
         }
@@ -1600,6 +1601,17 @@ public class DepositNoticeService {
         boolean quotationsOwn = quotationNumber != null
             && requested.equals(docs.findQuotationPartyCustomerId(ticketId, quotationNumber).orElse(null));
         return quotationsOwn ? null : requested;
+    }
+
+    /** A document a live billing note claims is billed under its customer (BillingNoteRepository#candidatesForCustomer),
+     * so its ออกในนาม name may not change until that billing note is cancelled or revised without it. */
+    void requireNameChangeUnbilled(String sourceType, long sourceId, Long before, Long after, String documentLabel) {
+        if (java.util.Objects.equals(before, after)) return;
+        docs.findLiveBillingNoteClaim(sourceType, sourceId).ifPresent(claim -> {
+            throw new ApiException(HttpStatus.CONFLICT, documentLabel + "นี้อยู่ในใบวางบิล "
+                + (claim.docNumber() == null ? "ฉบับร่าง" : claim.docNumber())
+                + " แล้ว จึงเปลี่ยนชื่อที่ออกในนามไม่ได้ ให้ยกเลิกใบวางบิลหรือนำเอกสารนี้ออกจากใบวางบิลก่อน");
+        });
     }
 
     /** The buyer printed on anything tied to a quotation (owner rule #65): that quotation's party customer, else the

@@ -84,6 +84,12 @@ public class BillingNoteRepository {
     /** One (source_type, source_id)'s currently-live claim, if any — which note holds it and that note's own
      * doc_number (null while still DRAFT), for BillingNoteService#candidates' own "report which note" requirement. */
     public Optional<ClaimedBy> findLiveClaim(String sourceType, long sourceId) {
+        return findLiveClaim(jdbc, sourceType, sourceId);
+    }
+
+    /** As above, for a repository outside this package (the deposit notice and remaining invoice guard their ออกในนาม
+     * name with it), so the claim rule lives in one query. */
+    public static Optional<ClaimedBy> findLiveClaim(NamedParameterJdbcTemplate jdbc, String sourceType, long sourceId) {
         return jdbc.query("""
             SELECT bn.id, bn.doc_number
               FROM sales.billing_note_line l
