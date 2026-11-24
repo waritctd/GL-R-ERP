@@ -338,6 +338,15 @@ public class ReceiptImportRepository {
              WHERE ri.status = 'ISSUED' AND ri.ticket_id IN (""" + deals + """
             )
             UNION ALL
+            -- ออกในนาม (feedback #74): a deal's receipt may come in that person's name as well as เรียน's
+            SELECT dn.ticket_id, NULL, dn.payer_name FROM sales.deposit_notice dn
+             WHERE dn.status = 'ISSUED' AND dn.payer_name IS NOT NULL AND dn.ticket_id IN (""" + deals + """
+            )
+            UNION ALL
+            SELECT ri.ticket_id, NULL, ri.payer_name FROM sales.remaining_invoice ri
+             WHERE ri.status = 'ISSUED' AND ri.payer_name IS NOT NULL AND ri.ticket_id IN (""" + deals + """
+            )
+            UNION ALL
             SELECT bl.ticket_id, bn.doc_number, bn.customer_name FROM sales.billing_note_line bl
               JOIN sales.billing_note bn ON bn.id = bl.billing_note_id
              WHERE bn.status IN ('ISSUED', 'SETTLED') AND bl.note_status <> 'RELEASED' AND bl.ticket_id IN (""" + deals + """

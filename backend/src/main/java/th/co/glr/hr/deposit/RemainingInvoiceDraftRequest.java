@@ -15,17 +15,24 @@ public record RemainingInvoiceDraftRequest(
     List<String> notes,
     // ผู้จัดทำ: the deal's owner, keyer or a sales manager; null keeps the stored preparer.
     Long preparerId,
-    // ออกในนาม (feedback #74): a customer-list id the invoice is issued to instead of the quotation's customer; null =
-    // the quotation's customer (on update too, as the deposit notice).
-    Long payerCustomerId
+    // เรียน / ออกในนาม choice (feedback #74), as DepositNoticeDraftRequest's; all null keeps what is stored (create: the
+    // defaults, the quotation's customer and its contact, with the choice applied on top)
+    Long addresseeCustomerId,
+    Boolean addresseeReset,
+    Long payerCustomerId,
+    @jakarta.validation.constraints.Pattern(regexp = "DEFAULT|NONE") String payerReset
 ) {
+    IssueNames.Choice nameChoice() {
+        return new IssueNames.Choice(addresseeCustomerId, addresseeReset, payerCustomerId, payerReset);
+    }
+
     public RemainingInvoiceDraftRequest(Long quotationId, String reference, String depositReference,
                                         LocalDate docDate, List<String> notes) {
-        this(quotationId, reference, depositReference, docDate, notes, null, null);
+        this(quotationId, reference, depositReference, docDate, notes, null, null, null, null, null);
     }
 
     public RemainingInvoiceDraftRequest(Long quotationId, String reference, String depositReference,
                                         LocalDate docDate, List<String> notes, Long preparerId) {
-        this(quotationId, reference, depositReference, docDate, notes, preparerId, null);
+        this(quotationId, reference, depositReference, docDate, notes, preparerId, null, null, null, null);
     }
 }

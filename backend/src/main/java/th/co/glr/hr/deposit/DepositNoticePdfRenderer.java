@@ -29,6 +29,7 @@ public class DepositNoticePdfRenderer {
         DocumentSheet.str(sh, 6, 1, DocumentSheet.customerLine(m.customerName(), m.customerBranch(), m.customerTaxId()));
         DocumentSheet.str(sh, 6, 8, DocumentSheet.thaiDate(m.issueDate()));
         DocumentSheet.str(sh, 7, 1, m.customerAddress());
+        DocumentSheet.issueInName(sh, 8, m.payerLine());
         DocumentSheet.str(sh, 7, 8, m.docNumber());
         DocumentSheet.str(sh, 8, 8, m.reference());
         DocumentSheet.str(sh, 10, 1, "Project : " + (m.projectName() == null ? "" : m.projectName()));
@@ -99,6 +100,8 @@ public class DepositNoticePdfRenderer {
           .append("<div style='color:#64748b;font-size:12px;'>").append(escHtml(doc.customerAddress())).append("</div>")
           .append(doc.customerTaxId() != null && !doc.customerTaxId().isBlank()
               ? "<div style='font-size:12px;'>เลขภาษี: " + escHtml(doc.customerTaxId()) + "</div>" : "")
+          .append(doc.names().payerLine() != null
+              ? "<div style='font-size:12px;'>ออกในนาม: " + escHtml(doc.names().payerLine()) + "</div>" : "")
           .append(doc.projectName() != null ? "<div style='font-size:12px;'>โครงการ: " + escHtml(doc.projectName()) + "</div>" : "")
           .append("</div>");
 

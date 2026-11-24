@@ -293,7 +293,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         // ออกในนาม (feedback #74): an invoice issued in another customer-list name bills under that customer instead
         CustomerDto named = createCustomer("Cand1Named");
         remainingInvoiceService.updateDraft(ri.id(), new th.co.glr.hr.deposit.RemainingInvoiceDraftRequest(
-            null, null, null, null, null, null, named.id()), salesActor);
+            null, null, null, null, null, null, null, null, named.id(), null), salesActor);
         assertThat(billingNoteService.candidates(named.id(), accountActor).candidates())
             .extracting(BillingNoteCandidateDto::sourceId).containsExactly(ri.id());
         assertThat(billingNoteService.candidates(customer.id(), accountActor).candidates())
@@ -303,7 +303,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             List.of(new BillingNoteLineSelection("REMAINING_INVOICE", ri.id(), null, null, null, null, null))),
             employeeWithGrantActor);
         assertThat(catchThrowableOfType(() -> remainingInvoiceService.updateDraft(ri.id(),
-            new th.co.glr.hr.deposit.RemainingInvoiceDraftRequest(null, null, null, null, null, null, null), salesActor),
+            new th.co.glr.hr.deposit.RemainingInvoiceDraftRequest(null, null, null, null, null, null, null, null, null, "NONE"), salesActor),
             ApiException.class).getStatus()).isEqualTo(HttpStatus.CONFLICT);
     }
 

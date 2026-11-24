@@ -22,17 +22,24 @@ public record DepositNoticeDraftRequest(
     OffsetDateTime expectedUpdatedAt,
     // ผู้จัดทำ: the deal's owner, keyer or a sales manager; null keeps the stored preparer.
     Long preparerId,
-    // ผู้ชำระเงิน (feedback #74): a customer-master id the notice is issued to instead of the quotation's customer;
-    // null = the quotation's customer. Update only; create always starts from the quotation.
-    Long payerCustomerId
+    // เรียน / ออกในนาม choice (feedback #74), see IssueNames.Choice; all null keeps what is stored. Update only: create
+    // starts from the defaults (the quotation's customer and its contact).
+    Long addresseeCustomerId,
+    Boolean addresseeReset,
+    Long payerCustomerId,
+    @jakarta.validation.constraints.Pattern(regexp = "DEFAULT|NONE") String payerReset
 ) {
-    /** Without a payer: the quotation's customer. */
+    /** Keeps the stored เรียน / ออกในนาม. */
     public DepositNoticeDraftRequest(String customerName, String customerTaxId, String customerAddress,
                                      String projectName, String reference, BigDecimal depositPercent,
                                      List<String> notes, List<DepositNoticeItemRequest> items,
                                      OffsetDateTime expectedUpdatedAt, Long preparerId) {
         this(customerName, customerTaxId, customerAddress, projectName, reference, depositPercent, notes, items,
-            expectedUpdatedAt, preparerId, null);
+            expectedUpdatedAt, preparerId, null, null, null, null);
+    }
+
+    IssueNames.Choice nameChoice() {
+        return new IssueNames.Choice(addresseeCustomerId, addresseeReset, payerCustomerId, payerReset);
     }
 
     /** Without a stamp: creation and the server-side callers. */

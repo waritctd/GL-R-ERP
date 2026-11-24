@@ -136,7 +136,7 @@ class DepositNoticeServiceTest {
         // RemainingInvoiceService itself freezes off of, so this pins resolveRemainingInvoice's
         // own item-sourcing logic.
         DepositNoticeService.RemainingInvoiceSnapshot snap =
-            service.resolveRemainingInvoiceSnapshot(10L, null, owner, null);
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner, null, IssueNames.Choice.KEEP);
         DepositNoticeService.ResolvedRemainingInvoice resolved = snap.resolved();
         assertThat(resolved.items()).hasSize(1);
         assertThat(resolved.items().get(0).amount()).isEqualByComparingTo("299.99");
@@ -183,7 +183,7 @@ class DepositNoticeServiceTest {
             "ACME", "0100000000000", "Bangkok", "Showroom", reference, "THB",
             new BigDecimal("0.50"), subtotal, depositAmount,
             new BigDecimal("0.07"), BigDecimal.ZERO, BigDecimal.ZERO,
-            List.of(), true, true, "Sales", "Preparer", null, null, null, items, false, null);
+            List.of(), true, true, "Sales", "Preparer", null, null, null, items, false, null, null, null, null, null);
     }
 
     @Test
@@ -191,7 +191,7 @@ class DepositNoticeServiceTest {
         var prePortal = mock(th.co.glr.hr.deliveryrequest.PrePortal.class);
         service.wirePrePortal(prePortal);
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(docs.createDraft(eq(10L), any(), any(), any())).thenReturn(203L);
+        when(docs.createDraft(eq(10L), any(), any(), any(), any())).thenReturn(203L);
         stubDraft(203L, 10L);
 
         service.createDraft(10L, new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner);
@@ -210,7 +210,7 @@ class DepositNoticeServiceTest {
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
         when(docs.findGoverningQuotation(10L)).thenReturn(Optional.of(
             new DepositNoticeRepository.GoverningQuotation(5L, false, "QT-5", new BigDecimal("0.30"))));
-        when(docs.createDraft(eq(10L), any(), any(), any())).thenReturn(301L);
+        when(docs.createDraft(eq(10L), any(), any(), any(), any())).thenReturn(301L);
         stubDraft(301L, 10L);
 
         // Caller (or a stale/forged client) asks for 99% — must be ignored; the quotation's own 30% wins.
@@ -219,7 +219,7 @@ class DepositNoticeServiceTest {
             owner);
 
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
-        verify(docs).createDraft(eq(10L), captor.capture(), any(), any());
+        verify(docs).createDraft(eq(10L), captor.capture(), any(), any(), any());
         assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.30");
     }
 
@@ -241,7 +241,7 @@ class DepositNoticeServiceTest {
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-1", "THB",
             depositPercent, new BigDecimal("1000.00"), new BigDecimal("500.00"),
             new BigDecimal("0.07"), new BigDecimal("35.00"), new BigDecimal("535.00"),
-            List.of(), false, false, "Sales", "Preparer", null, null, null, List.of(), false, null);
+            List.of(), false, false, "Sales", "Preparer", null, null, null, List.of(), false, null, null, null, null, null);
         when(docs.findById(docId)).thenReturn(Optional.of(draft));
     }
 
