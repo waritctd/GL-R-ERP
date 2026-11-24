@@ -26,10 +26,13 @@ import {
   subtotalsDiffer,
 } from './createDepositNoticeDraft.js';
 import { DocumentPreparerSelect } from './DocumentPreparerSelect.jsx';
+import { IssueInNamePicker } from './IssueInNamePicker.jsx';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 // CustomerPrintRule#addressWithBranch: a branch prints only for a customer with a tax id (feedback #72).
-const printedCustomerAddress = (address, branch, taxId) => [address, String(taxId ?? '').trim() ? branch : null].filter(Boolean).join(' ');
+// A person's 13-digit id (starts 1-8) has no branch either (feedback #74).
+const companyTaxId = (taxId) => { const id = String(taxId ?? '').replace(/[\s-]/g, ''); return id !== '' && !/^[1-8]\d{12}$/.test(id); };
+const printedCustomerAddress = (address, branch, taxId) => [address, companyTaxId(taxId) ? branch : null].filter(Boolean).join(' ');
 
 function money(v) {
   if (v == null) return '—';
@@ -227,6 +230,7 @@ function buildPayloadFrom(form, expectedUpdatedAt) {
     depositPercent:  form.depositPercent === '' ? null : Number(form.depositPercent),
     notes:           form.notes,
     preparerId:      form.preparerId ?? null,
+    payerCustomerId: form.payerCustomerId ?? null,
     expectedUpdatedAt,
     items: form.items.filter((it) => !isBlankRow(it)).map((it, idx) => ({
       seq:          idx + 1,
@@ -304,6 +308,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
     notes: [],
     items: [],
     preparerId: null,
+    payerCustomerId: null,
   });
 
   // Reads (TanStack Query) --- Mount only LOADS existing documents — it must never create one as a side effect
@@ -400,6 +405,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
       depositPercent:  d.depositPercent ?? '',
       notes:           d.notes         ?? [],
       preparerId:      d.preparerId    ?? null,
+      payerCustomerId: d.payerCustomerId ?? null,
       // A qty < 0 line is the quotation's ส่วนลดพิเศษ: its qty is not editable and is allowed past the qty > 0 check.
       items:           (d.items ?? []).map((it) => ({ ...it, discount: Number(it.qty) < 0 })),
     };
@@ -413,7 +419,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
   // or DRAFT -> ISSUED) — not on every background refetch of the same doc (e.g. a save doesn't bump
   // version/status, so no reseed fires and in-flight edits aren't clobbered). The reference is in the key too:
   // re-pointing a draft to another buyer's quotation replaces its customer and items on the server.
-  const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}:${doc.reference ?? ''}` : null;
+  const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}:${doc.reference ?? ''}:${doc.payerCustomerId ?? ''}` : null;
   // The draft's updatedAt as last read from the server (the list, or this page's own save):
   // sent as expectedUpdatedAt, so a save over someone else's newer one is refused (409).
   const stampRef = useRef(null);
@@ -561,6 +567,19 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
     setCsSearch('');
     clearFieldError('customerName');
   }
+
+  // ออกในนาม (feedback #74): the header shows the picked name now; the server prints that customer's list data.
+  function pickPayer(c) {
+    setForm((f) => ({
+      ...f,
+      payerCustomerId: c.id,
+      customerName:    c.name,
+      customerTaxId:   c.taxId ?? '',
+      customerAddress: printedCustomerAddress(c.address, c.branch, c.taxId),
+    }));
+    clearFieldError('customerName');
+  }
+
 
   function toggleNote(text) {
     setForm((f) => ({
@@ -792,32 +811,33 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
             ) : (
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
                 {customerFromQuotation ? (
-                  <p className="col-span-full m-0 text-sm text-text-muted" data-testid="customer-from-quotation">
-                    ชื่อ เลขผู้เสียภาษี และที่อยู่ดึงจากใบเสนอราคา {form.reference} (แก้ไม่ได้)
-                  </p>
-                ) : null}
-                <div className={customerFromQuotation ? 'hidden' : 'relative col-span-full'}>
-                  <FormField label="ค้นหาลูกค้า (master)" htmlFor="doc-customer-search">
-                    <input
-                      id="doc-customer-search"
-                      value={customerSearch}
-                      onChange={(e) => setCsSearch(e.target.value)}
-                      placeholder="ชื่อบริษัท หรือ เลขภาษี…"
-                    />
-                  </FormField>
-                  {customerSearch && customers.length > 0 && (
-                    <div className="absolute left-0 right-0 top-full z-50 max-h-[180px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_12px_rgba(0,0,0,0.1)]">
-                      {customers.map((c) => (
-                        <button key={c.id} type="button"
-                          onClick={() => selectCustomer(c)}
-                          className="w-full cursor-pointer border-0 border-b border-surface-subtle bg-transparent px-3 py-2 text-left text-sm text-text">
-                          <strong className="block">{c.name}</strong>
-                          <span className="text-2xs text-text-muted">{c.taxId} · {c.address}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                  <IssueInNamePicker idPrefix="doc" quotationNumber={form.reference} payerId={form.payerCustomerId}
+                    payerName={form.customerName} savedPayerId={doc?.payerCustomerId} showToast={showToast}
+                    onPick={pickPayer} onClear={() => setField('payerCustomerId', null)} />
+                ) : (
+                  <div className="relative col-span-full">
+                    <FormField label="ค้นหาลูกค้า (master)" htmlFor="doc-customer-search">
+                      <input
+                        id="doc-customer-search"
+                        value={customerSearch}
+                        onChange={(e) => setCsSearch(e.target.value)}
+                        placeholder="ชื่อบริษัท หรือ เลขภาษี…"
+                      />
+                    </FormField>
+                    {customerSearch && customers.length > 0 && (
+                      <div className="absolute left-0 right-0 top-full z-50 max-h-[180px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_12px_rgba(0,0,0,0.1)]">
+                        {customers.map((c) => (
+                          <button key={c.id} type="button"
+                            onClick={() => selectCustomer(c)}
+                            className="w-full cursor-pointer border-0 border-b border-surface-subtle bg-transparent px-3 py-2 text-left text-sm text-text">
+                            <strong className="block">{c.name}</strong>
+                            <span className="text-2xs text-text-muted">{c.taxId} · {c.address}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <FormField label="ชื่อบริษัท / หน่วยงาน" htmlFor="doc-customer-name" required error={fieldErrors.customerName}>
                   <input
                     id="doc-customer-name"
@@ -843,7 +863,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                 <FormField label="อ้างอิง PO / ใบเสนอราคา" htmlFor="doc-reference">
                   {customerFromQuotation && doc?.status === 'DRAFT' && partyQuotations.length > 0 ? (
                     <select id="doc-reference" value={form.reference}
-                      onChange={(e) => setField('reference', e.target.value)}>
+                      onChange={(e) => { setField('reference', e.target.value); setField('payerCustomerId', null); }}>
                       {partyQuotations.some((q) => q.number === form.reference) ? null
                         : <option value={form.reference}>{form.reference}</option>}
                       {partyQuotations.map((q) => (

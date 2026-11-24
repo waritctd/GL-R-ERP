@@ -148,7 +148,8 @@ public class RemainingInvoiceService {
         tickets.lockTicketForUpdate(ticketId);
 
         DepositNoticeService.RemainingInvoiceSnapshot snap =
-            depositNoticeService.resolveRemainingInvoiceSnapshot(ticketId, req == null ? null : req.quotationId(), actor);
+            depositNoticeService.resolveRemainingInvoiceSnapshot(ticketId, req == null ? null : req.quotationId(), actor,
+                req == null ? null : req.payerCustomerId());
         depositNoticeService.requireActiveLifecycle(snap.ticketSummary());
         DepositNoticeService.ResolvedRemainingInvoice resolved = snap.resolved();
         if (resolved.blockingReason() != null) {
@@ -205,7 +206,8 @@ public class RemainingInvoiceService {
             id = stored.insertDraft(ticketId, quotationId, resolved.matchedDepositNoticeId(),
                 reference, depositReference, docDate, notes,
                 header.customerNameOr(s.customerName()), header.taxId(), header.branch(), header.addressOnly(), header.projectName(),
-                itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal(), actor.id(), actor.name());
+                itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal(), snap.payerCustomerId(),
+                actor.id(), actor.name());
         } catch (DataIntegrityViolationException e) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "งานนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว กรุณาออกหรือลบร่างเดิมก่อน");
@@ -225,11 +227,13 @@ public class RemainingInvoiceService {
         depositNoticeService.requirePreparerInDeal(existing.ticketId(), req == null ? null : req.preparerId(), existing.preparerId());
 
         DepositNoticeService.RemainingInvoiceSnapshot snap = depositNoticeService.resolveRemainingInvoiceSnapshot(
-            existing.ticketId(), existing.customerQuotationId(), actor);
+            existing.ticketId(), existing.customerQuotationId(), actor, req == null ? null : req.payerCustomerId());
         DepositNoticeService.ResolvedRemainingInvoice resolved = snap.resolved();
         if (resolved.blockingReason() != null) {
             throw new ApiException(HttpStatus.CONFLICT, resolved.blockingReason());
         }
+        depositNoticeService.requireNameChangeUnbilled("REMAINING_INVOICE", id, existing.payerCustomerId(),
+            snap.payerCustomerId(), "ใบแจ้งหนี้ส่วนที่เหลือ");
 
         List<RemainingInvoiceItemDto> items = resolved.items();
         BigDecimal depositAmount = nz(resolved.depositAmount());
@@ -250,7 +254,7 @@ public class RemainingInvoiceService {
             ? req.depositReference() : existing.depositReference();
         LocalDate docDate = req != null && req.docDate() != null ? req.docDate() : existing.docDate();
         requireRowUpdated(stored.updateDraftFields(id, reference, depositReference, docDate, notes,
-            req == null ? null : req.preparerId(), existing.status()), id);
+            req == null ? null : req.preparerId(), snap.payerCustomerId(), existing.status()), id);
 
         RemainingInvoiceDocumentDto updated = requireStored(id);
         if ("ISSUED".equals(existing.status())) {
@@ -259,6 +263,8 @@ public class RemainingInvoiceService {
                     + "อ้างอิง \"" + Objects.toString(existing.reference(), "") + "\" → \"" + Objects.toString(updated.reference(), "") + "\""
                     + " · อ้างอิงมัดจำ \"" + Objects.toString(existing.depositReference(), "") + "\" → \"" + Objects.toString(updated.depositReference(), "") + "\""
                     + " · วันที่ " + existing.docDate() + " → " + updated.docDate()
+                    + (Objects.equals(existing.customerName(), updated.customerName()) ? ""
+                        : " · ออกในนาม \"" + Objects.toString(existing.customerName(), "") + "\" → \"" + Objects.toString(updated.customerName(), "") + "\"")
                     + " · ยอดชำระ " + ThaiText.money(existing.grandTotal()) + " → " + ThaiText.money(updated.grandTotal()));
             if (existing.grandTotal().compareTo(updated.grandTotal()) != 0) {
                 // account collects against this total, same channel as issue()
@@ -305,7 +311,7 @@ public class RemainingInvoiceService {
 
         // Refresh the snapshot from the current live state before freezing anything.
         DepositNoticeService.RemainingInvoiceSnapshot snap = depositNoticeService.resolveRemainingInvoiceSnapshot(
-            draft.ticketId(), draft.customerQuotationId(), actor);
+            draft.ticketId(), draft.customerQuotationId(), actor, draft.payerCustomerId());
         DepositNoticeService.ResolvedRemainingInvoice resolved = snap.resolved();
         if (resolved.blockingReason() != null) {
             throw new ApiException(HttpStatus.CONFLICT, resolved.blockingReason());
@@ -428,7 +434,7 @@ public class RemainingInvoiceService {
                 issued.reference(), issued.depositReference(), issued.docDate(), issued.notes(),
                 issued.customerName(), issued.customerTaxId(), issued.customerBranch(), issued.customerAddress(),
                 issued.projectName(), issued.itemsTotal(), issued.depositDeduction(), issued.netAmount(),
-                issued.vatAmount(), issued.grandTotal(), actor.id(), actor.name());
+                issued.vatAmount(), issued.grandTotal(), issued.payerCustomerId(), actor.id(), actor.name());
             if (issued.preparerId() != null) stored.copyPreparer(draftId, issued.preparerId(), issued.preparerName());
         } catch (DataIntegrityViolationException e) {
             throw new ApiException(HttpStatus.CONFLICT,

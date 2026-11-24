@@ -99,16 +99,18 @@ public class DealDocumentListRepository {
                       COALESCE(q.number = d.reference, FALSE) DESC, q.quotation_id DESC LIMIT 1) rq ON TRUE
         """;
 
-    /** Same party lookup as RemainingInvoiceRepository#SELECT_RI, so the name is the one printed. */
+    /** Same lookup as RemainingInvoiceRepository#SELECT_RI, so the name is the one printed: the ออกในนาม name, else the
+     * quotation's party customer. */
     private static final String INVOICE_CUSTOMER = """
         LEFT JOIN LATERAL (
-            SELECT c.name FROM sales.quotation q
-              JOIN sales.deal_party dp ON dp.party_id = q.party_id
-              JOIN customers.customer c ON c.customer_id = dp.customer_id
-             WHERE q.ticket_id = d.ticket_id AND q.origin IS NOT NULL
-               AND (q.quotation_id = d.customer_quotation_id
-                    OR (d.customer_quotation_id IS NULL AND q.number = d.reference))
-             ORDER BY q.quotation_id DESC LIMIT 1) qc ON TRUE
+            SELECT c.name FROM customers.customer c
+             WHERE c.customer_id = COALESCE(d.payer_customer_id, (
+                   SELECT dp.customer_id FROM sales.quotation q
+                     JOIN sales.deal_party dp ON dp.party_id = q.party_id
+                    WHERE q.ticket_id = d.ticket_id AND q.origin IS NOT NULL
+                      AND (q.quotation_id = d.customer_quotation_id
+                           OR (d.customer_quotation_id IS NULL AND q.number = d.reference))
+                    ORDER BY q.quotation_id DESC LIMIT 1))) qc ON TRUE
         """;
 
     private static final String OWNER_JOIN = " LEFT JOIN hr.employee e ON e.employee_id = t.created_by ";

@@ -569,7 +569,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
             remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
 
         int fields = remainingInvoiceRepository.updateDraftFields(issued.id(), "RACE", null, LocalDate.of(2026, 1, 1),
-            List.of(), null, "DRAFT");
+            List.of(), null, null, "DRAFT");
         int snapshot = remainingInvoiceRepository.updateSnapshot(issued.id(), null, "RACE", null, null, null, null,
             BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "DRAFT");
 

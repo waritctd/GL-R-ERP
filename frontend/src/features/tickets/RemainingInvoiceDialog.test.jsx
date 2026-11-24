@@ -29,6 +29,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         saveBundleSelection: vi.fn(),
       },
       attachments: { list: vi.fn(), upload: vi.fn() },
+      customers: { search: vi.fn() },
       depositNotices: {
         noteTemplates: vi.fn(),
         preparerOptions: vi.fn(),
@@ -158,10 +159,16 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
 
     const input = await screen.findByDisplayValue('QT-2026-0099');
     fireEvent.change(input, { target: { value: 'PO-EDIT-1' } });
+    // ออกในนาม (feedback #74): a name picked from the customer list is saved as the payer
+    api.customers.search.mockResolvedValue({ customers: [{ id: 77, name: 'ในนาม ทดสอบ', taxId: '0100000000077', address: 'กรุงเทพ' }] });
+    fireEvent.click(screen.getByTestId('pick-payer'));
+    fireEvent.change(screen.getByLabelText('ค้นหาลูกค้า (master)'), { target: { value: 'ในนาม' } });
+    fireEvent.click(await screen.findByRole('button', { name: /ในนาม ทดสอบ/ }));
+    expect(screen.getByTestId('customer-from-quotation').textContent).toContain('ออกในนาม ในนาม ทดสอบ');
     fireEvent.click(screen.getByTestId('remaining-invoice-save-draft'));
 
     await waitFor(() => expect(api.storedRemainingInvoices.update).toHaveBeenCalledWith(900,
-      expect.objectContaining({ reference: 'PO-EDIT-1' })));
+      expect.objectContaining({ reference: 'PO-EDIT-1', payerCustomerId: 77 })));
   });
 
   it('ออกใบแจ้งหนี้ calls issue', async () => {
