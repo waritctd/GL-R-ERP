@@ -10,9 +10,14 @@ public final class CustomerPrintRule {
 
     private CustomerPrintRule() {}
 
-    /** The branch to print: only with a tax id. */
+    /** The branch to print: only with a company's tax id. A person's 13-digit id starts 1-8 (a company's starts 0), and a
+     * person has no branch (Ploy, feedback #74). */
     public static String branch(String branch, String taxId) {
-        return isBlank(taxId) || isBlank(branch) ? null : branch.trim();
+        return isBlank(taxId) || isBlank(branch) || isPersonId(taxId) ? null : branch.trim();
+    }
+
+    static boolean isPersonId(String taxId) {
+        return taxId.replaceAll("[\\s-]", "").matches("[1-8]\\d{12}");
     }
 
     /** The address with the branch folded in, as the deposit notice prints it. */
