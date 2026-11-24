@@ -81,7 +81,26 @@ export function formatQty(value) {
   return Number.isFinite(n) ? n.toLocaleString('en-US') : '-';
 }
 
-export const roundTitle = (round) => [round.factoryName, round.facts?.label].filter(Boolean).join(' · ') || `รอบขนส่ง #${round.id}`;
+// An imported PROJECT order can carry the workbook name before it is linked to a deal.
+export const lotProjectName = (lot) => (
+  lot.ticketId == null && lot.orderPurpose === 'PROJECT' ? lot.purposeNote : lot.projectName
+)?.trim();
+
+export function roundProjectNames(round) {
+  return [...new Set((round.lots ?? []).map(lotProjectName).filter(Boolean))].join(' / ');
+}
+
+export function roundTitle(round) {
+  return [round.factoryName, roundProjectNames(round), round.facts?.label].filter(Boolean).join(' · ') || `รอบขนส่ง #${round.id}`;
+}
+
+/** Orders rounds by Thailand ETA; rounds with no ETA stay last in either direction. */
+export function compareRoundEta(a, b, descending = false) {
+  const first = a.facts?.etaOn;
+  const second = b.facts?.etaOn;
+  if (!first || !second) return Number(!first) - Number(!second);
+  return descending ? second.localeCompare(first) : first.localeCompare(second);
+}
 
 /** "ล็อต 1 จาก 2" when the line is split (or part of it still waits for a round), else "ครบทั้งใบ". */
 export const lotLabel = (lot, roundStep) => (lot.lotCount > 1 || lotArrivalText(lot, roundStep)
@@ -100,12 +119,16 @@ export const lotProduct = (lot) => [[lot.brand, lot.model].filter(Boolean).join(
 export const PURPOSE_LABELS = { SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก', PROJECT: 'โครงการ' };
 
 /** Who a lot (or a waiting IR) is for: the deal's project/customer, or for an order with no project "ตัวอย่าง · requester". */
-export const lotWho = (lot) => (lot.ticketId == null
+export const lotWho = (lot) => lotProjectName(lot) || (lot.ticketId == null
   ? [PURPOSE_LABELS[lot.orderPurpose], lot.requesterName].filter(Boolean).join(' · ') || lot.purposeNote
-  : lot.projectName || lot.customerName || lot.ticketCode);
+  : lot.customerName || lot.ticketCode);
 
 /** The second line under who: the deal's code, or "ไม่มีโครงการ" (with who it is for) for an order with no project. */
-export const lotWhoSub = (lot) => (lot.ticketId == null ? ['ไม่มีโครงการ', lot.purposeNote].filter(Boolean).join(' · ') : `งาน ${lot.ticketCode}`);
+export function lotWhoSub(lot) {
+  if (lot.ticketId != null) return `งาน ${lot.ticketCode}`;
+  if (lot.orderPurpose === 'PROJECT') return lot.requesterName;
+  return ['ไม่มีโครงการ', lot.purposeNote].filter(Boolean).join(' · ');
+}
 
 /** The vessel and date line on the queue card. */
 export const roundSummaryLine = (round) => [
@@ -113,12 +136,11 @@ export const roundSummaryLine = (round) => [
   roundDatesLine(round),
 ].filter(Boolean).join(' · ');
 
-/** A round's dates: departure / ETA, or customs release and goods receipt once it has arrived. */
+/** Shipping milestones shown alongside the queue's Thailand ETA. */
 export function roundDatesLine(round) {
   const f = round.facts ?? {};
   const parts = [];
   if (f.etdActualOn) parts.push(`${MODE_LABELS[f.transportMode]?.etdActualOn ? 'ออกจากต้นทาง' : 'เรือออก'} ${formatThaiDate(f.etdActualOn)}`);
-  if (f.etaOn && round.importStep !== 'RECEIVED') parts.push(`คาดว่าถึง ${formatThaiDate(f.etaOn)}`);
   if (round.importStep === 'RECEIVED') {
     if (f.customsReleasedOn || round.receivedOn) parts.push(`ออกของ ${formatThaiDate(f.customsReleasedOn ?? round.receivedOn)}`);
     if (f.grNumber) parts.push(`ใบตรวจรับ ${f.grNumber}`);
@@ -129,6 +151,9 @@ export function roundDatesLine(round) {
 /** Under a round's name on the desktop table: its first proforma number, else the goods-receipt number. */
 export const roundSubline = (round) => (round.documents ?? []).find((d) => d.kind === 'PROFORMA' && d.docNo)?.docNo
   ?? round.facts?.grNumber ?? '';
+
+/** What tells two rounds of one project apart: the round label and the proforma (or GR) number. */
+export const roundReference = (round) => [...new Set([round.facts?.label, roundSubline(round)].filter(Boolean))].join(' · ');
 
 /** The quantity ("n รายการ" unless every line shares a unit) and "x โครงการ · y ตัวอย่าง" for the IRs on a round. */
 export function roundIrSummary(round) {

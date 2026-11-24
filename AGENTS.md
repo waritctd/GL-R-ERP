@@ -83,5 +83,6 @@ MCP servers: Supabase (connected), Vercel (connected), Figma (connected), GitNex
 
 - [backend/AGENTS.md](backend/AGENTS.md) (Spring Boot API: layering, JDBC, migrations, contract digests, document templates)
 - [frontend/AGENTS.md](frontend/AGENTS.md) (React portal: mock API contract, shared components, lint guards, Thai copy and dates)
+- [docs/problem-requests/AGENTS.md](docs/problem-requests/AGENTS.md) (แจ้งปัญหา / ขอฟีเจอร์: triage, statuses, who gets notified, release mail)
 
 _Drafted by /audit from the repo, worth a quick human pass. Edit freely: once a line stops matching this draft, later runs treat it as curated and will flag rather than overwrite it._
