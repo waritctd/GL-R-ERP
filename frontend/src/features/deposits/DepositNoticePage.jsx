@@ -227,6 +227,7 @@ function buildPayloadFrom(form, expectedUpdatedAt) {
     depositPercent:  form.depositPercent === '' ? null : Number(form.depositPercent),
     notes:           form.notes,
     preparerId:      form.preparerId ?? null,
+    payerCustomerId: form.payerCustomerId ?? null,
     expectedUpdatedAt,
     items: form.items.filter((it) => !isBlankRow(it)).map((it, idx) => ({
       seq:          idx + 1,
@@ -304,7 +305,10 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
     notes: [],
     items: [],
     preparerId: null,
+    payerCustomerId: null,
   });
+  // ออกในนามลูกค้าอื่น (feedback #74): the master search is open to pick a payer instead of the quotation's customer.
+  const [pickingPayer, setPickingPayer] = useState(false);
 
   // Reads (TanStack Query) --- Mount only LOADS existing documents — it must never create one as a side effect
   // of navigating here. None of the queries below ever create anything.
@@ -400,6 +404,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
       depositPercent:  d.depositPercent ?? '',
       notes:           d.notes         ?? [],
       preparerId:      d.preparerId    ?? null,
+      payerCustomerId: d.payerCustomerId ?? null,
       // A qty < 0 line is the quotation's ส่วนลดพิเศษ: its qty is not editable and is allowed past the qty > 0 check.
       items:           (d.items ?? []).map((it) => ({ ...it, discount: Number(it.qty) < 0 })),
     };
@@ -413,7 +418,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
   // or DRAFT -> ISSUED) — not on every background refetch of the same doc (e.g. a save doesn't bump
   // version/status, so no reseed fires and in-flight edits aren't clobbered). The reference is in the key too:
   // re-pointing a draft to another buyer's quotation replaces its customer and items on the server.
-  const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}:${doc.reference ?? ''}` : null;
+  const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}:${doc.reference ?? ''}:${doc.payerCustomerId ?? ''}` : null;
   // The draft's updatedAt as last read from the server (the list, or this page's own save):
   // sent as expectedUpdatedAt, so a save over someone else's newer one is refused (409).
   const stampRef = useRef(null);
@@ -552,8 +557,12 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
 
   function selectCustomer(c) {
     autoAddressCustomerRef.current = c;
+    // On a header locked to the quotation, a pick is the payer (the server then prints that customer's master data).
+    const asPayer = doc?.customerFromQuotation === true;
+    setPickingPayer(false);
     setForm((f) => ({
       ...f,
+      ...(asPayer ? { payerCustomerId: c.id } : {}),
       customerName:    c.name,
       customerTaxId:   c.taxId ?? '',
       customerAddress: printedCustomerAddress(c.address, c.branch, c.taxId),
@@ -792,11 +801,29 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
             ) : (
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
                 {customerFromQuotation ? (
-                  <p className="col-span-full m-0 text-sm text-text-muted" data-testid="customer-from-quotation">
-                    ชื่อ เลขผู้เสียภาษี และที่อยู่ดึงจากใบเสนอราคา {form.reference} (แก้ไม่ได้)
-                  </p>
+                  <div className="col-span-full flex flex-wrap items-center gap-2" data-testid="customer-from-quotation">
+                    <p className="m-0 text-sm text-text-muted">
+                      {form.payerCustomerId == null
+                        ? `ชื่อ เลขผู้เสียภาษี และที่อยู่ดึงจากใบเสนอราคา ${form.reference} (แก้ไม่ได้)`
+                        : `ออกในนามผู้ชำระเงิน แทนลูกค้าในใบเสนอราคา ${form.reference}`
+                          + (form.payerCustomerId === doc?.payerCustomerId ? '' : ' (กดบันทึกเพื่อใช้)')}
+                    </p>
+                    {form.payerCustomerId == null ? (
+                      <Button variant="secondary" onClick={() => setPickingPayer((v) => !v)} data-testid="pick-payer">
+                        {pickingPayer ? 'ยกเลิก' : 'ออกในนามลูกค้าอื่น'}
+                      </Button>
+                    ) : (
+                      <Button variant="secondary" data-testid="clear-payer"
+                        onClick={() => { setPickingPayer(false); setField('payerCustomerId', null); }}>
+                        ใช้ลูกค้าในใบเสนอราคา
+                      </Button>
+                    )}
+                    {form.payerCustomerId == null && doc?.payerCustomerId != null ? (
+                      <p className="m-0 w-full text-sm text-warning-dark">กดบันทึกเพื่อกลับไปใช้ลูกค้าในใบเสนอราคา</p>
+                    ) : null}
+                  </div>
                 ) : null}
-                <div className={customerFromQuotation ? 'hidden' : 'relative col-span-full'}>
+                <div className={customerFromQuotation && !pickingPayer ? 'hidden' : 'relative col-span-full'}>
                   <FormField label="ค้นหาลูกค้า (master)" htmlFor="doc-customer-search">
                     <input
                       id="doc-customer-search"
@@ -843,7 +870,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                 <FormField label="อ้างอิง PO / ใบเสนอราคา" htmlFor="doc-reference">
                   {customerFromQuotation && doc?.status === 'DRAFT' && partyQuotations.length > 0 ? (
                     <select id="doc-reference" value={form.reference}
-                      onChange={(e) => setField('reference', e.target.value)}>
+                      onChange={(e) => { setField('reference', e.target.value); setField('payerCustomerId', null); }}>
                       {partyQuotations.some((q) => q.number === form.reference) ? null
                         : <option value={form.reference}>{form.reference}</option>}
                       {partyQuotations.map((q) => (

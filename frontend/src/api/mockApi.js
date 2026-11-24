@@ -18339,6 +18339,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (payload.expectedUpdatedAt != null && payload.expectedUpdatedAt !== doc.updatedAt) {
         fail('ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง', 409);
       }
+      const payer = payload.payerCustomerId == null ? null
+        : mockCustomers.find((c) => c.id === Number(payload.payerCustomerId));
+      if (payload.payerCustomerId != null && !payer) fail('ไม่พบลูกค้าผู้ชำระเงิน', 400);
       applyMockPreparer(doc, findTicketRaw(doc.ticketId), payload.preparerId);
       Object.assign(doc, {
         customerName:    payload.customerName    ?? doc.customerName,
@@ -18352,6 +18355,18 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         // Strictly later than the stored stamp, so two saves in one millisecond still differ.
         updatedAt:       new Date(Math.max(Date.now(), (Date.parse(doc.updatedAt) || 0) + 1)).toISOString(),
       });
+      // ผู้ชำระเงิน (feedback #74): a master customer replaces the quotation's; the header is that customer's.
+      // back to the quotation's customer (the mock's stand-in: the deal's own customer)
+      const own = !payer && doc.payerCustomerId != null
+        ? mockCustomers.find((c) => c.id === findTicketRaw(doc.ticketId)?.customerId) : null;
+      if (own) Object.assign(doc, { customerName: own.name, customerTaxId: own.taxId ?? null, customerAddress: own.address ?? null });
+      doc.payerCustomerId = payer ? payer.id : null;
+      if (payer) {
+        Object.assign(doc, {
+          customerName: payer.name, customerTaxId: payer.taxId ?? null, customerAddress: payer.address ?? null,
+          customerFromQuotation: true,
+        });
+      }
       const updated = buildMockDoc(doc);
       Object.assign(doc, updated);
       return delay({ depositNotice: structuredClone(doc) });

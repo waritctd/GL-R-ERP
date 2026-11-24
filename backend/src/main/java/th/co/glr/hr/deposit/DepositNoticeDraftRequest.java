@@ -21,8 +21,20 @@ public record DepositNoticeDraftRequest(
     // The draft's updatedAt as this client last read it. null skips the stale-save check (older clients).
     OffsetDateTime expectedUpdatedAt,
     // ผู้จัดทำ: the deal's owner, keyer or a sales manager; null keeps the stored preparer.
-    Long preparerId
+    Long preparerId,
+    // ผู้ชำระเงิน (feedback #74): a customer-master id the notice is issued to instead of the quotation's customer;
+    // null = the quotation's customer. Update only; create always starts from the quotation.
+    Long payerCustomerId
 ) {
+    /** Without a payer: the quotation's customer. */
+    public DepositNoticeDraftRequest(String customerName, String customerTaxId, String customerAddress,
+                                     String projectName, String reference, BigDecimal depositPercent,
+                                     List<String> notes, List<DepositNoticeItemRequest> items,
+                                     OffsetDateTime expectedUpdatedAt, Long preparerId) {
+        this(customerName, customerTaxId, customerAddress, projectName, reference, depositPercent, notes, items,
+            expectedUpdatedAt, preparerId, null);
+    }
+
     /** Without a stamp: creation and the server-side callers. */
     public DepositNoticeDraftRequest(String customerName, String customerTaxId, String customerAddress,
                                      String projectName, String reference, BigDecimal depositPercent,

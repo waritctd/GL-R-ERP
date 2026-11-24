@@ -88,16 +88,19 @@ public class DepositNoticeRepository {
 
     /** The notice's customer is the QUOTATION's party customer whenever the reference names a new-engine quotation of
      * this deal that has a party (a deal can hold several BUYER parties; the stored header may name the headline one).
-     * The stored columns are used only when no such quotation resolves (legacy reference, no party). */
+     * The stored columns are used only when no such quotation resolves (legacy reference, no party). A payer the
+     * notice names (feedback #74, {@code payer_customer_id}) wins over the quotation's customer. */
     static final String QUOTATION_CUSTOMER_JOIN = """
         LEFT JOIN LATERAL (
             SELECT c.name, c.tax_id, c.address, c.branch
-              FROM sales.quotation q
-              JOIN sales.deal_party dp ON dp.party_id = q.party_id
-              JOIN customers.customer c ON c.customer_id = dp.customer_id
-             WHERE q.ticket_id = d.ticket_id AND q.number = d.reference AND q.origin IS NOT NULL
-             ORDER BY CASE WHEN """ + BILLABLE_Q + """
- THEN 0 ELSE 1 END, q.quotation_id DESC LIMIT 1) qc ON TRUE
+              FROM customers.customer c
+             WHERE c.customer_id = COALESCE(d.payer_customer_id, (
+                   SELECT dp.customer_id
+                     FROM sales.quotation q
+                     JOIN sales.deal_party dp ON dp.party_id = q.party_id
+                    WHERE q.ticket_id = d.ticket_id AND q.number = d.reference AND q.origin IS NOT NULL
+                    ORDER BY CASE WHEN """ + BILLABLE_Q + """
+ THEN 0 ELSE 1 END, q.quotation_id DESC LIMIT 1))) qc ON TRUE
         """;
 
     /** The deal's own customer, to tell a joined default branch from an address that really ends with the word. */
@@ -122,7 +125,7 @@ public class DepositNoticeRepository {
                    d.vat_percent, d.vat_amount, d.total_payable,
                    d.notes, d.pdf_path, d.xlsx_path,
                    d.issued_by_name, d.preparer_name, d.preparer_id,
-                   d.created_at, d.updated_at, (qc.name IS NOT NULL) AS customer_from_quotation
+                   d.created_at, d.updated_at, (qc.name IS NOT NULL) AS customer_from_quotation, d.payer_customer_id
               FROM sales.deposit_notice d
               """ + QUOTATION_CUSTOMER_JOIN + OWN_CUSTOMER_JOIN + """
              WHERE d.deposit_notice_id = :id
@@ -150,7 +153,7 @@ public class DepositNoticeRepository {
                    d.vat_percent, d.vat_amount, d.total_payable,
                    d.notes, d.pdf_path, d.xlsx_path,
                    d.issued_by_name, d.preparer_name, d.preparer_id,
-                   d.created_at, d.updated_at, (qc.name IS NOT NULL) AS customer_from_quotation
+                   d.created_at, d.updated_at, (qc.name IS NOT NULL) AS customer_from_quotation, d.payer_customer_id
               FROM sales.deposit_notice d
               """ + QUOTATION_CUSTOMER_JOIN + OWN_CUSTOMER_JOIN + """
              WHERE d.ticket_id = :ticketId
@@ -272,7 +275,7 @@ public class DepositNoticeRepository {
             INSERT INTO sales.deposit_notice
                 (ticket_id, version, customer_name, customer_tax_id, customer_address,
                  project_name, reference, deposit_percent, subtotal, deposit_amount,
-                 vat_percent, vat_amount, total_payable, notes, preparer_name, preparer_id)
+                 vat_percent, vat_amount, total_payable, notes, preparer_name, preparer_id, payer_customer_id)
             VALUES
                 (:ticketId, :version, :customerName, :customerTaxId, :customerAddress,
                  :projectName, :reference, :depositPercent, :subtotal, :depositAmount,
@@ -287,7 +290,11 @@ public class DepositNoticeRepository {
                  COALESCE((SELECT p.preparer_id FROM sales.deposit_notice p
                             WHERE p.ticket_id = :ticketId
                               AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)),
-                          (SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :preparerId))
+                          (SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :preparerId),
+                 -- ผู้ชำระเงิน (feedback #74): a new version keeps the latest earlier notice's payer
+                 (SELECT p.payer_customer_id FROM sales.deposit_notice p
+                   WHERE p.ticket_id = :ticketId
+                     AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)))
             """.replace("{NAME}", PREPARER_NAME_SQL), params, keys, new String[]{"deposit_notice_id"});
 
         long docId = keys.getKey().longValue();
@@ -326,6 +333,7 @@ public class DepositNoticeRepository {
                 customer_name    = :customerName,
                 customer_tax_id  = :customerTaxId,
                 customer_address = :customerAddress,
+                payer_customer_id = :payerCustomerId,
                 project_name     = :projectName,
                 reference        = :reference,
                 deposit_percent  = :depositPercent,
@@ -349,6 +357,7 @@ public class DepositNoticeRepository {
                 .addValue("customerName",    req.customerName())
                 .addValue("customerTaxId",   req.customerTaxId())
                 .addValue("customerAddress", req.customerAddress())
+                .addValue("payerCustomerId", req.payerCustomerId())
                 .addValue("projectName",     req.projectName())
                 .addValue("reference",       req.reference())
                 .addValue("depositPercent",  depositPct)
@@ -719,7 +728,8 @@ public class DepositNoticeRepository {
             rs.getObject("created_at", OffsetDateTime.class),
             rs.getObject("updated_at", OffsetDateTime.class),
             List.of(),
-            rs.getBoolean("customer_from_quotation")
+            rs.getBoolean("customer_from_quotation"),
+            (Long) rs.getObject("payer_customer_id")
         );
     }
 
@@ -732,7 +742,7 @@ public class DepositNoticeRepository {
             doc.vatPercent(), doc.vatAmount(), doc.totalPayable(),
             doc.notes(), doc.hasPdf(), doc.hasXlsx(),
             doc.issuedByName(), doc.preparerName(), doc.preparerId(),
-            doc.createdAt(), doc.updatedAt(), items, doc.customerFromQuotation()
+            doc.createdAt(), doc.updatedAt(), items, doc.customerFromQuotation(), doc.payerCustomerId()
         );
     }
 }

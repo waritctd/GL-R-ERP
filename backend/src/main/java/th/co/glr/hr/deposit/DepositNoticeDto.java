@@ -38,5 +38,7 @@ public record DepositNoticeDto(
     OffsetDateTime    updatedAt,
     List<DepositNoticeItemDto> items,
     // true when customerName/TaxId/Address are the quotation party's (read-only in the editor), false for stored values
-    boolean           customerFromQuotation
+    boolean           customerFromQuotation,
+    // the payer customer the notice is issued to instead of the quotation's (feedback #74); null = the quotation's
+    Long              payerCustomerId
 ) {}

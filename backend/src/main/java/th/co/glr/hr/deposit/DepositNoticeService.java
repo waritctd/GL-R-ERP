@@ -264,6 +264,7 @@ public class DepositNoticeService {
         boolean fromQuotation = quotationHeader.customerName() != null;
         String requested = blankToNull(req.reference());
         List<DepositNoticeItemRequest> items = echoOnly(req.items(), doc.items());
+        boolean repointed = false;
         if (fromQuotation && requested != null && !requested.equals(reference)) {
             // Re-pointing: a DRAFT may move to another party quotation of THIS deal in a status create would bill
             // (findRepointTarget); anything else is refused, never silently ignored.
@@ -281,14 +282,28 @@ public class DepositNoticeService {
             depositPercent = target.depositPercent();
             reference = requested;
             quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference);
+            repointed = true;
         }
+        // ผู้ชำระเงิน (feedback #74, Ploy's option B): a payer picked from the customer master replaces the quotation's
+        // customer; still master data, never typed. null goes back to the quotation's customer.
+        // A re-point is a new buyer's document: it starts from that quotation's customer. A payer equal to the
+        // quotation's own customer is no payer.
+        Long payer = repointed ? null : req.payerCustomerId();
+        if (payer != null && payer.equals(docs.findQuotationPartyCustomerId(doc.ticketId(), reference).orElse(null))) {
+            payer = null;
+        }
+        if (payer != null) {
+            if (customers.findById(payer).isEmpty()) throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าผู้ชำระเงิน");
+            quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference, payer);
+        }
+        boolean fromMaster = fromQuotation || payer != null;
         var effective = new DepositNoticeDraftRequest(
-            fromQuotation ? quotationHeader.customerName() : req.customerName(),
-            fromQuotation ? quotationHeader.taxId() : req.customerTaxId(),
-            fromQuotation ? quotationHeader.address() : req.customerAddress(),
+            fromMaster ? quotationHeader.customerName() : req.customerName(),
+            fromMaster ? quotationHeader.taxId() : req.customerTaxId(),
+            fromMaster ? quotationHeader.address() : req.customerAddress(),
             req.projectName(), fromQuotation ? reference : req.reference(),
             depositPercent,
-            req.notes(), items, req.expectedUpdatedAt(), req.preparerId()
+            req.notes(), items, req.expectedUpdatedAt(), req.preparerId(), payer
         );
         docs.update(docId, effective, doc.items(), doc.status());
         DepositNoticeDto updated = docs.findById(docId).orElseThrow();
@@ -1583,12 +1598,20 @@ public class DepositNoticeService {
      * are ignored. Anything else (no number, a legacy number, no party) behaves exactly as the 4-argument form. */
     CustomerHeaderInfo resolveCustomerHeader(TicketSummaryDto s,
             String reqTaxId, String reqAddress, String reqProjectName, long ticketId, String quotationNumber) {
+        return resolveCustomerHeader(s, reqTaxId, reqAddress, reqProjectName, ticketId, quotationNumber, null);
+    }
+
+    /** As above; a non-null {@code payerCustomerId} (a deposit notice's ผู้ชำระเงิน, feedback #74) takes the quotation
+     * party customer's place. */
+    CustomerHeaderInfo resolveCustomerHeader(TicketSummaryDto s, String reqTaxId, String reqAddress,
+            String reqProjectName, long ticketId, String quotationNumber, Long payerCustomerId) {
         Long customerId = s.customerId();
         String partyCustomerName = null;
         String customerTaxId = blankToNull(reqTaxId);
         String customerAddress = blankToNull(reqAddress);
-        if (quotationNumber != null && !quotationNumber.isBlank()) {
-            Long partyCustomerId = docs.findQuotationPartyCustomerId(ticketId, quotationNumber).orElse(null);
+        if (payerCustomerId != null || (quotationNumber != null && !quotationNumber.isBlank())) {
+            Long partyCustomerId = payerCustomerId != null ? payerCustomerId
+                : docs.findQuotationPartyCustomerId(ticketId, quotationNumber).orElse(null);
             CustomerDto party = partyCustomerId == null ? null : customers.findById(partyCustomerId).orElse(null);
             if (party != null) {
                 // the quotation's customer is the only source: typed values do not win
