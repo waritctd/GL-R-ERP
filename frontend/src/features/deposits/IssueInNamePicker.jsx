@@ -4,7 +4,6 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
-import { ThaiAddressFields, emptyThaiAddress, completeThaiAddress } from '../locations/ThaiAddressFields.jsx';
 
 /**
  * ออกในนาม (feedback #74): a customer document defaults to its quotation's customer (#65); the user may issue it in
@@ -93,23 +92,20 @@ export function IssueInNamePicker({ quotationNumber, payerId, payerName, savedPa
   );
 }
 
-/** A name not yet in the customer list: added through POST /api/customers (the deal-entry gate), then picked. */
+/** A name not yet in the customer list, added in a hurry: the name only, email and phone optional (Ploy). Saved through
+ * POST /api/customers (the deal-entry gate; the server checks the email and keeps it on a contact), then picked. */
 function NewNameForm({ idPrefix, initialName, onCreated, onCancel, showToast }) {
-  const [value, setValue] = useState(() => ({ name: initialName, taxId: '', ...emptyThaiAddress() }));
+  const [value, setValue] = useState(() => ({ name: initialName, email: '', phone: '' }));
   const [saving, setSaving] = useState(false);
-  const ready = value.name.trim() && completeThaiAddress(value);
+  const ready = value.name.trim() !== '';
 
   async function save() {
     setSaving(true);
     try {
       const res = await api.customers.create({
         name: value.name.trim(),
-        taxId: value.taxId.trim() || null,
-        addressLine: value.addressLine.trim(),
-        provinceCode: value.provinceCode,
-        districtCode: value.districtCode,
-        subdistrictCode: value.subdistrictCode,
-        postalCode: value.postalCode || null,
+        email: value.email.trim() || null,
+        phone: value.phone.trim() || null,
       });
       onCreated(res.customer);
     } catch (error) {
@@ -125,11 +121,14 @@ function NewNameForm({ idPrefix, initialName, onCreated, onCancel, showToast }) 
         <input id={`${idPrefix}-new-payer-name`} value={value.name} disabled={saving} maxLength={255}
           onChange={(e) => setValue((v) => ({ ...v, name: e.target.value }))} />
       </FormField>
-      <FormField label="เลขประจำตัวผู้เสียภาษี" htmlFor={`${idPrefix}-new-payer-tax`}>
-        <input id={`${idPrefix}-new-payer-tax`} value={value.taxId} disabled={saving} inputMode="numeric" maxLength={13}
-          onChange={(e) => setValue((v) => ({ ...v, taxId: e.target.value }))} placeholder="0000000000000" />
+      <FormField label="อีเมล (ถ้ามี)" htmlFor={`${idPrefix}-new-payer-email`}>
+        <input id={`${idPrefix}-new-payer-email`} type="email" inputMode="email" autoComplete="off" value={value.email}
+          disabled={saving} maxLength={200} onChange={(e) => setValue((v) => ({ ...v, email: e.target.value }))} />
       </FormField>
-      <ThaiAddressFields value={value} onChange={(patch) => setValue((v) => ({ ...v, ...patch }))} disabled={saving} />
+      <FormField label="เบอร์โทร (ถ้ามี)" htmlFor={`${idPrefix}-new-payer-phone`}>
+        <input id={`${idPrefix}-new-payer-phone`} type="tel" inputMode="tel" autoComplete="off" value={value.phone}
+          disabled={saving} maxLength={50} onChange={(e) => setValue((v) => ({ ...v, phone: e.target.value }))} />
+      </FormField>
       <div className="flex flex-wrap justify-end gap-2">
         <Button variant="secondary" disabled={saving} onClick={onCancel}>ยกเลิก</Button>
         <Button variant="primary" loading={saving} disabled={!ready || saving} onClick={save}>ใช้ชื่อนี้</Button>

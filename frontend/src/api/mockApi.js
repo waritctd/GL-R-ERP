@@ -17911,8 +17911,15 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   customers: {
     async create(payload) {
       requireDealEntry();
+      // CreateCustomerRequest's @Email: a malformed email is a 400 before anything is written
+      if (payload.email?.trim() && !/^[^\s@]+@[^\s@]+$/.test(payload.email.trim())) fail('รูปแบบอีเมลไม่ถูกต้อง', 400);
       const customer = { id: mockCustomerSeq++, name: payload.name, taxId: payload.taxId || null, address: payload.address || null, branch: payload.branch || 'สำนักงานใหญ่', phone: payload.phone || null, ...structuredCustomerAddress(payload) };
       mockCustomers.push(customer);
+      // CustomerController#create: an email (customers store none) becomes a contact of the same name
+      if (payload.email?.trim()) {
+        mockContacts.push({ id: mockContactSeq++, customerId: customer.id, firstName: payload.name.trim(), lastName: null,
+          position: null, email: payload.email.trim(), phone: payload.phone || null });
+      }
       return delay({ customer });
     },
     // Same requireDealEntry() gate as create() above — mirrors CustomerController#update's
