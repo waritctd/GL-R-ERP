@@ -898,7 +898,11 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                 <FormField label="อ้างอิง PO / ใบเสนอราคา" htmlFor="doc-reference">
                   {customerFromQuotation && doc?.status === 'DRAFT' && partyQuotations.length > 0 ? (
                     <select id="doc-reference" value={form.reference}
-                      onChange={(e) => { setField('reference', e.target.value); setField('names', KEEP_NAMES); }}>
+                      onChange={(e) => {
+                        // a re-point starts from the new quotation's เรียน / ออกในนาม (the server applies its defaults)
+                        setForm((f) => ({ ...f, reference: e.target.value, names: KEEP_NAMES,
+                          addresseeName: 'ลูกค้าในใบเสนอราคา', payerName: 'ผู้ติดต่อในใบเสนอราคา' }));
+                      }}>
                       {partyQuotations.some((q) => q.number === form.reference) ? null
                         : <option value={form.reference}>{form.reference}</option>}
                       {partyQuotations.map((q) => (
