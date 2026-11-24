@@ -264,6 +264,7 @@ public class DepositNoticeService {
         boolean fromQuotation = quotationHeader.customerName() != null;
         String requested = blankToNull(req.reference());
         List<DepositNoticeItemRequest> items = echoOnly(req.items(), doc.items());
+        boolean repointed = false;
         if (fromQuotation && requested != null && !requested.equals(reference)) {
             // Re-pointing: a DRAFT may move to another party quotation of THIS deal in a status create would bill
             // (findRepointTarget); anything else is refused, never silently ignored.
@@ -281,10 +282,16 @@ public class DepositNoticeService {
             depositPercent = target.depositPercent();
             reference = requested;
             quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference);
+            repointed = true;
         }
         // ผู้ชำระเงิน (feedback #74, Ploy's option B): a payer picked from the customer master replaces the quotation's
         // customer; still master data, never typed. null goes back to the quotation's customer.
-        Long payer = req.payerCustomerId();
+        // A re-point is a new buyer's document: it starts from that quotation's customer. A payer equal to the
+        // quotation's own customer is no payer.
+        Long payer = repointed ? null : req.payerCustomerId();
+        if (payer != null && payer.equals(docs.findQuotationPartyCustomerId(doc.ticketId(), reference).orElse(null))) {
+            payer = null;
+        }
         if (payer != null) {
             if (customers.findById(payer).isEmpty()) throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าผู้ชำระเงิน");
             quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference, payer);

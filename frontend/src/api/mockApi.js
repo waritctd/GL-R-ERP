@@ -18123,6 +18123,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         updatedAt:       new Date(Math.max(Date.now(), (Date.parse(doc.updatedAt) || 0) + 1)).toISOString(),
       });
       // ผู้ชำระเงิน (feedback #74): a master customer replaces the quotation's; the header is that customer's.
+      // back to the quotation's customer (the mock's stand-in: the deal's own customer)
+      const own = !payer && doc.payerCustomerId != null
+        ? mockCustomers.find((c) => c.id === findTicketRaw(doc.ticketId)?.customerId) : null;
+      if (own) Object.assign(doc, { customerName: own.name, customerTaxId: own.taxId ?? null, customerAddress: own.address ?? null });
       doc.payerCustomerId = payer ? payer.id : null;
       if (payer) {
         Object.assign(doc, {

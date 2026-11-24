@@ -275,7 +275,7 @@ public class DepositNoticeRepository {
             INSERT INTO sales.deposit_notice
                 (ticket_id, version, customer_name, customer_tax_id, customer_address,
                  project_name, reference, deposit_percent, subtotal, deposit_amount,
-                 vat_percent, vat_amount, total_payable, notes, preparer_name, preparer_id)
+                 vat_percent, vat_amount, total_payable, notes, preparer_name, preparer_id, payer_customer_id)
             VALUES
                 (:ticketId, :version, :customerName, :customerTaxId, :customerAddress,
                  :projectName, :reference, :depositPercent, :subtotal, :depositAmount,
@@ -290,7 +290,11 @@ public class DepositNoticeRepository {
                  COALESCE((SELECT p.preparer_id FROM sales.deposit_notice p
                             WHERE p.ticket_id = :ticketId
                               AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)),
-                          (SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :preparerId))
+                          (SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :preparerId),
+                 -- ผู้ชำระเงิน (feedback #74): a new version keeps the latest earlier notice's payer
+                 (SELECT p.payer_customer_id FROM sales.deposit_notice p
+                   WHERE p.ticket_id = :ticketId
+                     AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)))
             """.replace("{NAME}", PREPARER_NAME_SQL), params, keys, new String[]{"deposit_notice_id"});
 
         long docId = keys.getKey().longValue();

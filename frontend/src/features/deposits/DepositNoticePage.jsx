@@ -870,7 +870,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                 <FormField label="อ้างอิง PO / ใบเสนอราคา" htmlFor="doc-reference">
                   {customerFromQuotation && doc?.status === 'DRAFT' && partyQuotations.length > 0 ? (
                     <select id="doc-reference" value={form.reference}
-                      onChange={(e) => setField('reference', e.target.value)}>
+                      onChange={(e) => { setField('reference', e.target.value); setField('payerCustomerId', null); }}>
                       {partyQuotations.some((q) => q.number === form.reference) ? null
                         : <option value={form.reference}>{form.reference}</option>}
                       {partyQuotations.map((q) => (

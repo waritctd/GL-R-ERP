@@ -348,6 +348,9 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
             "โครงการใหม่", null, null, null, null), salesActor);
         assertThat(back.payerCustomerId()).isNull();
         assertThat(back.customerName()).isEqualTo(buyer.name());
+        // the quotation's own customer picked as payer is no payer
+        assertThat(depositNoticeService.update(n.id(), new DepositNoticeDraftRequest(null, null, null, "โครงการใหม่",
+            null, null, null, null, null, null, buyer.id()), salesActor).payerCustomerId()).isNull();
 
         // not a party quotation of this deal (unknown number, or one without a party): 409, notice untouched
         cloneQuotation(deal.quotation().id(), "QT-NOPARTY", 91, false);
