@@ -18108,7 +18108,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       }
       const payer = payload.payerCustomerId == null ? null
         : mockCustomers.find((c) => c.id === Number(payload.payerCustomerId));
-      if (payload.payerCustomerId != null && !payer) fail('ไม่พบลูกค้าผู้ชำระเงิน', 400);
+      if (payload.payerCustomerId != null && !payer) fail('ไม่พบลูกค้าที่ออกในนาม', 400);
       applyMockPreparer(doc, findTicketRaw(doc.ticketId), payload.preparerId);
       Object.assign(doc, {
         customerName:    payload.customerName    ?? doc.customerName,

@@ -26,6 +26,7 @@ import {
   subtotalsDiffer,
 } from './createDepositNoticeDraft.js';
 import { DocumentPreparerSelect } from './DocumentPreparerSelect.jsx';
+import { NewPayerForm } from './NewPayerForm.jsx';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 // CustomerPrintRule#addressWithBranch: a branch prints only for a customer with a tax id (feedback #72).
@@ -307,8 +308,10 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
     preparerId: null,
     payerCustomerId: null,
   });
-  // ออกในนามลูกค้าอื่น (feedback #74): the master search is open to pick a payer instead of the quotation's customer.
+  // ออกในนาม (feedback #74): the master search is open to pick another name instead of the quotation's customer, or
+  // newPayer holds the name being added to the customer list.
   const [pickingPayer, setPickingPayer] = useState(false);
+  const [newPayer, setNewPayer] = useState(null);
 
   // Reads (TanStack Query) --- Mount only LOADS existing documents — it must never create one as a side effect
   // of navigating here. None of the queries below ever create anything.
@@ -560,6 +563,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
     // On a header locked to the quotation, a pick is the payer (the server then prints that customer's master data).
     const asPayer = doc?.customerFromQuotation === true;
     setPickingPayer(false);
+    setNewPayer(null);
     setForm((f) => ({
       ...f,
       ...(asPayer ? { payerCustomerId: c.id } : {}),
@@ -805,12 +809,12 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                     <p className="m-0 text-sm text-text-muted">
                       {form.payerCustomerId == null
                         ? `ชื่อ เลขผู้เสียภาษี และที่อยู่ดึงจากใบเสนอราคา ${form.reference} (แก้ไม่ได้)`
-                        : `ออกในนามผู้ชำระเงิน แทนลูกค้าในใบเสนอราคา ${form.reference}`
+                        : `ออกในนาม ${form.customerName} · อ้างอิงใบเสนอราคา ${form.reference}`
                           + (form.payerCustomerId === doc?.payerCustomerId ? '' : ' (กดบันทึกเพื่อใช้)')}
                     </p>
                     {form.payerCustomerId == null ? (
-                      <Button variant="secondary" onClick={() => setPickingPayer((v) => !v)} data-testid="pick-payer">
-                        {pickingPayer ? 'ยกเลิก' : 'ออกในนามลูกค้าอื่น'}
+                      <Button variant="secondary" onClick={() => { setPickingPayer((v) => !v); setNewPayer(null); }} data-testid="pick-payer">
+                        {pickingPayer ? 'ยกเลิก' : 'ออกในนาม'}
                       </Button>
                     ) : (
                       <Button variant="secondary" data-testid="clear-payer"
@@ -844,7 +848,18 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                       ))}
                     </div>
                   )}
+                  {customerFromQuotation && pickingPayer && newPayer == null ? (
+                    <Button variant="text" className="mt-2" data-testid="new-payer"
+                      onClick={() => { setNewPayer(customerSearch.trim()); setCsSearch(''); }}>
+                      + เพิ่มชื่อใหม่{customerSearch.trim() ? ` "${customerSearch.trim()}"` : ''}
+                    </Button>
+                  ) : null}
                 </div>
+                {customerFromQuotation && newPayer != null ? (
+                  <NewPayerForm initialName={newPayer} showToast={showToast}
+                    onCreated={(c) => { customersQuery.refetch(); selectCustomer(c); }}
+                    onCancel={() => setNewPayer(null)} />
+                ) : null}
                 <FormField label="ชื่อบริษัท / หน่วยงาน" htmlFor="doc-customer-name" required error={fieldErrors.customerName}>
                   <input
                     id="doc-customer-name"

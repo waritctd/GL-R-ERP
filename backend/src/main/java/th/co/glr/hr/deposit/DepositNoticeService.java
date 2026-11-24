@@ -293,7 +293,7 @@ public class DepositNoticeService {
             payer = null;
         }
         if (payer != null) {
-            if (customers.findById(payer).isEmpty()) throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าผู้ชำระเงิน");
+            if (customers.findById(payer).isEmpty()) throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าที่ออกในนาม");
             quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference, payer);
         }
         boolean fromMaster = fromQuotation || payer != null;
