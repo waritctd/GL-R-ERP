@@ -164,7 +164,7 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
     fireEvent.click(screen.getByTestId('pick-payer'));
     fireEvent.change(screen.getByLabelText('ค้นหาลูกค้า (master)'), { target: { value: 'ในนาม' } });
     fireEvent.click(await screen.findByRole('button', { name: /ในนาม ทดสอบ/ }));
-    expect(screen.getByTestId('remaining-invoice-customer').textContent).toBe('ในนาม ทดสอบ');
+    expect(screen.getByTestId('customer-from-quotation').textContent).toContain('ออกในนาม ในนาม ทดสอบ');
     fireEvent.click(screen.getByTestId('remaining-invoice-save-draft'));
 
     await waitFor(() => expect(api.storedRemainingInvoices.update).toHaveBeenCalledWith(900,

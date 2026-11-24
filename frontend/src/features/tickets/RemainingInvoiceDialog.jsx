@@ -513,7 +513,9 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
           re-reads the server's fresh preview before anything is issued. */}
       <RemainingSummaryLine net={draft.netAmount} itemsTotal={draft.itemsTotal} deposit={draft.depositDeduction} />
       <Section title="ลูกค้า">
-        <p className="m-0 text-sm font-bold text-text" data-testid="remaining-invoice-customer">{payer.name || '-'}</p>
+        {payer.id == null ? (
+          <p className="m-0 text-sm font-bold text-text" data-testid="remaining-invoice-customer">{payer.name || '-'}</p>
+        ) : null}
         <IssueInNamePicker idPrefix="remaining-invoice" quotationNumber={draft.reference} payerId={payer.id}
           payerName={payer.name} savedPayerId={draft.payerCustomerId} showToast={showToast}
           onPick={(c) => setPayer({ id: c.id, name: c.name })}
