@@ -437,6 +437,12 @@ let sessionUser = null;
 const passwordResetTokens = new Map();
 
 // ── Mock in-memory document store ─────────────────────────────────────────────
+// CustomerPrintRule#branch: a branch prints only with a company's tax id, never a person's (13 digits starting 1-8).
+function mockPrintsBranch(taxId) {
+  const id = String(taxId ?? '').replace(/[\s-]/g, '');
+  return id !== '' && !/^[1-8]\d{12}$/.test(id);
+}
+
 const mockCustomers = [
   { id: 1, name: 'บริษัท สมมติก้าวไกล คอนสตรัคชั่น จำกัด',  taxId: '0105565012345', address: '123 ถนนสุขุมวิท แขวงคลองเตย กรุงเทพฯ 10110', branch: 'สำนักงานใหญ่', phone: '02-123-4567' },
   { id: 2, name: 'บริษัท สมมติ ดีเวลลอปเมนท์ จำกัด', taxId: '0105556789012', address: '456 ถนนรัชดาภิเษก แขวงลาดยาว กรุงเทพฯ 10900',  branch: 'สำนักงานใหญ่', phone: '02-234-5678' },
@@ -1458,8 +1464,7 @@ function mockDepositNoticeHeaderAutofill(ticket, payload) {
     if (customer) {
       if (customerTaxId == null) customerTaxId = blankToNull(customer.taxId);
       if (customerAddress == null) {
-        // CustomerPrintRule: a branch prints only with a tax id
-        customerAddress = blankToNull([customer.address, customerTaxId ? customer.branch : null].filter(Boolean).join(' '));
+        customerAddress = blankToNull([customer.address, mockPrintsBranch(customerTaxId) ? customer.branch : null].filter(Boolean).join(' '));
       }
     }
   }
@@ -18572,7 +18577,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         cancelReason: null, cancelledById: null, cancelledByName: null, cancelledAt: null,
         billDate: payload.billDate ?? null, paymentDueNote: payload.paymentDueNote ?? null,
         paymentAppointmentDate: null, receivedByName: null, receivedAt: null, note: payload.note ?? null,
-        customerName: customer.name, customerTaxId: customer.taxId, customerBranch: customer.taxId ? customer.branch : null, // CustomerPrintRule
+        customerName: customer.name, customerTaxId: customer.taxId, customerBranch: mockPrintsBranch(customer.taxId) ? customer.branch : null,
         customerAddress: customer.address,
         totalAmount: 0,
         createdById: user.id, createdByName: user.name, createdAt: now, updatedAt: now,

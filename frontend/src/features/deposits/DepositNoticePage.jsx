@@ -30,7 +30,9 @@ import { NewPayerForm } from './NewPayerForm.jsx';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 // CustomerPrintRule#addressWithBranch: a branch prints only for a customer with a tax id (feedback #72).
-const printedCustomerAddress = (address, branch, taxId) => [address, String(taxId ?? '').trim() ? branch : null].filter(Boolean).join(' ');
+// A person's 13-digit id (starts 1-8) has no branch either (feedback #74).
+const companyTaxId = (taxId) => { const id = String(taxId ?? '').replace(/[\s-]/g, ''); return id !== '' && !/^[1-8]\d{12}$/.test(id); };
+const printedCustomerAddress = (address, branch, taxId) => [address, companyTaxId(taxId) ? branch : null].filter(Boolean).join(' ');
 
 function money(v) {
   if (v == null) return '—';

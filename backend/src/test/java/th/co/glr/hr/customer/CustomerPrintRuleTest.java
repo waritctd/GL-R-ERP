@@ -27,4 +27,10 @@ class CustomerPrintRuleTest {
         assertThat(CustomerPrintRule.joinedAddress("99 ถนนตัวอย่าง " + HQ, "0000000000001", "99 ถนนตัวอย่าง", HQ))
             .isEqualTo("99 ถนนตัวอย่าง " + HQ);
     }
+
+    @Test
+    void aPersonsIdPrintsNoBranch() {
+        assertThat(CustomerPrintRule.addressWithBranch("12 ซอยตัวอย่าง", HQ, "3100000000074")).isEqualTo("12 ซอยตัวอย่าง");
+        assertThat(CustomerPrintRule.addressWithBranch("12 ซอยตัวอย่าง", HQ, "0105500000074")).isEqualTo("12 ซอยตัวอย่าง " + HQ);
+    }
 }
