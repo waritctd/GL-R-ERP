@@ -199,8 +199,17 @@ public class DepositNoticeService {
         // deal created through the pricing-request chain — only customerName had a ticket-summary fallback.
         // The customer is the one the referenced quotation is addressed to (a deal can hold several BUYER parties).
         String headerReference = req.reference() == null && linesFromGoverning ? governing.number() : req.reference();
+        // ออกในนาม (feedback #74): a new version keeps the latest earlier notice's name only for the same quotation, and
+        // never when it is that quotation's own customer. The stored header is built from it, so what prints and what
+        // receipt import matches on (the stored customer_name) agree.
+        Long payer = headerReference == null ? null : docs.findByTicket(ticketId).stream().findFirst()
+            .filter(prev -> prev.payerCustomerId() != null && headerReference.equals(prev.reference()))
+            .map(DepositNoticeDto::payerCustomerId)
+            .filter(id -> !id.equals(docs.findQuotationPartyCustomerId(ticketId, headerReference).orElse(null)))
+            .filter(id -> customers.findById(id).isPresent())
+            .orElse(null);
         CustomerHeaderInfo header = resolveCustomerHeader(s, req.customerTaxId(), req.customerAddress(), req.projectName(),
-            ticketId, headerReference);
+            ticketId, headerReference, payer);
 
         // The deposit percent is the one the
         // source quotation's PDF printed: a legacy quotation 50% (the constant its PDF prints), a
@@ -221,7 +230,7 @@ public class DepositNoticeService {
             header.taxId(), header.address(),
             header.projectName(), reference,
             effectiveDepositPercent,
-            notes, items, null, actor.id()
+            notes, items, null, actor.id(), payer
         );
 
         long docId = docs.createDraft(ticketId, effective, items, actor.name());

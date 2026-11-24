@@ -268,7 +268,8 @@ public class DepositNoticeRepository {
             // NOT NULL column; blank prints no name (DocumentSheet.preparer)
             // the fallback only: the INSERT below stamps the deal's owner when the ticket has one
             .addValue("preparerName",    preparerName == null ? "" : preparerName)
-            .addValue("preparerId",      req.preparerId());
+            .addValue("preparerId",      req.preparerId())
+            .addValue("payerCustomerId", req.payerCustomerId());
 
         var keys = new GeneratedKeyHolder();
         jdbc.update("""
@@ -291,10 +292,8 @@ public class DepositNoticeRepository {
                             WHERE p.ticket_id = :ticketId
                               AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)),
                           (SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :preparerId),
-                 -- ผู้ชำระเงิน (feedback #74): a new version keeps the latest earlier notice's payer
-                 (SELECT p.payer_customer_id FROM sales.deposit_notice p
-                   WHERE p.ticket_id = :ticketId
-                     AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)))
+                 -- ออกในนาม (feedback #74): decided by DepositNoticeService#createDraftInternal with the header
+                 :payerCustomerId)
             """.replace("{NAME}", PREPARER_NAME_SQL), params, keys, new String[]{"deposit_notice_id"});
 
         long docId = keys.getKey().longValue();

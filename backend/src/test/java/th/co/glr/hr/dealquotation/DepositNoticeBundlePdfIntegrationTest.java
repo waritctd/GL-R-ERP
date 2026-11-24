@@ -341,6 +341,12 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         assertThat(paid.reference()).isEqualTo(deal.quotation().number());
         assertThat(jdbc.queryForObject("SELECT customer_name FROM sales.deposit_notice WHERE deposit_notice_id = :id",
             java.util.Map.of("id", n.id()), String.class)).isEqualTo("ผู้ชำระ ทดสอบ");
+        // a new version for the same quotation keeps the name, in the stored header too (receipt import reads it)
+        DepositNoticeDto next = depositNoticeService.createDraft(deal.ticketId(),
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
+        assertThat(next.payerCustomerId()).isEqualTo(payer);
+        assertThat(jdbc.queryForObject("SELECT customer_name FROM sales.deposit_notice WHERE deposit_notice_id = :id",
+            java.util.Map.of("id", next.id()), String.class)).isEqualTo("ผู้ชำระ ทดสอบ");
         assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(), new DepositNoticeDraftRequest(null, null,
             null, null, null, null, null, null, null, null, -1L), salesActor), ApiException.class).getStatus())
             .isEqualTo(HttpStatus.BAD_REQUEST);
