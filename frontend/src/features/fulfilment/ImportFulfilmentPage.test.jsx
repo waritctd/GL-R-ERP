@@ -88,16 +88,47 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     expect(await screen.findAllByText('IR-TEST-009')).not.toHaveLength(0);
     fireEvent.click(screen.getByTestId('waiting-toggle'));
     expect(screen.queryByText('IR-TEST-009')).toBeNull();
-    expect(screen.getAllByText('Test Stone Co. · รอบ ทดสอบ').length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'โครงการ ทดสอบ', exact: true }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('link', { name: 'รายละเอียด' })[0].getAttribute('href')).toBe('/fulfilment/rounds/7');
     expect(screen.getByTestId('plan-round')).toBeTruthy(); // the filled จัดรอบขนส่ง button of the waiting section
   });
 
   it('searches the numbers on a round\'s documents', async () => {
     renderAt('/fulfilment');
-    await screen.findAllByText('Test Stone Co. · รอบ ทดสอบ');
+    await screen.findAllByRole('link', { name: 'โครงการ ทดสอบ', exact: true });
     fireEvent.change(screen.getByTestId('fulfilment-search'), { target: { value: 'INV-TEST-B' } });
-    expect(screen.getAllByText('Test Stone Co. · รอบ ทดสอบ').length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'โครงการ ทดสอบ', exact: true }).length).toBeGreaterThan(0);
+  });
+
+  it('orders by Thailand ETA either way across steps, keeps missing dates last, and searches the workbook project or original reference', async () => {
+    const unlinked = lot({ ticketId: null, projectName: null, orderPurpose: 'PROJECT', purposeNote: 'Mar-27' });
+    const lots = [unlinked, { ...unlinked, lotId: 2 }, lot({ lotId: 3, projectName: 'อีกโครงการ' })];
+    vi.mocked(api.shipmentRounds.list).mockResolvedValue({ waiting: [], rounds: [
+      round({ id: 3, facts: { label: 'ยังไม่กำหนด' }, lots: [] }),
+      round({ id: 2, importStep: 'ORDERED', facts: { etaOn: '2027-01-04' } }),
+      round({ id: 1, importStep: 'RECEIVED', facts: { label: 'REF-DEMO', etaOn: '2026-12-28' }, lots }),
+    ] });
+    renderAt('/fulfilment');
+    const queue = within(await screen.findByTestId('rounds-section'));
+    expect(queue.getByRole('columnheader', { name: 'โครงการ', exact: true })).toBeTruthy();
+    expect(queue.getByRole('columnheader', { name: 'โรงงาน', exact: true })).toBeTruthy();
+    const titles = () => queue.getAllByRole('row').slice(1).map((row) =>
+      within(within(row).getAllByRole('cell')[0]).getByRole('link'));
+    await waitFor(() => expect(titles().map((link) => link.getAttribute('href'))).toEqual([
+      '/fulfilment/rounds/1', '/fulfilment/rounds/2', '/fulfilment/rounds/3',
+    ]));
+    fireEvent.click(screen.getByTestId('eta-sort'));
+    expect(titles().map((link) => link.getAttribute('href'))).toEqual([
+      '/fulfilment/rounds/2', '/fulfilment/rounds/1', '/fulfilment/rounds/3',
+    ]);
+    fireEvent.click(screen.getByTestId('eta-sort'));
+    expect(titles()[0].textContent).toBe('Mar-27 / อีกโครงการ');
+    expect(titles()[2].textContent).toBe('ไม่ระบุโครงการ');
+    expect(queue.getAllByRole('cell', { name: 'Test Stone Co.', exact: true })).toHaveLength(3);
+    for (const term of ['mar-27', 'REF-DEMO']) {
+      fireEvent.change(screen.getByTestId('fulfilment-search'), { target: { value: term } });
+      expect(titles().map((link) => link.getAttribute('href'))).toEqual(['/fulfilment/rounds/1']);
+    }
   });
 
   it('shows a retry, not the empty state, when the legacy deals fail to load', async () => {
@@ -239,7 +270,7 @@ describe('การขนส่ง queue (shipment rounds)', () => {
 
   it('a read-only viewer sees the queue without the advance button', async () => {
     renderAt('/fulfilment', { id: 9, name: 'ผู้จัดการขาย', role: 'sales_manager' });
-    expect((await screen.findAllByText('Test Stone Co. · รอบ ทดสอบ')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByRole('link', { name: 'โครงการ ทดสอบ', exact: true })).length).toBeGreaterThan(0);
     expect(screen.queryByTestId('round-advance-7')).toBeNull();
     expect(screen.queryByTestId('plan-round')).toBeNull();
   });

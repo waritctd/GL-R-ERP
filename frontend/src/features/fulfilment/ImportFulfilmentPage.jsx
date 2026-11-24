@@ -19,13 +19,13 @@ import { DownloadIrButton } from './DownloadIrButton.jsx';
 import { ImportJobSheet } from './ImportJobSheet.jsx';
 import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import {
-  formatQty, irRows, lotProduct, lotWho, lotWhoSub, ORIGIN_LABELS, roundDatesLine, roundIrSummary, roundSubline, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
+  compareRoundEta, formatQty, irRows, lotProjectName, lotProduct, lotWho, lotWhoSub, ORIGIN_LABELS, roundIrSummary, roundProjectNames, roundReference, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
 } from './shipmentRounds.js';
 import { useRoundUndo } from './useRoundUndo.jsx';
 
-// Whole literals (Tailwind JIT), one track per column: the waiting table and the rounds table have 6 each.
+// Whole literals (Tailwind JIT), one track per column: the waiting table has 6, the rounds table 7.
 const WAITING_GRID = 'grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,1.6fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,1fr)]';
-const ROUNDS_GRID = 'grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.6fr)_minmax(0,0.9fr)_minmax(11rem,0.8fr)]';
+const ROUNDS_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_minmax(11rem,0.8fr)]';
 
 /** An IR number that opens its page: the deal's for a sales job, the งานนำเข้า page otherwise. */
 function IrLink({ row }) {
@@ -69,6 +69,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
   const [step, setStep] = useState('ALL');
   const [waitingPicked, setWaitingPicked] = useState(false);
   const [search, setSearch] = useState('');
+  const [etaDescending, setEtaDescending] = useState(false);
   const [advancing, setAdvancing] = useState(null);
   const [planning, setPlanning] = useState(false);
   const [creatingJob, setCreatingJob] = useState(false);
@@ -110,13 +111,14 @@ export function ImportFulfilmentPage({ user, showToast }) {
         || (a.customerName ?? a.code ?? '').localeCompare(b.customerName ?? b.code ?? '', 'th'));
   }, [ticketsQuery.data, rounds, waiting, term]);
   const visibleWaiting = useMemo(() => (chip === 'ALL' || chip === 'WAITING' ? waiting : [])
-    .filter((w) => !term || [w.factoryName, w.docNumber, w.ticketCode, w.customerName, w.projectName, w.purposeNote, w.requesterName]
+    .filter((w) => !term || [w.factoryName, w.docNumber, w.ticketCode, w.customerName, lotProjectName(w), w.purposeNote, w.requesterName]
       .some((f) => (f ?? '').toLowerCase().includes(term))), [waiting, chip, term]);
   const visibleRounds = useMemo(() => rounds
     .filter((r) => chip === 'ALL' || chip === r.importStep)
-    .filter((r) => !term || [roundTitle(r), r.facts?.vessel, r.facts?.proformaNo, r.facts?.invoiceNo, ...(r.documents ?? []).map((d) => d.docNo),
+    .filter((r) => !term || [roundTitle(r), r.facts?.label, r.facts?.vessel, r.facts?.proformaNo, r.facts?.invoiceNo, ...(r.documents ?? []).map((d) => d.docNo),
       ...r.lots.flatMap((l) => [l.docNumber, l.ticketCode, l.customerName, l.projectName, l.purposeNote, l.requesterName])]
-      .some((f) => (f ?? '').toLowerCase().includes(term))), [rounds, chip, term]);
+      .some((f) => (f ?? '').toLowerCase().includes(term)))
+    .sort((a, b) => compareRoundEta(a, b, etaDescending)), [rounds, chip, term, etaDescending]);
 
   const waitingColumns = [
     { key: 'factory', header: 'โรงงาน', render: (w) => <b>{w.factoryName}</b> },
@@ -159,29 +161,33 @@ export function ImportFulfilmentPage({ user, showToast }) {
   ) : null);
   const roundColumns = [
     {
-      key: 'round',
-      header: 'รอบ',
-      render: (r) => {
-        const title = roundTitle(r);
-        const sub = roundSubline(r);
-        return (
-          <span className="flex flex-col gap-0.5">
-            <Link to={`/fulfilment/rounds/${r.id}`} className="text-sm font-bold text-text no-underline hover:underline">{title}</Link>
-            {sub && !title.includes(sub) && !roundDatesLine(r).includes(sub) ? <span className="text-2xs text-text-muted">{sub}</span> : null}
-          </span>
-        );
-      },
+      key: 'project',
+      header: 'โครงการ',
+      render: (r) => (
+        <span className="flex flex-col gap-0.5">
+          <Link to={`/fulfilment/rounds/${r.id}`} className="break-words text-sm font-bold text-text no-underline hover:underline">
+            {roundProjectNames(r) || 'ไม่ระบุโครงการ'}
+          </Link>
+          {roundReference(r) && <span className="break-words text-2xs text-text-muted">{roundReference(r)}</span>}
+        </span>
+      ),
     },
+    { key: 'factory', header: 'โรงงาน', render: (r) => <span className="break-words">{r.factoryName || '—'}</span> },
     { key: 'step', header: 'ขั้นตอน', render: (r) => <StatusBadge tone={stepTone(r.importStep)}>{stepPillText(r.importStep)}</StatusBadge> },
     {
       key: 'shipping',
-      header: 'การขนส่ง · กำหนดถึง',
-      render: (r) => (r.facts?.vessel || roundDatesLine(r) ? (
-        <span className="flex flex-col gap-0.5">
-          {r.facts?.vessel ? <span className="text-sm font-semibold">{r.facts.vessel}</span> : null}
-          <span className="text-2xs text-text-muted">{roundDatesLine(r)}</span>
-        </span>
-      ) : <span className="text-xs text-text-muted">ยังไม่มีข้อมูลการขนส่ง</span>),
+      header: 'คาดว่าถึงไทย',
+      render: (r) => {
+        const shipping = roundSummaryLine(r);
+        return (
+          <span className="flex flex-col gap-0.5">
+            <span className={r.facts?.etaOn ? 'text-sm font-semibold' : 'text-xs text-text-muted'}>
+              {r.facts?.etaOn ? formatThaiDate(r.facts.etaOn) : 'ยังไม่ระบุ'}
+            </span>
+            {shipping && <span className="text-2xs text-text-muted">{shipping}</span>}
+          </span>
+        );
+      },
     },
     { key: 'irNos', header: 'เลขที่ IR', render: (r) => <IrChips rows={irRows(r)} limit={3} /> },
     {
@@ -234,9 +240,15 @@ export function ImportFulfilmentPage({ user, showToast }) {
     return (
       <div className="flex flex-col gap-2.5" data-testid="round-card" data-round-id={r.id}>
         <div className="flex items-center justify-between gap-2">
-          <Link to={`/fulfilment/rounds/${r.id}`} className="flex min-h-11 min-w-0 items-center text-base font-bold text-text no-underline">{roundTitle(r)}</Link>
+          <div className="min-w-0">
+            <Link to={`/fulfilment/rounds/${r.id}`} className="inline-flex min-h-11 items-center break-words text-base font-bold text-text no-underline">
+              {roundProjectNames(r) || 'ไม่ระบุโครงการ'}
+            </Link>
+            <p className="m-0 break-words text-xs text-text-muted">{['โรงงาน · ' + (r.factoryName || '—'), roundReference(r)].filter(Boolean).join(' · ')}</p>
+          </div>
           <span className="shrink-0"><StatusBadge tone={stepTone(r.importStep)}>{stepPillText(r.importStep)}</StatusBadge></span>
         </div>
+        <p className="m-0 text-sm font-semibold">คาดว่าถึงไทย · {r.facts?.etaOn ? formatThaiDate(r.facts.etaOn) : 'ยังไม่ระบุ'}</p>
         {roundSummaryLine(r) ? <p className="m-0 text-sm text-text-muted">{roundSummaryLine(r)}</p> : null}
         <IrChips rows={irRows(r)} limit={2} />
         <div className="flex items-baseline justify-between gap-3 text-sm">
@@ -343,7 +355,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
 
       <label className="flex justify-end">
         <span className="sr-only">ค้นหารอบขนส่ง</span>
-        <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นหาโรงงาน / ใบขอซื้อ / ลูกค้า / เรือ"
+        <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นหาโครงการ / โรงงาน / IR / ลูกค้า / เรือ"
           className="min-h-11 w-80 rounded-md border border-border-input bg-surface px-3 text-sm mobile:w-full mobile:text-base" data-testid="fulfilment-search" />
       </label>
 
@@ -385,10 +397,15 @@ export function ImportFulfilmentPage({ user, showToast }) {
           ) : null}
           {chip !== 'WAITING' && (visibleRounds.length > 0 || listQuery.isLoading) ? (
             <section className="flex flex-col gap-2" data-testid="rounds-section">
-              <h2 className="m-0 flex items-baseline gap-2 text-base font-bold">
-                รอบขนส่ง
-                <span className="text-2xs font-normal text-text-muted">{visibleRounds.length} รอบ</span>
-              </h2>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="m-0 flex items-baseline gap-2 text-base font-bold">
+                  รอบขนส่ง
+                  <span className="text-2xs font-normal text-text-muted">{visibleRounds.length} รอบ</span>
+                </h2>
+                <Button variant="secondary" size="sm" className="mobile:min-h-11" onClick={() => setEtaDescending((d) => !d)} data-testid="eta-sort">
+                  คาดว่าถึงไทย · {etaDescending ? 'ช้าสุดก่อน ↓' : 'เร็วสุดก่อน ↑'}
+                </Button>
+              </div>
               <DataTable
                 columns={roundColumns}
                 rows={visibleRounds}
