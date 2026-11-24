@@ -846,9 +846,15 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                           <span className="text-2xs text-text-muted">{c.taxId} · {c.address}</span>
                         </button>
                       ))}
+                      {customerFromQuotation && pickingPayer ? (
+                        <button type="button" onClick={() => { setNewPayer(customerSearch.trim()); setCsSearch(''); }}
+                          className="w-full cursor-pointer border-0 bg-transparent px-3 py-2 text-left text-sm font-bold text-primary">
+                          {`+ เพิ่มชื่อใหม่ "${customerSearch.trim()}"`}
+                        </button>
+                      ) : null}
                     </div>
                   )}
-                  {customerFromQuotation && pickingPayer && newPayer == null ? (
+                  {customerFromQuotation && pickingPayer && newPayer == null && !(customerSearch && customers.length > 0) ? (
                     <Button variant="text" className="mt-2" data-testid="new-payer"
                       onClick={() => { setNewPayer(customerSearch.trim()); setCsSearch(''); }}>
                       + เพิ่มชื่อใหม่{customerSearch.trim() ? ` "${customerSearch.trim()}"` : ''}
