@@ -27,7 +27,8 @@ public class RemainingInvoiceRepository {
 
     /** The customer header is the QUOTATION's party customer whenever the reference names a new-engine quotation of this
      * deal that has a party (a deal can hold several BUYER parties, and the stored snapshot may name the headline one);
-     * the stored columns are used only when no such quotation resolves (legacy reference, no party). */
+     * the stored columns are used only when no such quotation resolves (legacy reference, no party). An ออกในนาม name
+     * ({@code payer_customer_id}, feedback #74) wins over the quotation's customer. */
     private static final String SELECT_RI = """
         SELECT r.id, r.ticket_id, r.customer_quotation_id, r.deposit_notice_id, r.base_number, r.version,
                r.doc_number, r.status, r.superseded_by_id,
@@ -39,17 +40,19 @@ public class RemainingInvoiceRepository {
                r.project_name,
                r.items_total, r.deposit_deduction, r.net_amount, r.vat_amount, r.grand_total,
                r.created_by_id, r.created_by_name, r.preparer_id, r.preparer_name, r.created_at, r.updated_at,
-               r.issued_by_id, r.issued_by_name, r.issued_at
+               r.issued_by_id, r.issued_by_name, r.issued_at, r.payer_customer_id
           FROM sales.remaining_invoice r
           LEFT JOIN LATERAL (
               SELECT c.name, c.tax_id, c.address, c.branch
-                FROM sales.quotation q
-                JOIN sales.deal_party dp ON dp.party_id = q.party_id
-                JOIN customers.customer c ON c.customer_id = dp.customer_id
-               WHERE q.ticket_id = r.ticket_id AND q.origin IS NOT NULL
-                 AND (q.quotation_id = r.customer_quotation_id
-                      OR (r.customer_quotation_id IS NULL AND q.number = r.reference))
-               ORDER BY q.quotation_id DESC LIMIT 1) qc ON TRUE
+                FROM customers.customer c
+               WHERE c.customer_id = COALESCE(r.payer_customer_id, (
+                     SELECT dp.customer_id
+                       FROM sales.quotation q
+                       JOIN sales.deal_party dp ON dp.party_id = q.party_id
+                      WHERE q.ticket_id = r.ticket_id AND q.origin IS NOT NULL
+                        AND (q.quotation_id = r.customer_quotation_id
+                             OR (r.customer_quotation_id IS NULL AND q.number = r.reference))
+                      ORDER BY q.quotation_id DESC LIMIT 1))) qc ON TRUE
         """;
 
     public List<RemainingInvoiceDocumentDto> findByTicket(long ticketId) {
@@ -96,7 +99,7 @@ public class RemainingInvoiceRepository {
             r.customerName(), r.customerTaxId(), r.customerBranch(), r.customerAddress(), r.projectName(),
             r.itemsTotal(), r.depositDeduction(), r.netAmount(), r.vatAmount(), r.grandTotal(),
             r.createdById(), r.createdByName(), r.preparerId(), r.preparerName(), r.createdAt(), r.updatedAt(),
-            r.issuedById(), r.issuedByName(), r.issuedAt(), items);
+            r.issuedById(), r.issuedByName(), r.issuedAt(), r.payerCustomerId(), items);
     }
 
     @SuppressWarnings("unchecked")
@@ -119,7 +122,7 @@ public class RemainingInvoiceRepository {
             (Long) rs.getObject("preparer_id"), rs.getString("preparer_name"),
             offsetDateTime(rs, "created_at"), offsetDateTime(rs, "updated_at"),
             (Long) rs.getObject("issued_by_id"), rs.getString("issued_by_name"), offsetDateTime(rs, "issued_at"),
-            List.of());
+            (Long) rs.getObject("payer_customer_id"), List.of());
     }
 
     private static LocalDate localDate(java.sql.ResultSet rs, String col) throws java.sql.SQLException {
@@ -138,7 +141,7 @@ public class RemainingInvoiceRepository {
             String reference, String depositReference, LocalDate docDate, List<String> notes,
             String customerName, String customerTaxId, String customerBranch, String customerAddress,
             String projectName, BigDecimal itemsTotal, BigDecimal depositDeduction, BigDecimal netAmount,
-            BigDecimal vatAmount, BigDecimal grandTotal, long actorId, String actorName) {
+            BigDecimal vatAmount, BigDecimal grandTotal, Long payerCustomerId, long actorId, String actorName) {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.remaining_invoice
@@ -146,12 +149,12 @@ public class RemainingInvoiceRepository {
                  reference, deposit_reference, doc_date, notes,
                  customer_name, customer_tax_id, customer_branch, customer_address, project_name,
                  items_total, deposit_deduction, net_amount, vat_amount, grand_total,
-                 created_by_id, created_by_name, preparer_id, preparer_name)
+                 created_by_id, created_by_name, payer_customer_id, preparer_id, preparer_name)
             VALUES (:ticketId, :quotationId, :depositNoticeId, 'DRAFT',
                     :reference, :depositReference, :docDate, :notes,
                     :customerName, :customerTaxId, :customerBranch, :customerAddress, :projectName,
                     :itemsTotal, :depositDeduction, :netAmount, :vatAmount, :grandTotal,
-                    :actorId, :actorName,
+                    :actorId, :actorName, :payerCustomerId,
                     -- ผู้จัดทำ defaults to the deal's owner (the actor only when the ticket has none)
                     COALESCE((SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :actorId),
                     COALESCE((SELECT {NAME}
@@ -169,7 +172,8 @@ public class RemainingInvoiceRepository {
                 .addValue("projectName", projectName)
                 .addValue("itemsTotal", itemsTotal).addValue("depositDeduction", depositDeduction)
                 .addValue("netAmount", netAmount).addValue("vatAmount", vatAmount).addValue("grandTotal", grandTotal)
-                .addValue("actorId", actorId).addValue("actorName", actorName),
+                .addValue("actorId", actorId).addValue("actorName", actorName)
+                .addValue("payerCustomerId", payerCustomerId),
             keys, new String[] {"id"});
         return keys.getKey().longValue();
     }
@@ -207,11 +211,11 @@ public class RemainingInvoiceRepository {
     /** UNCONDITIONAL set of the dialog fields on a DRAFT or an ISSUED row (an issued one is edited in place) — the
      * WHERE clause refuses SUPERSEDED, not the caller. */
     public int updateDraftFields(long id, String reference, String depositReference,
-            LocalDate docDate, List<String> notes, Long preparerId, String expectedStatus) {
+            LocalDate docDate, List<String> notes, Long preparerId, Long payerCustomerId, String expectedStatus) {
         return jdbc.update("""
             UPDATE sales.remaining_invoice
                SET reference = :reference, deposit_reference = :depositReference, doc_date = :docDate,
-                   notes = :notes,
+                   notes = :notes, payer_customer_id = :payerCustomerId,
                    -- a null preparerId keeps the stored preparer
                    preparer_id = COALESCE(CAST(:preparerId AS bigint), preparer_id),
                    preparer_name = CASE WHEN CAST(:preparerId AS bigint) IS NULL THEN preparer_name ELSE
@@ -223,6 +227,7 @@ public class RemainingInvoiceRepository {
                 .addValue("id", id).addValue("expectedStatus", expectedStatus)
                 .addValue("reference", reference).addValue("depositReference", depositReference)
                 .addValue("docDate", docDate).addValue("preparerId", preparerId)
+                .addValue("payerCustomerId", payerCustomerId)
                 .addValue("notes", notes == null ? new String[0] : notes.toArray(new String[0])));
     }
 

@@ -6,6 +6,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DialogSummary } from '../../components/common/DocumentDialogParts.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
+import { IssueInNamePicker } from '../deposits/IssueInNamePicker.jsx';
 import { DocumentPreparerSelect } from '../deposits/DocumentPreparerSelect.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
@@ -420,6 +421,8 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
   const [docDate, setDocDate] = useState(draft.docDate ?? '');
   const [notes, setNotes] = useState(draft.notes ?? []);
   const [preparerId, setPreparerId] = useState(draft.preparerId ?? null);
+  // ออกในนาม (feedback #74): the customer-list name the invoice is issued to; null = the quotation's customer
+  const [payer, setPayer] = useState(() => ({ id: draft.payerCustomerId ?? null, name: draft.customerName }));
   const [saving, setSaving] = useState(false);
   const [issuing, setIssuing] = useState(false);
   // Issuing mints the legal document number and cannot be undone, so it asks first.
@@ -436,6 +439,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
     setDepositReference(draft.depositReference ?? '');
     setDocDate(draft.docDate ?? '');
     setPreparerId(draft.preparerId ?? null);
+    setPayer({ id: draft.payerCustomerId ?? null, name: draft.customerName });
     setNotes(draft.notes ?? []);
   }, [draft]);
 
@@ -447,7 +451,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
     setError(null);
     setSaving(true);
     try {
-      await api.storedRemainingInvoices.update(draft.id, { reference, depositReference, docDate, notes, preparerId });
+      await api.storedRemainingInvoices.update(draft.id, { reference, depositReference, docDate, notes, preparerId, payerCustomerId: payer.id });
       await onSaved?.();
     } catch (err) {
       setError(err.message || 'บันทึกไม่สำเร็จ');
@@ -465,7 +469,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
     setError(null);
     setIssuing(true);
     try {
-      await api.storedRemainingInvoices.update(draft.id, { reference, depositReference, docDate, notes, preparerId });
+      await api.storedRemainingInvoices.update(draft.id, { reference, depositReference, docDate, notes, preparerId, payerCustomerId: payer.id });
       await api.storedRemainingInvoices.issue(draft.id);
       await onIssued?.();
     } catch (err) {
@@ -508,6 +512,14 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
       {/* The draft's own stored figures, as the preview box below already shows them; the issue confirm still
           re-reads the server's fresh preview before anything is issued. */}
       <RemainingSummaryLine net={draft.netAmount} itemsTotal={draft.itemsTotal} deposit={draft.depositDeduction} />
+      <Section title="ลูกค้า">
+        <p className="m-0 text-sm font-bold text-text" data-testid="remaining-invoice-customer">{payer.name || '-'}</p>
+        <IssueInNamePicker idPrefix="remaining-invoice" quotationNumber={draft.reference} payerId={payer.id}
+          payerName={payer.name} savedPayerId={draft.payerCustomerId} showToast={showToast}
+          onPick={(c) => setPayer({ id: c.id, name: c.name })}
+          onClear={() => setPayer({ id: null, name: draft.payerCustomerId == null ? draft.customerName : null })} />
+      </Section>
+
       <Section title="ข้อมูลเอกสาร">
         <div className={FIELD_GRID}>
           <FormField label="อ้างอิงใบเสนอราคา / ใบสั่งซื้อ (H9)" htmlFor="remaining-invoice-reference">

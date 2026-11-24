@@ -437,6 +437,20 @@ let sessionUser = null;
 const passwordResetTokens = new Map();
 
 // ── Mock in-memory document store ─────────────────────────────────────────────
+// ออกในนาม (feedback #74), as DepositNoticeService#effectivePayer: 400 for an unknown id; the deal's own customer is
+// no payer. Returns the customer whose data the document shows (the named one, else the deal's) and the id to store.
+function mockIssueInName(payerCustomerId, ticket) {
+  const payer = payerCustomerId == null ? null : mockCustomers.find((c) => c.id === Number(payerCustomerId));
+  if (payerCustomerId != null && !payer) fail('ไม่พบลูกค้าที่ออกในนาม', 400);
+  const own = mockCustomers.find((c) => c.id === ticket?.customerId) ?? null;
+  const named = payer && payer.id !== own?.id ? payer : null;
+  return { payerCustomerId: named ? named.id : null, shown: named ?? own };
+}
+
+function mockShowCustomer(row, customer) {
+  if (customer) Object.assign(row, { customerName: customer.name, customerTaxId: customer.taxId ?? null, customerAddress: customer.address ?? null });
+}
+
 // CustomerPrintRule#branch: a branch prints only with a company's tax id, never a person's (13 digits starting 1-8).
 function mockPrintsBranch(taxId) {
   const id = String(taxId ?? '').replace(/[\s-]/g, '');
@@ -2728,7 +2742,7 @@ function mockBillingNoteCandidateRows(customerId) {
   for (const ri of mockRemainingInvoices) {
     if (ri.status !== 'ISSUED') continue;
     const ticket = findTicketRaw(ri.ticketId);
-    if (ticket.customerId !== Number(customerId)) continue;
+    if ((ri.payerCustomerId ?? ticket.customerId) !== Number(customerId)) continue; // ออกในนาม (feedback #74)
     // REMAINING_INVOICE_OUTSTANDING_EXPR: ticket-scoped, kind IN ('BALANCE','ADJUSTMENT') only.
     const paid = mockBillingNoteSignedReceiptSum(db.paymentReceipts
       .filter((r) => r.ticketId === ri.ticketId && (r.kind === 'BALANCE' || r.kind === 'ADJUSTMENT')));
@@ -2741,7 +2755,7 @@ function mockBillingNoteCandidateRows(customerId) {
   for (const dn of mockDepositNotices) {
     if (dn.status !== 'ISSUED') continue;
     const ticket = findTicketRaw(dn.ticketId);
-    if (ticket.customerId !== Number(customerId)) continue;
+    if ((dn.payerCustomerId ?? ticket.customerId) !== Number(customerId)) continue; // ออกในนาม (feedback #74)
     // DEPOSIT_NOTICE_OUTSTANDING_EXPR: EVERY receipt linked by deposit_notice_id, no kind filter at all (unlike
     // the remaining-invoice half above) — a DEPOSIT-kind receipt from confirmDepositPaid counts here just as a
     // BALANCE one would.
@@ -18111,9 +18125,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (payload.expectedUpdatedAt != null && payload.expectedUpdatedAt !== doc.updatedAt) {
         fail('ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง', 409);
       }
-      const payer = payload.payerCustomerId == null ? null
-        : mockCustomers.find((c) => c.id === Number(payload.payerCustomerId));
-      if (payload.payerCustomerId != null && !payer) fail('ไม่พบลูกค้าที่ออกในนาม', 400);
+      const inName = mockIssueInName(payload.payerCustomerId, findTicketRaw(doc.ticketId));
       applyMockPreparer(doc, findTicketRaw(doc.ticketId), payload.preparerId);
       Object.assign(doc, {
         customerName:    payload.customerName    ?? doc.customerName,
@@ -18127,18 +18139,12 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         // Strictly later than the stored stamp, so two saves in one millisecond still differ.
         updatedAt:       new Date(Math.max(Date.now(), (Date.parse(doc.updatedAt) || 0) + 1)).toISOString(),
       });
-      // ผู้ชำระเงิน (feedback #74): a master customer replaces the quotation's; the header is that customer's.
-      // back to the quotation's customer (the mock's stand-in: the deal's own customer)
-      const own = !payer && doc.payerCustomerId != null
-        ? mockCustomers.find((c) => c.id === findTicketRaw(doc.ticketId)?.customerId) : null;
-      if (own) Object.assign(doc, { customerName: own.name, customerTaxId: own.taxId ?? null, customerAddress: own.address ?? null });
-      doc.payerCustomerId = payer ? payer.id : null;
-      if (payer) {
-        Object.assign(doc, {
-          customerName: payer.name, customerTaxId: payer.taxId ?? null, customerAddress: payer.address ?? null,
-          customerFromQuotation: true,
-        });
+      // ออกในนาม (feedback #74): a list customer replaces the quotation's; clearing goes back to it
+      if (inName.payerCustomerId != null || doc.payerCustomerId != null) {
+        mockShowCustomer(doc, inName.shown);
+        doc.customerFromQuotation = true;
       }
+      doc.payerCustomerId = inName.payerCustomerId;
       const updated = buildMockDoc(doc);
       Object.assign(doc, updated);
       return delay({ depositNotice: structuredClone(doc) });
@@ -18345,7 +18351,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         docDate: payload.docDate ?? now.slice(0, 10),
         notes,
         customerName: ticket.customerName ?? null, customerTaxId: null, customerBranch: null,
-        customerAddress: null, projectName: ticket.projectName ?? null,
+        customerAddress: null, projectName: ticket.projectName ?? null, payerCustomerId: null,
         itemsTotal: snap.itemsTotal, depositDeduction: snap.depositDeduction, netAmount: snap.netAmount,
         vatAmount: snap.vatAmount, grandTotal: snap.grandTotal,
         createdById: user.id, createdByName: user.name,
@@ -18381,6 +18387,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const ticket = findTicketRaw(row.ticketId);
       requireRemainingInvoiceWriteGate(ticket);
       if (row.status !== 'DRAFT') fail('ใบแจ้งหนี้ส่วนที่เหลือนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
+      const inName = mockIssueInName(payload.payerCustomerId, ticket);
+      if (inName.payerCustomerId != null || row.payerCustomerId != null) mockShowCustomer(row, inName.shown);
+      row.payerCustomerId = inName.payerCustomerId;
       const snap = mockRemainingInvoiceSnapshot(ticket);
       row.items = snap.items.map((it, i) => ({ id: `${row.id}-${i + 1}`, remainingInvoiceId: row.id, ...it }));
       row.itemsTotal = snap.itemsTotal; row.depositDeduction = snap.depositDeduction;

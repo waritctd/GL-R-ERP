@@ -329,6 +329,7 @@ public class BillingNoteRepository {
      *
      * <p>A document belongs to the customer of its QUOTATION's party (a deal with several buyers bills each buyer's
      * documents to that buyer), falling back to the ticket's bill-to for a legacy document with no new-engine quotation.
+     * A document issued in another customer-list name (ออกในนาม, feedback #74) belongs to that customer instead.
      *
      * <p>{@code due_date} is read from {@code sales.ticket.due_date} (V53's own billing fields) —
      * neither source document type carries its own due date, so the deal's billing due date is the
@@ -342,7 +343,7 @@ public class BillingNoteRepository {
           JOIN sales.ticket t ON t.ticket_id = ri.ticket_id
           LEFT JOIN sales.quotation rq ON rq.quotation_id = ri.customer_quotation_id
           LEFT JOIN sales.deal_party rp ON rp.party_id = rq.party_id
-         WHERE COALESCE(rp.customer_id, t.customer_id) = :customerId AND ri.status = 'ISSUED'
+         WHERE COALESCE(ri.payer_customer_id, rp.customer_id, t.customer_id) = :customerId AND ri.status = 'ISSUED'
         UNION ALL
         SELECT 'DEPOSIT_NOTICE', dn.deposit_notice_id, dn.ticket_id,
                dn.doc_number, dn.issue_date, t.due_date,
@@ -353,7 +354,7 @@ public class BillingNoteRepository {
                               WHERE q.ticket_id = dn.ticket_id AND q.number = dn.reference AND q.origin IS NOT NULL
                               ORDER BY q.quotation_id DESC LIMIT 1) dq ON TRUE
           LEFT JOIN sales.deal_party dp ON dp.party_id = dq.party_id
-         WHERE COALESCE(dp.customer_id, t.customer_id) = :customerId AND dn.status = 'ISSUED'
+         WHERE COALESCE(dn.payer_customer_id, dp.customer_id, t.customer_id) = :customerId AND dn.status = 'ISSUED'
         ORDER BY doc_date NULLS LAST, doc_number
         """;
 

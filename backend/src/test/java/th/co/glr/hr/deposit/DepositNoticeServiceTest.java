@@ -136,7 +136,7 @@ class DepositNoticeServiceTest {
         // RemainingInvoiceService itself freezes off of, so this pins resolveRemainingInvoice's
         // own item-sourcing logic.
         DepositNoticeService.RemainingInvoiceSnapshot snap =
-            service.resolveRemainingInvoiceSnapshot(10L, null, owner);
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner, null);
         DepositNoticeService.ResolvedRemainingInvoice resolved = snap.resolved();
         assertThat(resolved.items()).hasSize(1);
         assertThat(resolved.items().get(0).amount()).isEqualByComparingTo("299.99");

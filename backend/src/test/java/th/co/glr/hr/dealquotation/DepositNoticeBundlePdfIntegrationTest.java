@@ -28,6 +28,7 @@ import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.RemainingInvoiceDocumentDto;
+import th.co.glr.hr.deposit.RemainingInvoiceDraftRequest;
 import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.deposit.RemainingInvoiceRepository;
 import th.co.glr.hr.deposit.RemainingInvoiceService;
@@ -283,6 +284,24 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
 
         assertThat(invoice.customerName()).isEqualTo(buyer.name());
         assertThat(invoice.customerTaxId()).isEqualTo(buyer.taxId());
+
+        // ออกในนาม (feedback #74), as the deposit notice: a customer-list name replaces the quotation's customer in the
+        // stored header too (receipt import reads it), the quotation's own customer is no payer, and an issued invoice's
+        // revision keeps it
+        long payer = jdbc.queryForObject("INSERT INTO customers.customer (name, tax_id, address) VALUES "
+            + "('ในนาม ทดสอบ', '0100000000075', '75 ถนนทดสอบ') RETURNING customer_id", java.util.Map.of(), Long.class);
+        assertThat(remainingInvoiceService.updateDraft(invoice.id(), new RemainingInvoiceDraftRequest(null, null, null,
+            null, null, null, buyer.id()), salesActor).payerCustomerId()).isNull();
+        RemainingInvoiceDocumentDto named = remainingInvoiceService.updateDraft(invoice.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, null, payer), salesActor);
+        assertThat(named.payerCustomerId()).isEqualTo(payer);
+        assertThat(named.customerName()).isEqualTo("ในนาม ทดสอบ");
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(invoice.id(), salesActor);
+        assertThat(jdbc.queryForObject("SELECT customer_name FROM sales.remaining_invoice WHERE id = :id",
+            java.util.Map.of("id", issued.id()), String.class)).isEqualTo("ในนาม ทดสอบ");
+        RemainingInvoiceDocumentDto revision = remainingInvoiceService.revise(issued.id(), salesActor);
+        assertThat(revision.payerCustomerId()).isEqualTo(payer);
+        assertThat(revision.customerName()).isEqualTo("ในนาม ทดสอบ");
     }
 
     /** The read joins on the invoice's own customer_quotation_id; its free-text reference (which users edit) is only the

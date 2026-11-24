@@ -288,6 +288,15 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         // Both deals' deposit notices show up (dealA's own + dealB's own) — 2 DEPOSIT_NOTICE rows.
         assertThat(dnCandidates).hasSize(2);
         assertThat(result.alreadyBilled()).isEmpty();
+
+        // ออกในนาม (feedback #74): an invoice issued in another customer-list name bills under that customer instead
+        CustomerDto named = createCustomer("Cand1Named");
+        remainingInvoiceService.updateDraft(ri.id(), new th.co.glr.hr.deposit.RemainingInvoiceDraftRequest(
+            null, null, null, null, null, null, named.id()), salesActor);
+        assertThat(billingNoteService.candidates(named.id(), accountActor).candidates())
+            .extracting(BillingNoteCandidateDto::sourceId).containsExactly(ri.id());
+        assertThat(billingNoteService.candidates(customer.id(), accountActor).candidates())
+            .noneMatch(c -> "REMAINING_INVOICE".equals(c.sourceType()));
     }
 
     @Test

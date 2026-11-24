@@ -26,7 +26,7 @@ import {
   subtotalsDiffer,
 } from './createDepositNoticeDraft.js';
 import { DocumentPreparerSelect } from './DocumentPreparerSelect.jsx';
-import { NewPayerForm } from './NewPayerForm.jsx';
+import { IssueInNamePicker } from './IssueInNamePicker.jsx';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 // CustomerPrintRule#addressWithBranch: a branch prints only for a customer with a tax id (feedback #72).
@@ -310,10 +310,6 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
     preparerId: null,
     payerCustomerId: null,
   });
-  // ออกในนาม (feedback #74): the master search is open to pick another name instead of the quotation's customer, or
-  // newPayer holds the name being added to the customer list.
-  const [pickingPayer, setPickingPayer] = useState(false);
-  const [newPayer, setNewPayer] = useState(null);
 
   // Reads (TanStack Query) --- Mount only LOADS existing documents — it must never create one as a side effect
   // of navigating here. None of the queries below ever create anything.
@@ -562,13 +558,8 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
 
   function selectCustomer(c) {
     autoAddressCustomerRef.current = c;
-    // On a header locked to the quotation, a pick is the payer (the server then prints that customer's master data).
-    const asPayer = doc?.customerFromQuotation === true;
-    setPickingPayer(false);
-    setNewPayer(null);
     setForm((f) => ({
       ...f,
-      ...(asPayer ? { payerCustomerId: c.id } : {}),
       customerName:    c.name,
       customerTaxId:   c.taxId ?? '',
       customerAddress: printedCustomerAddress(c.address, c.branch, c.taxId),
@@ -576,6 +567,19 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
     setCsSearch('');
     clearFieldError('customerName');
   }
+
+  // ออกในนาม (feedback #74): the header shows the picked name now; the server prints that customer's list data.
+  function pickPayer(c) {
+    setForm((f) => ({
+      ...f,
+      payerCustomerId: c.id,
+      customerName:    c.name,
+      customerTaxId:   c.taxId ?? '',
+      customerAddress: printedCustomerAddress(c.address, c.branch, c.taxId),
+    }));
+    clearFieldError('customerName');
+  }
+
 
   function toggleNote(text) {
     setForm((f) => ({
@@ -807,67 +811,33 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
             ) : (
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
                 {customerFromQuotation ? (
-                  <div className="col-span-full flex flex-wrap items-center gap-2" data-testid="customer-from-quotation">
-                    <p className="m-0 text-sm text-text-muted">
-                      {form.payerCustomerId == null
-                        ? `ชื่อ เลขผู้เสียภาษี และที่อยู่ดึงจากใบเสนอราคา ${form.reference} (แก้ไม่ได้)`
-                        : `ออกในนาม ${form.customerName} · อ้างอิงใบเสนอราคา ${form.reference}`
-                          + (form.payerCustomerId === doc?.payerCustomerId ? '' : ' (กดบันทึกเพื่อใช้)')}
-                    </p>
-                    {form.payerCustomerId == null ? (
-                      <Button variant="secondary" onClick={() => { setPickingPayer((v) => !v); setNewPayer(null); }} data-testid="pick-payer">
-                        {pickingPayer ? 'ยกเลิก' : 'ออกในนาม'}
-                      </Button>
-                    ) : (
-                      <Button variant="secondary" data-testid="clear-payer"
-                        onClick={() => { setPickingPayer(false); setField('payerCustomerId', null); }}>
-                        ใช้ลูกค้าในใบเสนอราคา
-                      </Button>
+                  <IssueInNamePicker idPrefix="doc" quotationNumber={form.reference} payerId={form.payerCustomerId}
+                    payerName={form.customerName} savedPayerId={doc?.payerCustomerId} showToast={showToast}
+                    onPick={pickPayer} onClear={() => setField('payerCustomerId', null)} />
+                ) : (
+                  <div className="relative col-span-full">
+                    <FormField label="ค้นหาลูกค้า (master)" htmlFor="doc-customer-search">
+                      <input
+                        id="doc-customer-search"
+                        value={customerSearch}
+                        onChange={(e) => setCsSearch(e.target.value)}
+                        placeholder="ชื่อบริษัท หรือ เลขภาษี…"
+                      />
+                    </FormField>
+                    {customerSearch && customers.length > 0 && (
+                      <div className="absolute left-0 right-0 top-full z-50 max-h-[180px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_12px_rgba(0,0,0,0.1)]">
+                        {customers.map((c) => (
+                          <button key={c.id} type="button"
+                            onClick={() => selectCustomer(c)}
+                            className="w-full cursor-pointer border-0 border-b border-surface-subtle bg-transparent px-3 py-2 text-left text-sm text-text">
+                            <strong className="block">{c.name}</strong>
+                            <span className="text-2xs text-text-muted">{c.taxId} · {c.address}</span>
+                          </button>
+                        ))}
+                      </div>
                     )}
-                    {form.payerCustomerId == null && doc?.payerCustomerId != null ? (
-                      <p className="m-0 w-full text-sm text-warning-dark">กดบันทึกเพื่อกลับไปใช้ลูกค้าในใบเสนอราคา</p>
-                    ) : null}
                   </div>
-                ) : null}
-                <div className={customerFromQuotation && !pickingPayer ? 'hidden' : 'relative col-span-full'}>
-                  <FormField label="ค้นหาลูกค้า (master)" htmlFor="doc-customer-search">
-                    <input
-                      id="doc-customer-search"
-                      value={customerSearch}
-                      onChange={(e) => setCsSearch(e.target.value)}
-                      placeholder="ชื่อบริษัท หรือ เลขภาษี…"
-                    />
-                  </FormField>
-                  {customerSearch && customers.length > 0 && (
-                    <div className="absolute left-0 right-0 top-full z-50 max-h-[180px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_12px_rgba(0,0,0,0.1)]">
-                      {customers.map((c) => (
-                        <button key={c.id} type="button"
-                          onClick={() => selectCustomer(c)}
-                          className="w-full cursor-pointer border-0 border-b border-surface-subtle bg-transparent px-3 py-2 text-left text-sm text-text">
-                          <strong className="block">{c.name}</strong>
-                          <span className="text-2xs text-text-muted">{c.taxId} · {c.address}</span>
-                        </button>
-                      ))}
-                      {customerFromQuotation && pickingPayer ? (
-                        <button type="button" onClick={() => { setNewPayer(customerSearch.trim()); setCsSearch(''); }}
-                          className="w-full cursor-pointer border-0 bg-transparent px-3 py-2 text-left text-sm font-bold text-primary">
-                          {`+ เพิ่มชื่อใหม่ "${customerSearch.trim()}"`}
-                        </button>
-                      ) : null}
-                    </div>
-                  )}
-                  {customerFromQuotation && pickingPayer && newPayer == null && !(customerSearch && customers.length > 0) ? (
-                    <Button variant="text" className="mt-2" data-testid="new-payer"
-                      onClick={() => { setNewPayer(customerSearch.trim()); setCsSearch(''); }}>
-                      + เพิ่มชื่อใหม่{customerSearch.trim() ? ` "${customerSearch.trim()}"` : ''}
-                    </Button>
-                  ) : null}
-                </div>
-                {customerFromQuotation && newPayer != null ? (
-                  <NewPayerForm initialName={newPayer} showToast={showToast}
-                    onCreated={(c) => { customersQuery.refetch(); selectCustomer(c); }}
-                    onCancel={() => setNewPayer(null)} />
-                ) : null}
+                )}
                 <FormField label="ชื่อบริษัท / หน่วยงาน" htmlFor="doc-customer-name" required error={fieldErrors.customerName}>
                   <input
                     id="doc-customer-name"
