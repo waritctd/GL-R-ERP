@@ -198,22 +198,6 @@ final class DocumentSheet {
 
     // ── text rules ───────────────────────────────────────────────────────────────────────────────
 
-    /** The ออกในนาม line (feedback #74): "name  โทร phone  email", blank parts omitted; null without a name. */
-    static String issueInNameLine(String name, String phone, String email) {
-        if (name == null || name.isBlank()) return null;
-        StringBuilder sb = new StringBuilder(name.trim());
-        if (phone != null && !phone.isBlank()) sb.append("  โทร ").append(phone.trim());
-        if (email != null && !email.isBlank()) sb.append("  ").append(email.trim());
-        return sb.toString();
-    }
-
-    /** Row {@code r} (empty in both templates, under ที่อยู่): "ออกในนาม : line" in B, under เรียน's value (column A is too
-     * narrow for the label); nothing without one. */
-    static void issueInName(Sheet sh, int r, String payerLine) {
-        if (payerLine == null) return;
-        str(sh, r, 1, "ออกในนาม : " + payerLine);
-    }
-
     /** "name (branch) / เลขประจำตัวผู้เสียภาษี : taxId", blank parts omitted. */
     static String customerLine(String name, String branch, String taxId) {
         StringBuilder sb = new StringBuilder(name == null ? "" : name.trim());

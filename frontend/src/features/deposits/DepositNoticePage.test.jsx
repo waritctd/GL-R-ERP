@@ -294,16 +294,15 @@ describe('DepositNoticePage', () => {
       expect(screen.queryByLabelText(/ชื่อบริษัท/)).toBeNull();
       expect(screen.getByTestId('doc-addressee-name').textContent).toBe(validDraftDoc.customerName);
 
-      // feedback #74: เรียน and ออกในนาม are choosable; a name picked for ออกในนาม is saved as the payer, เรียน untouched
-      api.customers.search.mockResolvedValue({ customers: [{ id: 77, name: 'ผู้ชำระ ทดสอบ', taxId: null, address: null }] });
-      fireEvent.click(screen.getByTestId('doc-payer-change'));
-      fireEvent.change(screen.getByLabelText('ค้นหาจากรายชื่อลูกค้า หรือพิมพ์ชื่อใหม่'), { target: { value: 'ผู้ชำระ' } });
-      fireEvent.click(await screen.findByRole('button', { name: /ผู้ชำระ ทดสอบ/ }));
-      expect(screen.getByTestId('doc-payer-name').textContent).toBe('ผู้ชำระ ทดสอบ');
-      expect(screen.getByTestId('doc-addressee-name').textContent).toBe(validDraftDoc.customerName);
+      // feedback #74: เรียน is choosable; a customer picked from the list is saved as the addressee and fills the header
+      api.customers.search.mockResolvedValue({ customers: [{ id: 77, name: 'บริษัท ผู้ซื้อ ทดสอบ จำกัด', taxId: '0105500000077', address: 'กรุงเทพ' }] });
+      fireEvent.click(screen.getByTestId('doc-addressee-change'));
+      fireEvent.change(screen.getByLabelText('ค้นหาลูกค้า หรือเพิ่มลูกค้าใหม่'), { target: { value: 'ผู้ซื้อ' } });
+      fireEvent.click(await screen.findByRole('button', { name: /บริษัท ผู้ซื้อ ทดสอบ จำกัด/ }));
+      expect(screen.getByTestId('doc-addressee-name').textContent).toBe('บริษัท ผู้ซื้อ ทดสอบ จำกัด');
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
       await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalled());
-      expect(api.depositNotices.update.mock.calls.at(-1)[1]).toMatchObject({ payerCustomerId: 77, addresseeCustomerId: null });
+      expect(api.depositNotices.update.mock.calls.at(-1)[1]).toMatchObject({ addresseeCustomerId: 77, customerName: 'บริษัท ผู้ซื้อ ทดสอบ จำกัด' });
     });
 
     it('lets a draft be re-pointed to another party quotation of the deal (a select with number and customer)', async () => {
@@ -499,7 +498,7 @@ describe('DepositNoticePage', () => {
       await waitFor(() => expect(api.depositNotices.issue).toHaveBeenCalledTimes(1));
       expect(api.depositNotices.update.mock.calls).toEqual([[9002, {
         customerName: 'บริษัท ลุมพินี จำกัด', customerTaxId: '0105551234567', customerAddress: 'กรุงเทพฯ',
-        projectName: 'บ้านชะอำ', reference: 'QT-2026-0201', depositPercent: 0.4, notes: ['หมายเหตุมาตรฐาน'], preparerId: null, addresseeCustomerId: null, addresseeReset: null, payerCustomerId: null, payerReset: null,
+        projectName: 'บ้านชะอำ', reference: 'QT-2026-0201', depositPercent: 0.4, notes: ['หมายเหตุมาตรฐาน'], preparerId: null, addresseeCustomerId: null, addresseeReset: null,
         expectedUpdatedAt: 'T1',
         items: [{ seq: 1, description: 'กระเบื้อง Raku', qty: 3, unit: 'ตร.ม.', unitPrice: 1500, discountLabel: '-', netUnitPrice: 1234.57, amount: null }],
       }]]);
