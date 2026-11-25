@@ -170,11 +170,11 @@ function NewCustomerForm({ id, initialName, onCreated, onCancel, showToast }) {
           </FormField>
         </div>
       </div>
-      <fieldset className="m-0 grid gap-2 border-0 p-0">
-        <legend className="p-0 text-sm font-bold text-text-secondary">ที่อยู่ (ไม่บังคับ)</legend>
+      <div className="grid gap-2">
+        <p className="m-0 text-xs text-text-muted">ที่อยู่ไม่บังคับ ถ้าใส่ ให้เลือกจังหวัด อำเภอ/เขต และตำบล/แขวงให้ครบ</p>
         <ThaiAddressFields value={value} onChange={(patch) => setValue((v) => ({ ...v, ...patch }))} disabled={saving} />
-        {!addressReady ? <p className="m-0 text-xs text-warning-dark">ถ้าใส่ที่อยู่ กรุณาเลือกจังหวัด อำเภอ/เขต และตำบล/แขวงให้ครบ</p> : null}
-      </fieldset>
+        {!addressReady ? <p className="m-0 text-xs font-bold text-warning-dark">เลือกจังหวัด อำเภอ/เขต และตำบล/แขวงให้ครบ หรือเว้นที่อยู่ว่างไว้</p> : null}
+      </div>
       <div className="flex flex-wrap justify-end gap-2">
         <Button variant="secondary" disabled={saving} onClick={onCancel}>ย้อนกลับ</Button>
         <Button variant="primary" loading={saving} disabled={!ready || saving} onClick={save}>ใช้ลูกค้านี้</Button>
