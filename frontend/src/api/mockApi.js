@@ -10760,6 +10760,108 @@ function mockCashForMonth(ownerId, yearMonth) {
   };
 }
 
+/**
+ * Mirrors WeeklyReportService (salesboard/): the month's ledger by week (CashRepository's received money plus the OPEN
+ * expected payments, a slip carried into the current week), one row per order ticket, and the per-rep counts. SHAPE
+ * and the scope rules only: the mock has no money cutoff (moneyFrom null) and no stage-move or quotation events, so
+ * stageMoves and quotationsIssued read 0; WeeklyReportIntegrationTest is the evidence for the numbers.
+ */
+function mockWeeklyReport(user, { week, ownerId }) {
+  let scopeOwner = null;
+  if (user.role === 'sales') {
+    if (ownerId != null && Number(ownerId) !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    scopeOwner = user.id;
+  } else if (['sales_manager', 'ceo'].includes(user.role)) {
+    if (ownerId != null) {
+      if (!db.users.some((u) => u.id === Number(ownerId))) fail('ไม่พบพนักงานขายนี้', 404);
+      scopeOwner = Number(ownerId);
+    }
+  } else fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+
+  const today = mockTodayIso();
+  const weekStart = mockWeekStartIso(week || today);
+  const weekEnd = mockAddDaysIso(weekStart, 6);
+  const currentWeek = mockWeekStartIso(today);
+  const inWeek = (iso) => Boolean(iso) && iso.slice(0, 10) >= weekStart && iso.slice(0, 10) <= weekEnd;
+  const ticketOf = (id) => db.tickets.find((t) => t.id === id);
+  const inScope = (t) => t && (scopeOwner == null || t.createdById === scopeOwner);
+
+  // Ledger: received per week from the cash read; the OPEN buckets by D5 (past weeks none, slips into the current week).
+  const month = mockAddDaysIso(weekStart, 3).slice(0, 7);
+  const cash = mockCashForMonth(scopeOwner, month);
+  const weeks = cash.weeks.map((w) => ({
+    weekStart: w.weekStart, received: w.received, deliveredAwaiting: 0, deliveriesScheduled: 0, depositsExpected: 0,
+    slipped: 0, isCurrent: w.weekStart === currentWeek, isPast: w.weekStart < currentWeek,
+  }));
+  for (const p of mockExpectedPayments) {
+    const t = ticketOf(p.ticketId);
+    if (p.status !== 'OPEN' || !inScope(t) || (t.lifecycle ?? 'ACTIVE') !== 'ACTIVE') continue;
+    const slip = p.expectedWeek < currentWeek;
+    const w = weeks.find((x) => x.weekStart === (slip ? currentWeek : p.expectedWeek));
+    const key = p.kind === 'DEPOSIT' ? 'depositsExpected'
+      : t.salesStage === 'DELIVERED' ? 'deliveredAwaiting'
+        : p.kind === 'ON_DELIVERY' && ['DELIVERY_SCHEDULING', 'PROCUREMENT'].includes(t.salesStage) ? 'deliveriesScheduled' : null;
+    if (!w || !key) continue;
+    const amount = round2(Number(p.amount) - Number(p.receivedAmount ?? 0));
+    w[key] = round2(w[key] + amount);
+    if (slip) w.slipped = round2(w.slipped + amount);
+  }
+  const sum = (key) => round2(weeks.reduce((x, w) => x + w[key], 0));
+  const ledger = {
+    month, weeks, received: cash.received, deliveredAwaiting: sum('deliveredAwaiting'),
+    deliveriesScheduled: sum('deliveriesScheduled'), depositsExpected: sum('depositsExpected'),
+  };
+  ledger.total = round2(ledger.received + ledger.deliveredAwaiting + ledger.deliveriesScheduled + ledger.depositsExpected);
+
+  // Orders: every ticket past ORDER_RECEIVED that is open, or closed with money in this month.
+  const orderFrom = dealStageIndex('ORDER_RECEIVED');
+  const allOrders = db.tickets
+    .filter((t) => dealStageIndex(t.salesStage) >= orderFrom && (t.lifecycle ?? 'ACTIVE') === 'ACTIVE'
+      && (t.salesStage !== 'CLOSED_PAID' || receiptsForTicket(t.id).some((r) => mockBangkokDateOf(r.receivedAt).startsWith(month))))
+    .map((t) => {
+      const value = moneyValue(derivePaymentFields(t).amountPayable);
+      const received = sumPaid(t.id);
+      const next = mockExpectedPaymentsOf(t.id).find((p) => p.status === 'OPEN');
+      const nextPayment = next ? { id: next.id, kind: next.kind, amount: round2(next.amount - (next.receivedAmount ?? 0)), week: next.expectedWeek } : null;
+      return {
+        ticketId: t.id, code: t.code, title: t.title, customerName: t.customerName ?? null,
+        projectName: t.projectId ? (mockProjects.find((p) => p.id === t.projectId)?.name ?? null) : null,
+        ownerId: t.createdById, ownerName: t.createdByName ?? null, salesStage: t.salesStage,
+        orderConfirmedAt: t.orderConfirmedAt ?? t.updatedAt ?? t.createdAt ?? null,
+        value, received, outstanding: moneyValue(Math.max(0, value - received)),
+        nextPayment, slipped: nextPayment != null && nextPayment.week < weekStart,
+      };
+    });
+
+  const reps = (scopeOwner != null ? db.users.filter((u) => u.id === scopeOwner) : db.users.filter((u) => u.role === 'sales'))
+    .map((u) => {
+      const mine = db.tickets.filter((t) => t.createdById === u.id);
+      const orders = allOrders.filter((o) => o.ownerId === u.id);
+      const visits = mockVisits.filter((v) => v.ownerId === u.id && inWeek(v.plannedDate));
+      // WeeklyReportService: due = an earlier day, or today at a set time that has passed.
+      const nowHm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+      const due = visits.filter((v) => v.status !== 'PLANNED' || v.plannedDate < today || (v.plannedDate === today && v.plannedTime && String(v.plannedTime).slice(0, 5) <= nowHm));
+      const entries = mockDealActivities.filter((a) => a.createdById === u.id);
+      return {
+        ownerId: u.id, name: u.name, newDeals: mine.filter((t) => inWeek(t.createdAt)).length, stageMoves: 0, quotationsIssued: 0,
+        ordersConfirmed: orders.filter((o) => inWeek(o.orderConfirmedAt)).length, lost: mine.filter((t) => inWeek(t.lostAt)).length,
+        visitsDone: visits.filter((v) => v.status === 'DONE').length, visitsPlanned: visits.filter((v) => v.status !== 'CANCELLED').length,
+        visitsDue: due.length, visitsDueWithResult: due.filter((v) => v.status !== 'PLANNED').length,
+        ordersOpen: orders.length, ordersWithDate: orders.filter((o) => o.nextPayment).length,
+        entriesToday: entries.filter((a) => a.activityDate === today).length,
+        lastEntryAt: entries.map((a) => a.createdAt).sort().at(-1) ?? null,
+      };
+    });
+  const todayList = scopeOwner === user.id
+    ? mockDealActivities.filter((a) => a.createdById === user.id && a.activityDate === today)
+      .map((a) => ({ at: a.createdAt, kind: a.kind, label: a.note ?? a.kind, ticketId: a.ticketId, ticketTitle: ticketOf(a.ticketId)?.title ?? null }))
+    : [];
+  return {
+    weekStart, weekEnd, moneyFrom: null, scope: scopeOwner == null ? 'TEAM' : 'OWN', ledger,
+    orders: allOrders.filter((o) => scopeOwner == null || o.ownerId === scopeOwner), reps, today: todayList,
+  };
+}
+
 // ── Express receipts upload (mirrors ReceiptImportService / ReceiptMatcher / ReceiptFileParser, V213) ──
 // The mock reads .csv only (no xlsx parser in the browser bundle — see mockDocPlaceholderBlob's note on SheetJS);
 // .xlsx is refused with a mock-mode message. Matching mirrors ReceiptMatcher's three rules and "ambiguous → unmatched".
@@ -17019,6 +17121,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     },
     // Mirrors SalesBoardService.teamBoard: SalesBoardRepository.activeDealsAllReps (every rep's ACTIVE, non-CLOSED_PAID
     // deal, ORDER BY last_touched_at, ticket_id — mockBoardDeals already sorts so), sales_manager / ceo / read-all flag holder.
+    // Mirrors SalesBoardController#weeklyReport: sales own only, sales_manager / ceo the team or one `ownerId`'s report.
+    async weeklyReport({ week, ownerId } = {}) {
+      return delay(mockWeeklyReport(requireSession(), { week, ownerId }));
+    },
     async teamBoard() {
       const user = requireSession();
       if (!['sales_manager', 'ceo'].includes(user.role) && !holdsReadAllSalesGrant(user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);

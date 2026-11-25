@@ -43,10 +43,17 @@ Three calls are still open and belong in the spec: keep or drop the side preview
 
 ## Slice 3: Weekly report replacement
 
-### 35. Weekly report replacement · needs a decision
-The portal writes the weekly sales report that reps now write by hand, so keeping deals current in the portal is all a rep has to do. Deal lists by date range and the receipts import already exist (features 21 and 32).
-**Done when:** each rep's weekly report is produced from portal data with an expected payment date per deal, late dates are shown as slips and not as errors, the received amount matches the accounting receipts, and managers and the CEO have a view that shows which deals have gone quiet.
-- [ ] Design it (spec): `/architect weekly report replacement`
+### 35. Weekly report replacement · in-progress
+The portal writes the weekly sales report that reps now write by hand, so keeping deals current in the portal is all a rep has to do. Deal lists by date range and the receipts import already exist (features 21 and 32). Spec: [0003](../specs/0003-weekly-report-and-today.md)
+**Done when:** each rep's weekly report is produced from portal data with an expected payment date per deal, late dates are shown as slips and not as errors, the received amount matches the accounting receipts for orders confirmed from 2026-11-16, and managers and the CEO have a team view of every rep's report and of slipped payments. No quiet-job measure (Ploy, 2026-11-26).
+- [x] Design it (spec): `/architect weekly report replacement`
+- [x] Build it: `/develop weekly report replacement` (code: `hr/salesboard/WeeklyReport*`, `features/dashboard/WeeklyReport.jsx`, `SalesOverview.jsx`, `ManagerOverview.jsx`)
+  - [x] Rep weekly report (endpoint, money cutoff, dashboard switch)
+  - [x] Team weekly report
+  - [x] Rep งานวันนี้ redesign
+  - [x] Manager งานวันนี้ redesign
+- [x] Verify it: real-app walk on a demo database, rep and manager, desktop and phone (2026-11-26)
+- [ ] Test it: `/test weekly report replacement`
 
 ## Slice 4: Import corrects factory lines
 

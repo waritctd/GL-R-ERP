@@ -10,7 +10,7 @@ import { cancelDeal } from './helpers/sales.js';
 // ONE-TIME PIPELINE IMPORT (slice 4 of the sales redesign) — real Vite → Spring → Postgres, no mocks.
 //
 //   POST /api/sales/pipeline-imports?dryRun=   multipart `file`; sales_manager / ceo only (PipelineImportService)
-//   UI: ภาพรวมทีมขาย → "นำเข้าจากชีท" (PipelineImportDialog): upload → ตรวจก่อนนำเข้า (dry run, writes nothing) → นำเข้า
+//   UI: sales manager's งานวันนี้ → "นำเข้าจากชีท" (PipelineImportDialog): upload → ตรวจก่อนนำเข้า (dry run, writes nothing) → นำเข้า
 //
 // The CSV is built here, UTF-8 with a BOM and the reps' own Thai headers (aliases the backend accepts), so the test
 // also pins that a workbook written the way the reps write it is read. The rep column carries the seeded sales
@@ -75,7 +75,7 @@ async function repBoard(sessions) {
 }
 
 async function openDialog(page) {
-  await expect(page.getByRole('region', { name: 'ภาพรวมทีมขาย' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'งานวันนี้', level: 1 })).toBeVisible();
   await page.getByRole('button', { name: 'นำเข้าจากชีท' }).click();
   const dialog = page.getByTestId('pipeline-import-dialog');
   await expect(dialog).toBeVisible();

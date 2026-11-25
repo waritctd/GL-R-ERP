@@ -784,6 +784,8 @@ export const api = {
     myWork: () => apiRequest(API_ROUTES.salesBoard.myWork),
     teamOverview: () => apiRequest(API_ROUTES.salesBoard.teamOverview),
     teamBoard: () => apiRequest(API_ROUTES.salesBoard.teamBoard),
+    // The weekly report (WeeklyReportService): `week` = any date of the week, `ownerId` = one rep's report (sales_manager / ceo; a sales rep always gets their own).
+    weeklyReport: ({ week, ownerId } = {}) => apiRequest(withQuery(API_ROUTES.salesBoard.weeklyReport, { week, ownerId })),
     // Mirrors PipelineImportController: multipart `file` (.xlsx / UTF-8 .csv). dryRun=true previews and writes
     // nothing; dryRun=false commits the whole file in one transaction. sales_manager / ceo only (the service's gate).
     pipelineImport: async (file, dryRun) => {

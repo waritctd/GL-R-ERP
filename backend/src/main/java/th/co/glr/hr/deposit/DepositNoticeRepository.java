@@ -549,14 +549,21 @@ public class DepositNoticeRepository {
         return p.addValue("addresseeCustomerId", n.addresseeCustomerId());
     }
 
-    /** The เรียน chosen on this deal's latest live notice that references quotation {@code number} (feedback #74): what a
-     * new remaining invoice starts from and what the tax-invoice issuer sees. Empty when none picked one. */
+    /** The เรียน chosen on this deal's latest live (not superseded) deposit notice or remaining invoice for quotation
+     * {@code number} (feedback #74): what a new document for it starts from, and what the tax-invoice issuer sees on a
+     * delivery round. Empty when that latest document uses the quotation's own customer, or none exists. */
     public Optional<Long> findChosenAddressee(long ticketId, String number) {
-        return jdbc.queryForList("""
-            SELECT addressee_customer_id FROM sales.deposit_notice
+        return jdbc.query("""
+            SELECT addressee_customer_id, updated_at FROM sales.deposit_notice
              WHERE ticket_id = :t AND reference = :n AND status <> 'SUPERSEDED'
-             ORDER BY version DESC LIMIT 1
-            """, Map.of("t", ticketId, "n", number), Long.class).stream().filter(java.util.Objects::nonNull).findFirst();
+            UNION ALL
+            SELECT r.addressee_customer_id, r.updated_at FROM sales.remaining_invoice r
+              LEFT JOIN sales.quotation q ON q.quotation_id = r.customer_quotation_id
+             WHERE r.ticket_id = :t AND COALESCE(q.number, r.reference) = :n AND r.status <> 'SUPERSEDED'
+             ORDER BY updated_at DESC LIMIT 1
+            """, Map.of("t", ticketId, "n", number), (rs, i) -> java.util.Optional.ofNullable(
+                (Long) rs.getObject("addressee_customer_id")))
+            .stream().findFirst().flatMap(chosen -> chosen);
     }
 
     public Optional<Long> findQuotationPartyCustomerId(long ticketId, String number) {

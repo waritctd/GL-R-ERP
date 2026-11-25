@@ -42,13 +42,27 @@ const quiet = {
 };
 const fresh = { ...quiet, ticketId: 32, title: 'BMW Showroom', daysQuiet: 2, quiet: false };
 
+// MyWork hosts the flows; its page body (SalesOverview) is replaced by one button per opener.
 function renderMyWork(props = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter><MyWork showToast={vi.fn()} {...props} /></MemoryRouter>
+      <MemoryRouter>
+        <MyWork showToast={vi.fn()} {...props}>
+          {(ctx) => <button type="button" onClick={ctx.openCallPicker}>บันทึกการโทร</button>}
+        </MyWork>
+      </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+/** บันทึกการโทร → pick the งาน → the call dialog. */
+async function openCallDialog(name = /สยามพารากอน/) {
+  fireEvent.click(await screen.findByRole('button', { name: 'บันทึกการโทร' }));
+  const picker = await screen.findByRole('dialog');
+  await waitFor(() => expect(within(picker).getAllByRole('button', { name }).length).toBeGreaterThan(0));
+  fireEvent.click(within(picker).getAllByRole('button', { name })[0]);
+  return screen.findByRole('dialog', { name: /โทรแล้ว/ });
 }
 
 describe('MyWork', () => {
@@ -59,14 +73,9 @@ describe('MyWork', () => {
     api.tickets.markLost.mockResolvedValue({});
   });
 
-  it('โทรแล้ว logs a CALL activity and the deal leaves the list after the refetch', async () => {
+  it('โทรแล้ว logs a CALL activity and refetches the work', async () => {
     renderMyWork();
-    const row = await screen.findByTestId('follow-up-31');
-    api.salesBoard.myWork.mockResolvedValue({ followUp: [], board: [{ ...quiet, quiet: false, daysQuiet: 0 }, fresh],
-      quietDays: 14 });
-
-    fireEvent.click(within(row).getByRole('button', { name: /โทรแล้ว/ }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await openCallDialog();
     fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่รับสาย' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
 
@@ -75,17 +84,14 @@ describe('MyWork', () => {
     expect(id).toBe(31);
     expect(payload).toMatchObject({ kind: 'CALL', note: 'ไม่รับสาย' });
     expect(payload.activityDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    await waitFor(() => expect(screen.queryByTestId('follow-up-31')).toBeNull());
-    expect(api.salesBoard.myWork).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(api.salesBoard.myWork).toHaveBeenCalledTimes(2));
   });
 
   it('โทรแล้ว on a folded project card logs the call on its lead order, not the root', async () => {
     const folded = { ...quiet, leadTicketId: 77, orderCount: 2 };
     api.salesBoard.myWork.mockResolvedValue({ followUp: [folded], board: [folded], quietDays: 14 });
     renderMyWork();
-    const row = await screen.findByTestId('follow-up-31');
-    fireEvent.click(within(row).getByRole('button', { name: /โทรแล้ว/ }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await openCallDialog();
     fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่รับสาย' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
     await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledTimes(1));
@@ -94,9 +100,7 @@ describe('MyWork', () => {
 
   it('โทรแล้ว with ตามครั้งถัดไป 2 สัปดาห์ sends the deal\'s next follow-up date with the CALL', async () => {
     renderMyWork();
-    const row = await screen.findByTestId('follow-up-31');
-    fireEvent.click(within(row).getByRole('button', { name: /โทรแล้ว/ }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await openCallDialog();
     fireEvent.click(within(dialog).getByRole('radio', { name: 'คุยแล้ว ยังสนใจ' }));
     fireEvent.click(within(dialog).getByRole('radio', { name: '2 สัปดาห์' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
@@ -123,41 +127,11 @@ describe('MyWork — review fixes', () => {
 
   it('the call dialog cannot save without an outcome (M4)', async () => {
     renderMyWork();
-    const row = await screen.findByTestId('follow-up-31');
-    fireEvent.click(within(row).getByRole('button', { name: /โทรแล้ว/ }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await openCallDialog();
 
     const save = within(dialog).getByRole('button', { name: 'บันทึก' });
     expect(save.disabled).toBe(true);
     fireEvent.click(within(dialog).getByRole('radio', { name: 'คุยแล้ว ยังสนใจ' }));
     expect(save.disabled).toBe(false);
-  });
-
-  it('the board defaults to ไตรมาสนี้ once at least half of the open deals have an expected quarter', async () => {
-    const now = new Date();
-    const thisQuarter = `${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`;
-    api.salesBoard.myWork.mockResolvedValue({
-      followUp: [],
-      board: [{ ...fresh, ticketId: 81, expectedQuarter: thisQuarter }, { ...fresh, ticketId: 82, expectedQuarter: null }],
-      quietDays: 14,
-    });
-    renderMyWork();
-
-    await screen.findByTestId('board-card-81');
-    expect(screen.getByRole('button', { name: 'ไตรมาสนี้' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.queryByTestId('board-card-82')).toBeNull();
-  });
-
-  it('a USD deal shows USD and stays out of the ฿ total (M1)', async () => {
-    api.salesBoard.myWork.mockResolvedValue({
-      followUp: [],
-      board: [{ ...fresh, ticketId: 51, value: 1000, currency: 'USD' }, { ...fresh, ticketId: 52, value: 2000, currency: 'THB' }],
-      quietDays: 14,
-    });
-    renderMyWork();
-
-    const card = await screen.findByTestId('board-card-51');
-    expect(within(card).getByText('USD 1,000')).toBeTruthy();
-    expect(screen.getByTestId('board-total').textContent).toBe('฿2,000 + USD 1,000');
   });
 });

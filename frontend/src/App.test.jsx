@@ -30,7 +30,7 @@ vi.mock('./api/index.js', () => ({
     pricingRequests: {
       queue: vi.fn().mockResolvedValue({ items: [] }),
     },
-    // SalesOverview (งานของฉัน) is what a sales user lands on at '/': GET /api/sales/my-work plus the stage
+    // SalesOverview (งานวันนี้) is what a sales user lands on at '/': GET /api/sales/my-work plus the stage
     // catalog MarkLostModal reads.
     salesBoard: {
       myWork: vi.fn().mockResolvedValue({ followUp: [], board: [], quietDays: 14 }),
@@ -323,7 +323,7 @@ describe('App / release lockdown (SELF_SERVICE_ONLY)', () => {
   it('lands a sales rep on SalesOverview — sales is exempt from the lock', async () => {
     await renderLockedAppAt('/', salesUser);
 
-    expect(await screen.findByRole('heading', { name: 'งานของฉัน' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'งานวันนี้' })).toBeTruthy();
     expect(screen.queryByText(/เวลาทำงานและคำขอของคุณ/)).toBeNull();
   });
 

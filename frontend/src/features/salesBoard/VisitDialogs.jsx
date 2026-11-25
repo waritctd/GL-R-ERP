@@ -93,15 +93,16 @@ function weekHint(plannedDate, todayIso) {
 
 /**
  * m-visit-plan — นัดเข้าพบ. A visit may be to a designer or owner before any deal exists, so ดีล is optional.
- * `initialDeal` (the follow-up row's deal) preselects the deal and prefills พบใคร with its designer.
+ * `initialDeal` (the follow-up row's deal) preselects the deal and prefills พบใคร with its designer. `initialVisit` is a
+ * visit being rescheduled (เลื่อนนัด): who, deal, time and note carry over and the date is picked again.
  */
-export function PlanVisitModal({ deals, initialDeal = null, todayIso, submitting, onClose, onSubmit }) {
+export function PlanVisitModal({ deals, initialDeal = null, initialVisit = null, todayIso, submitting, onClose, onSubmit }) {
   const ids = useId();
-  const [contactName, setContactName] = useState(initialDeal?.designerName ?? '');
-  const [ticketId, setTicketId] = useState(initialDeal ? String(actionTicketId(initialDeal)) : '');
+  const [contactName, setContactName] = useState(initialVisit?.contactName ?? initialDeal?.designerName ?? '');
+  const [ticketId, setTicketId] = useState(initialVisit?.ticketId != null ? String(initialVisit.ticketId) : initialDeal ? String(actionTicketId(initialDeal)) : '');
   const [plannedDate, setPlannedDate] = useState(todayIso);
-  const [plannedTime, setPlannedTime] = useState('');
-  const [note, setNote] = useState('');
+  const [plannedTime, setPlannedTime] = useState(timeLabel(initialVisit?.plannedTime));
+  const [note, setNote] = useState(initialVisit?.note ?? '');
   const ready = contactName.trim() && plannedDate;
   // The deal list is the rep's open deals; a prefilled deal outside it (should not happen) is still offered.
   const options = initialDeal && !deals.some((d) => d.ticketId === initialDeal.ticketId) ? [initialDeal, ...deals] : deals;
@@ -116,14 +117,14 @@ export function PlanVisitModal({ deals, initialDeal = null, todayIso, submitting
 
   return (
     <Modal
-      title="นัดเข้าพบ"
-      subtitle="ไปพบผู้ออกแบบหรือเจ้าของได้ แม้ยังไม่มีงาน"
+      title={initialVisit ? 'เลื่อนนัด' : 'นัดเข้าพบ'}
+      subtitle={initialVisit ? 'เลือกวันและเวลาใหม่ นัดเดิมจะถูกยกเลิก' : 'ไปพบผู้ออกแบบหรือเจ้าของได้ แม้ยังไม่มีงาน'}
       onClose={onClose}
       footer={(
         <>
           <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
           <Button type="button" disabled={submitting || !ready} onClick={submit}>
-            {submitting ? 'กำลังบันทึก…' : 'บันทึกนัด'}
+            {submitting ? 'กำลังบันทึก…' : initialVisit ? 'บันทึกนัดใหม่' : 'บันทึกนัด'}
           </Button>
         </>
       )}

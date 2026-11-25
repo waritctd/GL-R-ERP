@@ -47,7 +47,7 @@ Code pointers are short. `hr/<package>` means `backend/src/main/java/th/co/glr/h
 | 32 | Finance workspace and receipts import | Finance | existing |
 | 33 | Add on orders | Slice 1 | planned |
 | 34 | Document generators follow the quotation editor | Slice 2 | planned |
-| 35 | Weekly report replacement | Slice 3 | planned |
+| 35 | Weekly report replacement | Slice 3 | in-progress |
 | 36 | Import adds or moves a line on a contacted factory | Slice 4 | in-progress |
 | 37 | Import sheet backfill, import jobs and shared IR progress | Slice 4 | in-progress |
 | 38 | Link a loaded IR to a job | Slice 4 | planned |
