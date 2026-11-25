@@ -73,7 +73,7 @@ test.describe('manager งานวันนี้ @sales-board', () => {
     await expect(page.getByRole('heading', { name: 'งานวันนี้', level: 1 })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'รายงานสัปดาห์ของทีม' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'รายการที่รอคุณดำเนินการ' })).toBeVisible();
-    const reps = page.getByRole('region', { name: 'รายบุคคล' });
+    const reps = page.locator('section', { has: page.getByRole('heading', { name: 'รายบุคคล', exact: true }) });
     for (const header of ['พนักงานขาย', 'ข้อมูลรายงานครบถ้วน', 'บันทึกวันนี้', 'เลื่อนขั้นสัปดาห์นี้', 'ใบเสนอราคา', 'เข้าพบ', 'รอคุณอนุมัติ']) {
       await expect(reps.getByText(header, { exact: true }).first()).toBeVisible();
     }
