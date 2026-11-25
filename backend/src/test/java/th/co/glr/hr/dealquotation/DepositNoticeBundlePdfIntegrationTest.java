@@ -307,6 +307,9 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         RemainingInvoiceDocumentDto named = remainingInvoiceService.updateDraft(invoice.id(), invoiceNames(addressee), salesActor);
         assertThat(named.customerName()).isEqualTo("บริษัท เรียน ทดสอบ จำกัด");
         assertThat(named.customerTaxId()).isEqualTo("0105500000075");
+        // and the tax-invoice issuer sees that same customer on the deal's delivery rounds for this quotation
+        assertThat(depositNoticeService.quotationBuyer(new th.co.glr.hr.ticket.TicketRepository(jdbc)
+            .findSummaryById(ticketId).orElseThrow(), quotation.number()).name()).isEqualTo("บริษัท เรียน ทดสอบ จำกัด");
         RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(invoice.id(), salesActor);
         assertThat(jdbc.queryForObject("SELECT customer_name FROM sales.remaining_invoice WHERE id = :id",
             java.util.Map.of("id", issued.id()), String.class)).isEqualTo("บริษัท เรียน ทดสอบ จำกัด");

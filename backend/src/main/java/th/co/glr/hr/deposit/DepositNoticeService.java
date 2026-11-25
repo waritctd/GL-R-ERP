@@ -1593,7 +1593,7 @@ public class DepositNoticeService {
     /**
      * เรียน of a document of this deal (feedback #74, Ploy: "select the same customer for quotation (default) or create an
      * entirely new customer"). Starts from {@code stored}, or on create from the default: the เรียน already chosen on this
-     * deal's notice for quotation {@code quotationNumber}, else that quotation's customer (rule #65). Then applies
+     * deal's documents for quotation {@code quotationNumber}, else that quotation's customer (rule #65). Then applies
      * {@code c}: a picked customer-list row (400 when unknown; the quotation's own customer is no override) or a reset.
      * Shared by the deposit notice and the remaining invoice.
      */
@@ -1628,12 +1628,12 @@ public class DepositNoticeService {
         });
     }
 
-    /** The buyer printed on anything tied to a quotation: the เรียน chosen on the deal's notice for it (feedback #74), else
+    /** The buyer printed on anything tied to a quotation: the เรียน chosen on the deal's documents for it (feedback #74), else
      * that quotation's party customer (owner rule #65), else the deal's own customer ({@code fromDeal}). Read-only; delivery rounds show it to sales, the warehouse and the issuer. */
     public record QuotationBuyer(String name, String taxId, String branch, boolean fromDeal) {}
 
     public QuotationBuyer quotationBuyer(TicketSummaryDto s, String quotationNumber) {
-        // the เรียน chosen on the deal's notice for this quotation (feedback #74: the tax invoice goes in that name too)
+        // the เรียน chosen on the deal's documents for this quotation (feedback #74: the tax invoice goes in that name too)
         Long chosen = quotationNumber == null ? null : docs.findChosenAddressee(s.id(), quotationNumber).orElse(null);
         CustomerHeaderInfo h = resolveCustomerHeader(s, null, null, null, s.id(), quotationNumber, chosen);
         return new QuotationBuyer(h.customerNameOr(s.customerName()), h.taxId(), h.branch(), h.customerName() == null);
