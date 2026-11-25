@@ -5,9 +5,13 @@ import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.ticket.TicketEventKind;
+import th.co.glr.hr.ticket.TicketRepository;
 
 /**
  * The two cash reads behind {@link SalesBoardService#cashForMonth}, grouped by deal owner ({@code t.created_by}, the
@@ -16,6 +20,10 @@ import org.springframework.stereotype.Repository;
  *
  * <p>Month edges are Asia/Bangkok: receipts are bounded by Bangkok midnight as an instant, and dated by
  * {@code received_at AT TIME ZONE 'Asia/Bangkok'}. Expected rows on lost or cancelled deals never count.
+ *
+ * <p>Money cutoff ({@code app.sales.money-from}): when set, only tickets whose order confirmation
+ * ({@link TicketRepository#orderConfirmedAtExpr}) is at or after Bangkok midnight of that date count, in both reads.
+ * A ticket with no confirmation never counts. Null = no cutoff.
  */
 @Repository
 public class CashRepository {
@@ -29,9 +37,36 @@ public class CashRepository {
     public record ReceivedDayRow(long ownerId, LocalDate day, BigDecimal received) {}
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final LocalDate moneyFrom;
 
+    /** No cutoff: hand-wired tests and tools. */
     public CashRepository(NamedParameterJdbcTemplate jdbc) {
+        this(jdbc, (LocalDate) null);
+    }
+
+    public CashRepository(NamedParameterJdbcTemplate jdbc, LocalDate moneyFrom) {
         this.jdbc = jdbc;
+        this.moneyFrom = moneyFrom;
+    }
+
+    @Autowired
+    CashRepository(NamedParameterJdbcTemplate jdbc, @Value("${app.sales.money-from:}") String moneyFrom) {
+        this(jdbc, moneyFrom == null || moneyFrom.isBlank() ? null : LocalDate.parse(moneyFrom.trim()));
+    }
+
+    /** The cutoff date, or null when money from every order counts. */
+    public LocalDate moneyFrom() {
+        return moneyFrom;
+    }
+
+    private String moneyPredicate(MapSqlParameterSource p) {
+        if (moneyFrom == null) {
+            return "";
+        }
+        p.addValue("moneyFrom", Timestamp.from(moneyFrom.atStartOfDay(BANGKOK).toInstant()))
+            .addValue("promoted", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)
+            .addValue("confirmed", TicketEventKind.CUSTOMER_CONFIRMED);
+        return " AND " + TicketRepository.orderConfirmedAtExpr("t") + " >= :moneyFrom";
     }
 
     /**
@@ -43,7 +78,7 @@ public class CashRepository {
      */
     public List<ExpectedWeekRow> expectedByWeek(Long ownerId, LocalDate from, LocalDate to) {
         MapSqlParameterSource p = new MapSqlParameterSource().addValue("from", from).addValue("to", to);
-        String owner = ownerPredicate(ownerId, p);
+        String owner = ownerPredicate(ownerId, p) + moneyPredicate(p);
         return jdbc.query("""
             SELECT t.created_by AS owner_id, ep.expected_week,
                    COALESCE(SUM(ep.amount), 0) AS forecast,
@@ -75,7 +110,7 @@ public class CashRepository {
         MapSqlParameterSource p = new MapSqlParameterSource()
             .addValue("fromTs", Timestamp.from(from.atStartOfDay(BANGKOK).toInstant()))
             .addValue("toTs", Timestamp.from(toInclusive.plusDays(1).atStartOfDay(BANGKOK).toInstant()));
-        String owner = ownerPredicate(ownerId, p);
+        String owner = ownerPredicate(ownerId, p) + moneyPredicate(p);
         return jdbc.query("""
             SELECT t.created_by AS owner_id, (r.received_at AT TIME ZONE 'Asia/Bangkok')::date AS day,
                    SUM(CASE WHEN r.kind = 'ADJUSTMENT' THEN -r.amount ELSE r.amount END) AS received

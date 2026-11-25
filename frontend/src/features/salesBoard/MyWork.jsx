@@ -82,7 +82,7 @@ const BOARD_ID = 'my-work-board';
  * design a-mywork's phone block) instead of the stacked page; "ดูหน้าเต็ม" switches to the stacked page, whose sticky
  * bottom บันทึกเข้าพบ then takes over. Desktop and tablet render exactly as before. Every dialog stays owned here.
  */
-export function MyWork({ subtitle, before = null, user, showToast = () => {} }) {
+export function MyWork({ subtitle, before = null, switcher = null, user, showToast = () => {} }) {
   const navigate = useNavigate();
   const isPhone = useIsMobile();
   const [fullOnPhone, setFullOnPhoneState] = useState(readFullOnPhone);
@@ -276,6 +276,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
         subtitle={subtitle ?? formatThaiDate(bangkokTodayIso())}
         actions={(
           <>
+            {switcher}
             <Button type="button" variant="secondary" onClick={() => navigate('/tickets')}>ดูงานทั้งหมด</Button>
             <Button type="button" variant="secondary" onClick={() => setCreating(true)}>
               <Icon name="plus" size={16} />

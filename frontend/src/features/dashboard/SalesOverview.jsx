@@ -15,6 +15,7 @@ import { dealAmountLabel, defaultRange, isOrderedIn, sumAmount } from '../ticket
 import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../tickets/salesActions.js';
 import { offRoutePartiesFor, stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 import { Figure, failed } from './dashboardParts.jsx';
+import { InsightLanding } from './InsightSwitch.jsx';
 
 // useQueries' `combine`: each query's rows. Module-level so react-query keeps the combined array
 // stable while the data is unchanged, and the worklist memo below holds.
@@ -82,7 +83,11 @@ function WorklistRow({ deal, action, followUp, muted, onClick }) {
  * Own-scoped end to end: api.tickets.list / api.pricingRequests.queue / api.salesBoard.myWork scope to the rep
  * server-side; this component adds no client-side ownership filtering beyond `lifecycle === 'ACTIVE'`.
  */
-export function SalesOverview({ user, employee, showToast }) {
+export function SalesOverview(props) {
+  return <InsightLanding title="งานของฉัน" user={props.user} insight={false} renderToday={(switcher) => <SalesToday {...props} switcher={switcher} />} />;
+}
+
+function SalesToday({ user, employee, showToast, switcher }) {
   const navigate = useNavigate();
   const todayIso = bangkokTodayIso();
   const payrollMonth = bangkokMonthStartIso();
@@ -203,6 +208,7 @@ export function SalesOverview({ user, employee, showToast }) {
   return (
     <MyWork
       user={user}
+      switcher={switcher}
       showToast={showToast}
       subtitle={`สวัสดี, ${greetingName(greetName)} · ${formatThaiDate(todayIso)}`}
       before={(
