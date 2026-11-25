@@ -5,6 +5,7 @@ import java.time.Clock;
 import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
@@ -87,7 +88,7 @@ public class WeeklyReportService {
             : List.of();
         return new WeeklyReport(monday, monday.plusDays(6), cash.moneyFrom(), subject == null ? "TEAM" : "OWN",
             ledger(subject, month, currentMonday, today), orders.rows(),
-            reps(subject, monday, today, orders), todayEntries);
+            reps(subject, monday, LocalDateTime.now(clock.withZone(CashRepository.BANGKOK)), orders), todayEntries);
     }
 
     // ── ledger (D5) ──────────────────────────────────────────────────────────────
@@ -192,7 +193,8 @@ public class WeeklyReportService {
 
     // ── reps (D7) ────────────────────────────────────────────────────────────────
 
-    private List<WeeklyRepRow> reps(Long owner, LocalDate monday, LocalDate today, Orders orders) {
+    private List<WeeklyRepRow> reps(Long owner, LocalDate monday, LocalDateTime now, Orders orders) {
+        LocalDate today = now.toLocalDate();
         LocalDate sunday = monday.plusDays(6);
         Instant from = monday.atStartOfDay(CashRepository.BANGKOK).toInstant();
         Instant to = sunday.plusDays(1).atStartOfDay(CashRepository.BANGKOK).toInstant();
@@ -230,7 +232,10 @@ public class WeeklyReportService {
                 boolean finished = VisitDtos.DONE.equals(v.status());
                 done += finished ? 1 : 0;
                 planned += cancelled ? 0 : 1;
-                if (!v.plannedDate().isAfter(today)) {
+                // Due = needs a result: an earlier day, or today at a time that has passed (no time = not due yet).
+                boolean overdue = v.plannedDate().isBefore(today)
+                    || (v.plannedDate().isEqual(today) && v.plannedTime() != null && !v.plannedTime().isAfter(now.toLocalTime()));
+                if (overdue) {
                     due++;
                     withResult += finished || cancelled ? 1 : 0;
                 }
@@ -277,6 +282,7 @@ public class WeeklyReportService {
                 case "CALL" -> "โทรศัพท์";
                 case "MEETING" -> "พบลูกค้า";
                 case "SITE_VISIT" -> "ดูหน้างาน";
+                case "SAMPLE_SENT" -> "ส่งตัวอย่าง";
                 case "EMAIL" -> "อีเมล";
                 case "MESSAGE" -> "ส่งข้อความ";
                 case "QUOTATION_FOLLOWUP" -> "ติดตามใบเสนอราคา";

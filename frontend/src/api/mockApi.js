@@ -10748,7 +10748,7 @@ function mockWeeklyReport(user, { week, ownerId }) {
     .filter((t) => dealStageIndex(t.salesStage) >= orderFrom && (t.lifecycle ?? 'ACTIVE') === 'ACTIVE'
       && (t.salesStage !== 'CLOSED_PAID' || receiptsForTicket(t.id).some((r) => mockBangkokDateOf(r.receivedAt).startsWith(month))))
     .map((t) => {
-      const value = moneyValue(derivePaymentFields(t).amountPayable * 1.07);
+      const value = moneyValue(derivePaymentFields(t).amountPayable);
       const received = sumPaid(t.id);
       const next = mockExpectedPaymentsOf(t.id).find((p) => p.status === 'OPEN');
       const nextPayment = next ? { id: next.id, kind: next.kind, amount: round2(next.amount - (next.receivedAmount ?? 0)), week: next.expectedWeek } : null;
@@ -10767,7 +10767,9 @@ function mockWeeklyReport(user, { week, ownerId }) {
       const mine = db.tickets.filter((t) => t.createdById === u.id);
       const orders = allOrders.filter((o) => o.ownerId === u.id);
       const visits = mockVisits.filter((v) => v.ownerId === u.id && inWeek(v.plannedDate));
-      const due = visits.filter((v) => v.plannedDate <= today);
+      // WeeklyReportService: due = an earlier day, or today at a set time that has passed.
+      const nowHm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+      const due = visits.filter((v) => v.plannedDate < today || (v.plannedDate === today && v.plannedTime && String(v.plannedTime).slice(0, 5) <= nowHm));
       const entries = mockDealActivities.filter((a) => a.createdById === u.id);
       return {
         ownerId: u.id, name: u.name, newDeals: mine.filter((t) => inWeek(t.createdAt)).length, stageMoves: 0, quotationsIssued: 0,

@@ -82,6 +82,18 @@ export function isOverdue(visit, todayIso) {
   return visit.status === 'PLANNED' && visit.plannedDate < todayIso;
 }
 
+/** "HH:mm" on the Bangkok clock. */
+export function bangkokNowHm(date = new Date()) {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date);
+}
+
+/** A PLANNED visit that needs a result now: an earlier day, or today at a set time that has passed. Mirrors WeeklyReportService. */
+export function visitIsDue(visit, todayIso, nowHm = bangkokNowHm()) {
+  if (visit.status !== 'PLANNED') return false;
+  if (visit.plannedDate < todayIso) return true;
+  return visit.plannedDate === todayIso && Boolean(visit.plannedTime) && timeLabel(visit.plannedTime) <= nowHm;
+}
+
 /** DONE / PLANNED / CANCELLED, or OVERDUE for a PLANNED visit dated before today. */
 export function displayStatus(visit, todayIso) {
   return isOverdue(visit, todayIso) ? 'OVERDUE' : visit.status;

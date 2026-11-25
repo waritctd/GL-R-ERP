@@ -5,7 +5,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { findStage } from '../tickets/stageCatalog.js';
 import { addDaysIso, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
-import { isoWeekdayIndex } from '../salesBoard/visitWeek.js';
+import { isoWeekdayIndex, timeLabel, visitIsDue } from '../salesBoard/visitWeek.js';
 import { quarterLabel } from '../salesBoard/boardFormat.js';
 
 const DAY_NAMES = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
@@ -122,7 +122,7 @@ function DueCell({ order }) {
     );
   }
   if (order.outstanding <= 0) return <span className="text-text-muted">รับชำระครบ</span>;
-  return <Link to={`/tickets/${order.ticketId}?tab=money`} className="font-bold text-link">ระบุวันที่</Link>;
+  return <Link to={`/tickets/${order.ticketId}?tab=money`} className={buttonVariants({ variant: 'secondary', size: 'sm' })}>ระบุวันที่</Link>;
 }
 
 /** ยอดที่สั่งซื้อแล้ว: one row per order ticket; `showOwner` adds the rep under the project (team view). */
@@ -202,7 +202,7 @@ export function ExpectedTable({ rows, catalog }) {
   );
 }
 
-/** Visits grouped by day; a past PLANNED visit offers เข้าพบแล้ว. */
+/** Visits grouped by day; a due PLANNED visit offers เข้าพบแล้ว when `onDone` is given (not for a manager). */
 export function VisitsByDay({ visits, weekStart, todayIso, onDone, busyId, showOwner = false }) {
   const days = Array.from({ length: 7 }, (_, i) => addDaysIso(weekStart, i))
     .filter((iso) => isoWeekdayIndex(iso) < 5 || visits.some((v) => v.plannedDate === iso && v.status !== 'CANCELLED'));
@@ -223,8 +223,8 @@ export function VisitsByDay({ visits, weekStart, todayIso, onDone, busyId, showO
                 <Icon name={v.status === 'DONE' ? 'check' : 'calendar'} size={16} className={v.status === 'DONE' ? 'mt-0.5 text-success' : 'mt-0.5 text-text-faint'} />
                 <span className="grid min-w-0 flex-1 gap-0.5">
                   <span className="font-bold">{v.contactName}</span>
-                  <small className="text-xs text-text-muted">{[v.plannedTime, v.ticketTitle, showOwner ? v.ownerName : null].filter(Boolean).join(' · ')}</small>
-                  {v.status === 'PLANNED' && v.plannedDate <= todayIso ? (
+                  <small className="text-xs text-text-muted">{[timeLabel(v.plannedTime), v.ticketTitle, showOwner ? v.ownerName : null].filter(Boolean).join(' · ')}</small>
+                  {onDone && visitIsDue(v, todayIso) ? (
                     <Button variant="secondary" size="sm" className="mt-1 justify-self-start mobile:min-h-[44px]" disabled={busyId === v.id} onClick={() => onDone(v.id)}>เข้าพบแล้ว</Button>
                   ) : null}
                 </span>

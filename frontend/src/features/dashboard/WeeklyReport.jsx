@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -8,8 +7,8 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { addDaysIso, bangkokTodayIso, formatMoney, formatThaiDate } from '../../utils/format.js';
-import { weekStartIso } from '../salesBoard/visitWeek.js';
+import { addDaysIso, bangkokTodayIso, formatMoney, formatThaiDate, formatThaiMonthYearFromMonthInputValue } from '../../utils/format.js';
+import { timeLabel, visitIsDue, weekStartIso } from '../salesBoard/visitWeek.js';
 import { isOrderedIn } from '../tickets/movementRange.js';
 import { stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 import { WeeklyLedger } from './WeeklyLedger.jsx';
@@ -70,7 +69,7 @@ export function WeeklyReport({ user }) {
   const repId = isTeamRole ? Number(params.get('rep')) || null : null;
   const todayIso = bangkokTodayIso();
   const currentWeek = weekStartIso(todayIso);
-  const weeks = useMemo(() => monthWeeks(currentWeek), [currentWeek]);
+  const weeks = monthWeeks(currentWeek);
   const requested = params.get('week');
   const weekStart = weeks.includes(requested) ? requested : currentWeek;
   const weekEnd = addDaysIso(weekStart, 6);
@@ -120,7 +119,7 @@ export function WeeklyReport({ user }) {
   const team = report.scope === 'TEAM';
   const visits = (visitsQuery.data ?? []).filter((v) => repId == null || v.ownerId === repId);
   const orders = report.orders;
-  const pendingVisits = visits.filter((v) => v.status === 'PLANNED' && v.plannedDate <= todayIso);
+  const pendingVisits = visits.filter((v) => visitIsDue(v, todayIso));
 
   // รายการที่ควรติดตาม: only what has a button that opens the fix.
   const undated = orders.filter((o) => !o.nextPayment && o.outstanding > 0);
@@ -147,11 +146,21 @@ export function WeeklyReport({ user }) {
       to: hrefFor(r.ownerId), action: 'เปิดรายงาน',
     }));
   }
-  pendingVisits.forEach((v) => items.push({
-    key: `visit-${v.id}`, count: 1, title: 'นัดเข้าพบที่รอบันทึกผล',
-    detail: [formatThaiDate(v.plannedDate), v.contactName, v.ticketTitle, team ? v.ownerName : null].filter(Boolean).join(' · '),
-    onClick: () => markDone.mutate(v.id), busy: markDone.isPending, action: 'เข้าพบแล้ว',
-  }));
+  if (team) {
+    // A manager does not tick a rep's visit: one line per rep, opening that rep's report.
+    const byRep = new Map();
+    pendingVisits.forEach((v) => byRep.set(v.ownerId, [...(byRep.get(v.ownerId) ?? []), v]));
+    byRep.forEach((list, ownerId) => items.push({
+      key: `visits-${ownerId}`, count: list.length, title: `นัดเข้าพบที่รอบันทึกผล · ${list[0].ownerName} ${list.length} นัด`,
+      detail: 'ผู้แทนขายยังไม่บันทึกผลการเข้าพบ', to: hrefFor(ownerId), action: 'ดูรายงาน',
+    }));
+  } else {
+    pendingVisits.forEach((v) => items.push({
+      key: `visit-${v.id}`, count: 1, title: 'นัดเข้าพบที่รอบันทึกผล',
+      detail: [formatThaiDate(v.plannedDate), timeLabel(v.plannedTime), v.contactName, v.ticketTitle].filter(Boolean).join(' · '),
+      onClick: () => markDone.mutate(v.id), busy: markDone.isPending, action: 'เข้าพบแล้ว',
+    }));
+  }
 
   // ยอดคาดหวัง: pre-order board rows (already folded per project), biggest first.
   const catalogReady = stageIndexIn(catalog, 'ORDER_RECEIVED') >= 0;
@@ -181,7 +190,7 @@ export function WeeklyReport({ user }) {
       </header>
 
       <div className="grid grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] items-start gap-[18px] nav-drawer:grid-cols-1">
-        <Panel title={team ? 'เงินของทีมเดือนนี้' : 'เงินเดือนนี้'} actions={<span className="text-xs text-text-muted">ยอดเงินทั้งหมดรวม VAT</span>}>
+        <Panel title={`${team ? 'ยอดรับเงินของทีม' : 'ยอดรับเงิน'} ${formatThaiMonthYearFromMonthInputValue(report.ledger.month)}`} actions={<span className="text-xs text-text-muted">ยอดเงินทั้งหมดรวม VAT</span>}>
           <WeeklyLedger ledger={report.ledger} moneyFrom={report.moneyFrom} formatDate={formatThaiDate} />
         </Panel>
         <div className="grid gap-[18px]">
@@ -245,7 +254,7 @@ export function WeeklyReport({ user }) {
         ) : visitsQuery.isLoading ? (
           <Skeleton height={100} />
         ) : (
-          <VisitsByDay visits={visits} weekStart={weekStart} todayIso={todayIso} onDone={(id) => markDone.mutate(id)} busyId={markDone.isPending ? markDone.variables : null} showOwner={team} />
+          <VisitsByDay visits={visits} weekStart={weekStart} todayIso={todayIso} onDone={team ? null : (id) => markDone.mutate(id)} busyId={markDone.isPending ? markDone.variables : null} showOwner={team} />
         )}
       </Panel>
     </div>

@@ -63,16 +63,27 @@ const visits = [
   visit({ id: 5, contactName: 'บ้านสวน ดีไซน์', plannedDate: otherDay.iso }),
 ];
 
+// MyWork hosts the flows; its page body (SalesOverview) is replaced by one button per opener.
 function renderMyWork(props = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter><MyWork showToast={vi.fn()} {...props} /></MemoryRouter>
+      <MemoryRouter>
+        <MyWork showToast={vi.fn()} {...props}>
+          {(ctx) => (
+            <>
+              <button type="button" data-testid="log-visit-header" onClick={ctx.openLog}>บันทึกเข้าพบ</button>
+              <button type="button" data-testid="visit-2" onClick={() => ctx.tickVisit(visits[1])}>เข้าพบแล้ว</button>
+              <button type="button" data-testid="move-2" onClick={() => ctx.reschedule(visits[1])}>เลื่อนนัด</button>
+            </>
+          )}
+        </MyWork>
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
-describe('MyWork — นัดเข้าพบสัปดาห์นี้', () => {
+describe('MyWork — visit flows', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.salesBoard.myWork.mockResolvedValue({
@@ -86,9 +97,7 @@ describe('MyWork — นัดเข้าพบสัปดาห์นี้',
 
   it('ticking a planned visit asks for an optional outcome and note, then marks it done', async () => {
     renderMyWork();
-    const row = await screen.findByTestId('visit-2');
-
-    fireEvent.click(within(row).getByRole('button', { name: 'เข้าพบแล้ว: Linea Interior' }));
+    fireEvent.click(await screen.findByTestId('visit-2'));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'เข้าพบแล้ว' })).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('radio', { name: 'ส่งตัวอย่าง' }));
@@ -103,8 +112,7 @@ describe('MyWork — นัดเข้าพบสัปดาห์นี้',
   // Slice 6.4: ตามต่อ. Unused, the requests are byte-for-byte what they were (no nextFollowUpAt key at all).
   it('ticking a visit on a deal with ตามต่อ sends the deal\'s next follow-up date with the tick', async () => {
     renderMyWork();
-    const row = await screen.findByTestId('visit-2');
-    fireEvent.click(within(row).getByRole('button', { name: 'เข้าพบแล้ว: Linea Interior' }));
+    fireEvent.click(await screen.findByTestId('visit-2'));
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(within(dialog).getByRole('radiogroup', { name: 'ตามต่อ' })).getByRole('radio', { name: '1 สัปดาห์' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
@@ -134,5 +142,18 @@ describe('MyWork — นัดเข้าพบสัปดาห์นี้',
     expect(api.salesVisits.create.mock.calls[0][0]).toStrictEqual({
       contactName: 'Walk-in', ticketId: 31, plannedDate: today, note: undefined, done: true,
     });
+  });
+
+  it('เลื่อนนัด saves the new date first, then cancels the old visit', async () => {
+    renderMyWork();
+    fireEvent.click(await screen.findByTestId('move-2'));
+    const dialog = await screen.findByRole('dialog', { name: 'เลื่อนนัด' });
+    expect((within(dialog).getByLabelText(/พบใคร/)).value).toBe('Linea Interior');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกนัดใหม่' }));
+
+    await waitFor(() => expect(api.salesVisits.cancel).toHaveBeenCalledTimes(1));
+    expect(api.salesVisits.create.mock.calls[0][0]).toMatchObject({ contactName: 'Linea Interior', ticketId: 31, plannedTime: '14:00' });
+    expect(api.salesVisits.cancel.mock.calls[0][0]).toBe(2);
+    expect(api.salesVisits.create.mock.invocationCallOrder[0]).toBeLessThan(api.salesVisits.cancel.mock.invocationCallOrder[0]);
   });
 });

@@ -4,7 +4,7 @@ import { Icon } from './Icon.jsx';
 /** Shared tab primitive for the workspace pages (authored for the deal workspace IA rebuild — see
  * docs/ui-repair/02-information-architecture/). A tab's own content decides what to show when there's nothing
  * there yet (its own empty state), it is never dimmed at the tab-bar level. */
-export function Tabs({ items, value, onChange, ariaLabel, idPrefix, onSurface = false }) {
+export function Tabs({ items, value, onChange, ariaLabel, idPrefix, onSurface = false, tabClassName = '' }) {
   const listRef = useRef(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -146,6 +146,7 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix, onSurface = 
                 'appearance-none bg-transparent border-x-0 border-t-0 border-solid',
                 'flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm transition-colors',
                 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary',
+                tabClassName,
                 selected
                   ? 'border-primary font-extrabold text-primary'
                   : 'border-transparent font-bold text-text-muted hover:border-border hover:text-text-secondary',

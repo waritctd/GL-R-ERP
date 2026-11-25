@@ -34,7 +34,7 @@ function useLandingView(allowed) {
 export function InsightLanding({ title, user, renderToday, insight = true }) {
   const items = insight ? [TODAY, REPORT, INSIGHT] : [TODAY, REPORT];
   const [view, setView] = useLandingView(items.map((item) => item.id));
-  const switcher = <Tabs items={items} value={view} onChange={setView} ariaLabel="มุมมองหน้าแรก" idPrefix="landing-view" onSurface />;
+  const switcher = <Tabs items={items} value={view} onChange={setView} ariaLabel="มุมมองหน้าแรก" idPrefix="landing-view" onSurface tabClassName="mobile:min-h-11" />;
   const panelProps = { role: 'tabpanel', id: `landing-view-panel-${view}`, 'aria-labelledby': `landing-view-tab-${view}` };
   if (view === 'today') return renderToday(switcher, panelProps);
   return (

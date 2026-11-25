@@ -128,17 +128,17 @@ function PhoneWeeks({ ledger }) {
   const label = `${weekShort(chosen.weekStart, month)} ${formatThaiMonthYearLongFromMonthInputValue(month).split(' ')[0]}`;
   return (
     <div className="hidden gap-3 mobile:grid">
-      <div role="group" aria-label="เลือกสัปดาห์" className="flex gap-2 overflow-x-auto pb-1">
+      <div role="group" aria-label="เลือกสัปดาห์" className="grid auto-cols-fr grid-flow-col gap-1.5">
         {weeks.map((w) => (
           <button
             key={w.weekStart}
             type="button"
             aria-pressed={w === chosen}
             onClick={() => setPicked(w.weekStart)}
-            className={`grid min-h-11 min-w-[84px] shrink-0 cursor-pointer content-center rounded-md border px-3 py-1 text-center text-sm font-bold ${w === chosen ? 'border-primary bg-primary-bg text-text' : 'border-border bg-surface text-text-secondary'}`}
+            className={`grid min-h-11 min-w-0 cursor-pointer content-center rounded-md border px-0.5 py-1 text-center text-xs font-bold ${w === chosen ? 'border-primary bg-primary-bg text-text' : 'border-border bg-surface text-text-secondary'}`}
           >
             {weekShort(w.weekStart, month)}
-            <small className="text-xs font-normal tabular-nums text-text-muted">{cell(weekTotal(w))}</small>
+            <small className="truncate text-2xs font-normal tabular-nums text-text-muted">{cell(weekTotal(w))}</small>
           </button>
         ))}
       </div>
