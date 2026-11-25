@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '@playwright/test';
@@ -13,14 +12,10 @@ import { cancelDeal, createDeal } from './helpers/sales.js';
 //   GET /api/sales/team-overview  sales_manager, ceo
 //   PUT /api/tickets/{id}/tracking   expectedQuarter is @Pattern ^$|^\d{4}-Q[1-4]$
 //
-// UI: งานของฉัน (MyWork → FollowUpList + DealBoard) is the sales landing; ภาพรวมทีมขาย (TeamOverview) is the
-// sales_manager / ceo landing.
+// UI: งานวันนี้ (SalesOverview, hosting MyWork's call dialog) is the sales landing; ภาพรวมทีมขาย (TeamOverview) is
+// the ceo landing and the sales_manager's งานวันนี้ is ManagerOverview (spec 0003).
 //
-// Deterministic by construction: no assertion depends on how many deals the seed holds. The one test that needs a
-// "quiet" deal mints its own and BACKDATES it with psql (QuietRule: quiet = last touched > app.sales.quiet-days ago,
-// default 14; no API can age a deal, and shrinking the window to 0 would make a deal permanently quiet, so a call
-// could never clear it). If psql is unreachable that test skips with a stated reason. psql is found via E2E_PSQL
-// (default `psql`); connection follows scripts/start-e2e-backend.mjs (PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD).
+// Deterministic by construction: no assertion depends on how many deals the seed holds.
 //
 // Every deal a test creates is cancelled in afterAll. Set E2E_SHOT_DIR to also save screenshots.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,25 +30,6 @@ async function shot(page, name) {
   await page.screenshot({ path: join(SHOT_DIR, `${name}.png`), fullPage: true });
 }
 
-/** Ages a deal's created_at and its events/activities so QuietRule sees it as untouched for 30 days.
- * Returns an error string, or null on success. Touches only the given ticket. */
-function backdateDeal(ticketId) {
-  const sql = `UPDATE sales.ticket SET created_at = now() - interval '30 days' WHERE ticket_id = ${Number(ticketId)};`
-    + ` UPDATE sales.ticket_event SET created_at = now() - interval '30 days' WHERE ticket_id = ${Number(ticketId)};`
-    // Creation also writes a "สร้างดีล" deal_activity row, which QuietRule counts as a touch.
-    + ` UPDATE sales.deal_activity SET created_at = now() - interval '30 days' WHERE ticket_id = ${Number(ticketId)};`;
-  const result = spawnSync(process.env.E2E_PSQL || 'psql', [
-    '-h', process.env.PGHOST || '127.0.0.1',
-    '-p', process.env.PGPORT || '5432',
-    '-U', process.env.PGUSER || 'postgres',
-    '-d', process.env.PGDATABASE || 'hris',
-    '-v', 'ON_ERROR_STOP=1', '-c', sql,
-  ], { env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'postgres' }, encoding: 'utf8' });
-  if (result.error) return `psql not runnable (${result.error.code}) — set E2E_PSQL`;
-  if (result.status !== 0) return `psql failed: ${result.stderr}`;
-  return null;
-}
-
 test.describe('sales board — happy paths @sales-board', () => {
   let sessions;
   const created = [];
@@ -66,45 +42,47 @@ test.describe('sales board — happy paths @sales-board', () => {
     await disposeSessions(sessions);
   });
 
-  test('โทรแล้ว with an outcome logs a CALL and the deal leaves ควรตามต่อ', async ({ page }) => {
-    // Precondition: a fresh deal owned by sales (API), aged past the quiet window (psql — no API can do this).
-    const deal = await createDeal(sessions, { caseName: 'board quiet-call', entryChannel: 'DESIGNER_LED' });
+  test('โทรแล้ว with an outcome logs a CALL on the chosen deal', async ({ page }) => {
+    // Precondition: a fresh deal owned by sales (API); the header's บันทึกการโทร lists every open deal of the rep.
+    const deal = await createDeal(sessions, { caseName: 'board call', entryChannel: 'DESIGNER_LED' });
     created.push(deal.id);
-    const backdateError = backdateDeal(deal.id);
-    test.skip(backdateError !== null, `cannot age the deal: ${backdateError}`);
-    const mine = await (await sessions.sales.get('/api/sales/my-work')).json();
-    // followUp is capped at 5, ranked by days x value; a zero-value deal can be crowded out by older rows, so
-    // work the deal the server actually lists first if ours is not there (still a real, quiet, owned deal).
-    // Since the lifecycle dialogs (V220) followUp also LEADS with any returning paused deals, which offer only
-    // ดำเนินการต่อ, not โทรแล้ว — so the fallback is the first QUIET row, never a returning one.
-    const target = mine.followUp.find((d) => d.ticketId === deal.id) ?? mine.followUp.find((d) => !d.returning);
-    expect(target, `followUp is empty after backdating deal #${deal.id} (quietDays=${mine.quietDays})`).toBeTruthy();
 
     await loginAs(page, 'sales');
-    const row = page.getByTestId(`follow-up-${target.ticketId}`);
-    await expect(row).toBeVisible();
-    await shot(page, '03-follow-up-before-call');
-
-    await row.getByRole('button', { name: 'โทรแล้ว' }).click();
-    const dialog = page.getByRole('dialog');
+    await page.getByRole('button', { name: 'บันทึกการโทร' }).first().click();
+    const picker = page.getByRole('dialog', { name: 'โทรหางานไหน' });
+    await expect(picker).toBeVisible();
+    await picker.getByRole('button', { name: /board call/ }).click();
+    const dialog = page.getByRole('dialog', { name: 'โทรแล้ว' });
     await expect(dialog).toBeVisible();
+    await shot(page, '03-call-dialog');
     // An outcome is mandatory: the save button stays disabled until one is picked.
     await expect(dialog.getByRole('button', { name: 'บันทึก' })).toBeDisabled();
     await dialog.getByRole('radio', { name: 'คุยแล้ว ยังสนใจ' }).click();
     await dialog.getByRole('button', { name: 'บันทึก' }).click();
+    await expect(dialog).toHaveCount(0);
 
-    await expect(page.getByTestId(`follow-up-${target.ticketId}`)).toHaveCount(0);
-
-    // Server truth, not just the DOM: the activity row exists with the outcome as its note, and the deal is no
-    // longer in followUp.
-    const activities = await (await sessions.sales.get(`/api/tickets/${target.ticketId}/activities`)).json();
+    // Server truth, not just the DOM: the activity row exists with the outcome as its note.
+    const activities = await (await sessions.sales.get(`/api/tickets/${deal.id}/activities`)).json();
     expect(activities.items.some((a) => a.kind === 'CALL' && String(a.note).includes('คุยแล้ว ยังสนใจ'))).toBe(true);
-    const after = await (await sessions.sales.get('/api/sales/my-work')).json();
-    expect(after.followUp.some((d) => d.ticketId === target.ticketId)).toBe(false);
   });
 });
 
-for (const role of ['sales_manager', 'ceo']) {
+test.describe('manager งานวันนี้ @sales-board', () => {
+  test('sales_manager sees งานวันนี้ with the team report and a per-rep table', async ({ page }) => {
+    await loginAs(page, 'sales_manager');
+    await expect(page.getByRole('heading', { name: 'งานวันนี้', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'รายงานสัปดาห์ของทีม' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'รายการที่รอคุณดำเนินการ' })).toBeVisible();
+    const reps = page.getByRole('region', { name: 'รายบุคคล' });
+    for (const header of ['พนักงานขาย', 'ข้อมูลรายงานครบถ้วน', 'บันทึกวันนี้', 'เลื่อนขั้นสัปดาห์นี้', 'ใบเสนอราคา', 'เข้าพบ', 'รอคุณอนุมัติ']) {
+      await expect(reps.getByText(header, { exact: true }).first()).toBeVisible();
+    }
+    await expect(page.getByText('โหลดไม่สำเร็จ')).toHaveCount(0);
+    await shot(page, '04-manager-today');
+  });
+});
+
+for (const role of ['ceo']) {
   test.describe(`team overview as ${role} @sales-board`, () => {
     test(`${role} sees ภาพรวมทีมขาย with a per-rep table`, async ({ page }) => {
       // Precondition: at least one open deal exists so the table has a row (a manager with zero deals would
@@ -125,7 +103,6 @@ for (const role of ['sales_manager', 'ceo']) {
         }
         expect(await table.locator('tbody tr').count()).toBeGreaterThan(0);
         await expect(page.getByText('โหลดไม่สำเร็จ')).toHaveCount(0);
-        if (role === 'sales_manager') await shot(page, '04-manager-team-overview');
         if (role === 'ceo') await shot(page, '05-ceo-team-overview');
       } finally {
         if (deal) await cancelDeal(sessions, deal.id);

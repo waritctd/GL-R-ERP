@@ -27,7 +27,7 @@ function Measure({ label, done, total, unit }) {
  * รายงานสัปดาห์ของคุณ (board TD1): how much of the report's data is complete — payment dates of ordered jobs and visit
  * results due — a segmented bar of both, and what the rep entered this week. `rep` is the weekly report's row for the rep.
  */
-export function ReportBlock({ rep, nextMonday }) {
+export function ReportBlock({ rep, nextMonday, team = false }) {
   const total = rep.ordersOpen + rep.visitsDue;
   const done = rep.ordersWithDate + rep.visitsDueWithResult;
   const segments = [
@@ -51,12 +51,12 @@ export function ReportBlock({ rep, nextMonday }) {
           </div>
         ) : null}
         {segments.map((s) => <Measure key={s.label} {...s} />)}
-        {total > done ? (
+        {total > done && !team ? (
           <p className="m-0 text-xs text-text-muted">อีก {total - done} รายการอัปเดตได้จากรายการด้านล่าง</p>
         ) : null}
       </div>
       <div className="grid content-start gap-3">
-        <p className="m-0 text-sm font-bold">สัปดาห์นี้คุณบันทึกแล้ว</p>
+        <p className="m-0 text-sm font-bold">{team ? 'สัปดาห์นี้ทีมบันทึกแล้ว' : 'สัปดาห์นี้คุณบันทึกแล้ว'}</p>
         <dl className="m-0 grid grid-cols-2 gap-x-4 gap-y-2">
           {counts.map(([label, n, unit]) => (
             <div key={label} className="grid gap-0.5">
@@ -65,14 +65,14 @@ export function ReportBlock({ rep, nextMonday }) {
             </div>
           ))}
         </dl>
-        <p className="m-0 text-xs text-text-muted">ระบบจะสรุปรายงานสัปดาห์นี้ให้แก่ผู้จัดการฝ่ายขาย {nextMonday} 06:00 น.</p>
+        <p className="m-0 text-xs text-text-muted">ระบบจะสรุปรายงานสัปดาห์นี้{team ? '' : 'ให้แก่ผู้จัดการฝ่ายขาย'} {nextMonday} 06:00 น.</p>
       </div>
     </div>
   );
 }
 
 /** One worklist row: project link, code · reason, amount and the button that opens the action. */
-function Row({ row, busy, onAct }) {
+export function Row({ row, busy, onAct }) {
   const name = row.to ? <Link to={row.to} className={`${NAME} hover:underline`}>{row.name}</Link> : <span className={NAME}>{row.name}</span>;
   return (
     <li data-testid={`today-row-${row.key}`} className="flex items-center gap-3 py-3 mobile:flex-wrap">
