@@ -10,6 +10,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { addDaysIso, bangkokTodayIso, formatMoney, greetingName } from '../../utils/format.js';
+import { defaultRange } from '../tickets/movementRange.js';
 import { PipelineImportDialog } from '../salesBoard/PipelineImportDialog.jsx';
 import { dayLineLabel, timeLabel, weekStartIso } from '../salesBoard/visitWeek.js';
 import { Figure, failed, moneySum } from './dashboardParts.jsx';
@@ -24,6 +25,10 @@ import { dayMonth, weekRange } from './weeklyReportParts.jsx';
  * what waits on CEO / import, and one row per rep opening that rep's report. Visits are read-only; every action row has
  * a button that opens the existing screen. Money comes from the weekly report, never re-derived here.
  */
+
+// Won once it reaches the terminal pipeline stage; lost once its lifecycle/legacy status marks it lost or cancelled.
+const isDealWon = (t) => t.salesStage === 'CLOSED_PAID';
+const isDealLost = (t) => t.lifecycle === 'CLOSED_LOST' || t.lifecycle === 'CANCELLED' || t.status === 'cancelled';
 
 const MAX_COMMISSIONS = 5;
 const MANAGER_TITLE = 'งานวันนี้';
@@ -153,6 +158,11 @@ function ManagerToday({ user, employee, switcher, panelProps }) {
   const commissionsQuery = useQuery({
     queryKey: queryKeys.commissionsPendingApproval(),
     queryFn: () => api.commissions.pendingApproval().then((r) => r.commissions ?? []),
+  });
+  const teamRange = useMemo(() => defaultRange(), []);
+  const ticketsQuery = useQuery({
+    queryKey: queryKeys.ticketListByRange(teamRange.from, teamRange.to, 'project'),
+    queryFn: () => api.tickets.list({ movementFrom: teamRange.from, movementTo: teamRange.to, fold: 'project' }).then((r) => r.tickets ?? []),
   });
   const visitsQuery = useQuery({
     queryKey: queryKeys.salesVisitsTeam(todayIso, todayIso),
@@ -331,6 +341,24 @@ function ManagerToday({ user, employee, switcher, panelProps }) {
               </p>
             </>
           )}
+        </Panel>
+
+        <Panel title="อัตราปิดงาน">
+          {failed(ticketsQuery) ? (
+            <Failed />
+          ) : !ticketsQuery.data ? (
+            <Skeleton height={28} />
+          ) : (() => {
+            const won = ticketsQuery.data.filter(isDealWon).length;
+            const lost = ticketsQuery.data.filter(isDealLost).length;
+            const rate = won + lost > 0 ? (won / (won + lost)) * 100 : null;
+            return (
+              <p className="m-0 flex flex-wrap items-baseline gap-x-3 text-sm text-text-muted">
+                <strong className="text-2xl font-extrabold tabular-nums text-text">{rate == null ? '—' : `${rate.toFixed(0)}%`}</strong>
+                {rate == null ? null : <span>ปิดสำเร็จ {won} · เสีย {lost}</span>}
+              </p>
+            );
+          })()}
         </Panel>
       </PageStack>
     </PageStack>

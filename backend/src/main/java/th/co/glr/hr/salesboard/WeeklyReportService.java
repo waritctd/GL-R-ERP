@@ -232,8 +232,8 @@ public class WeeklyReportService {
                 boolean finished = VisitDtos.DONE.equals(v.status());
                 done += finished ? 1 : 0;
                 planned += cancelled ? 0 : 1;
-                // Due = needs a result: an earlier day, or today at a time that has passed (no time = not due yet).
-                boolean overdue = v.plannedDate().isBefore(today)
+                // Due = needs a result: already DONE/CANCELLED, an earlier day, or today at a time that has passed (no time = not due yet).
+                boolean overdue = finished || cancelled || v.plannedDate().isBefore(today)
                     || (v.plannedDate().isEqual(today) && v.plannedTime() != null && !v.plannedTime().isAfter(now.toLocalTime()));
                 if (overdue) {
                     due++;

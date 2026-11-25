@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ManagerOverview } from './ManagerOverview.jsx';
 import { api } from '../../api/index.js';
@@ -16,6 +16,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       commissions: { pendingApproval: vi.fn() },
       dealQuotations: { list: vi.fn() },
       pricingRequests: { queue: vi.fn() },
+      tickets: { list: vi.fn() },
       salesBoard: { weeklyReport: vi.fn() },
       salesVisits: { team: vi.fn() },
       salesAnalytics: { snapshot: vi.fn() },
@@ -96,6 +97,14 @@ describe('ManagerOverview', () => {
     api.pricingRequests.queue.mockResolvedValue({ items: PRICING });
     api.salesBoard.weeklyReport.mockResolvedValue(REPORT);
     api.salesVisits.team.mockResolvedValue({ visits: VISITS });
+    api.tickets.list.mockResolvedValue({ tickets: [{ id: 1, salesStage: 'CLOSED_PAID' }, { id: 2, lifecycle: 'CLOSED_LOST' }, { id: 3, salesStage: 'NEGOTIATION' }] });
+  });
+
+  it('shows อัตราปิดงาน as one line from won vs lost deals', async () => {
+    renderOverview();
+    const panel = (await screen.findByRole('heading', { name: 'อัตราปิดงาน' })).closest('section');
+    await waitFor(() => expect(panel.textContent).toContain('50%'));
+    expect(panel.textContent).toContain('ปิดสำเร็จ 1 · เสีย 1');
   });
 
   describe('ค่าคอมรอตรวจ', () => {

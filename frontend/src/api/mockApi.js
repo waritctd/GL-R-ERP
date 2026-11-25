@@ -10769,7 +10769,7 @@ function mockWeeklyReport(user, { week, ownerId }) {
       const visits = mockVisits.filter((v) => v.ownerId === u.id && inWeek(v.plannedDate));
       // WeeklyReportService: due = an earlier day, or today at a set time that has passed.
       const nowHm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
-      const due = visits.filter((v) => v.plannedDate < today || (v.plannedDate === today && v.plannedTime && String(v.plannedTime).slice(0, 5) <= nowHm));
+      const due = visits.filter((v) => v.status !== 'PLANNED' || v.plannedDate < today || (v.plannedDate === today && v.plannedTime && String(v.plannedTime).slice(0, 5) <= nowHm));
       const entries = mockDealActivities.filter((a) => a.createdById === u.id);
       return {
         ownerId: u.id, name: u.name, newDeals: mine.filter((t) => inWeek(t.createdAt)).length, stageMoves: 0, quotationsIssued: 0,

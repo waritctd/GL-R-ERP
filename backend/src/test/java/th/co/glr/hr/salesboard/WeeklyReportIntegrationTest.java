@@ -90,6 +90,18 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
         refusal(() -> service.report(salesManagerActor, WEEK, 987654321L), HttpStatus.NOT_FOUND);
     }
 
+    @Test
+    void aVisitDoneBeforeItsTimeCountsAsDueWithResult() {
+        VisitRepository visits = new VisitRepository(jdbc);
+        visits.insert(salesActor.id(), null, "early", LocalDate.of(2026, 11, 25), java.time.LocalTime.of(18, 0), null, true);
+        visits.insert(salesActor.id(), null, "later", LocalDate.of(2026, 11, 25), java.time.LocalTime.of(18, 0), null, false);
+
+        WeeklyRepRow rep = service.report(salesActor, WEEK, null).reps().get(0);
+
+        assertThat(rep.visitsDue()).isEqualTo(1);
+        assertThat(rep.visitsDueWithResult()).isEqualTo(1);
+    }
+
     private long confirmedDeal(String confirmedAt) {
         long id = deal(salesActor);
         event(id, "DEAL_PROMOTED_FROM_QUOTATION", null, null, confirmedAt);

@@ -73,13 +73,18 @@ export function ReportBlock({ rep, nextMonday, team = false }) {
 
 /** One worklist row: project link, code · reason, amount and the button that opens the action. */
 export function Row({ row, busy, onAct }) {
-  const name = row.to ? <Link to={row.to} className={`${NAME} hover:underline`}>{row.name}</Link> : <span className={NAME}>{row.name}</span>;
+  const text = (
+    <>
+      <span className={NAME}>{row.name}</span>
+      <small className="text-xs text-text-muted">{[row.code, row.reason].filter(Boolean).join(' · ')}</small>
+    </>
+  );
+  const block = 'grid min-w-0 flex-1 gap-0.5 mobile:basis-full';
   return (
     <li data-testid={`today-row-${row.key}`} className="flex items-center gap-3 py-3 mobile:flex-wrap">
-      <span className="grid min-w-0 flex-1 gap-0.5 mobile:basis-full">
-        {name}
-        <small className="text-xs text-text-muted">{[row.code, row.reason].filter(Boolean).join(' · ')}</small>
-      </span>
+      {row.to
+        ? <Link to={row.to} className={`${block} text-inherit no-underline hover:underline mobile:min-h-11 mobile:content-center`}>{text}</Link>
+        : <span className={block}>{text}</span>}
       {row.amount ? <b className="shrink-0 text-sm tabular-nums">{row.amount}</b> : null}
       <Button type="button" variant="secondary" size="sm" className="shrink-0 mobile:min-h-11 mobile:flex-1" disabled={busy} onClick={() => onAct(row.act)}>
         {row.button}

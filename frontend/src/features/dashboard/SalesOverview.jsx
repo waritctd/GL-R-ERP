@@ -257,10 +257,10 @@ function SalesToday({ switcher, ctx }) {
       {/* The header's actions move to a sticky bottom bar on a phone, with a spacer so it never covers the last row.
           Toasts sit above it (Toast.jsx's mobile bottom offset is 72px). */}
       <div aria-hidden="true" className="hidden h-16 mobile:block" />
-      <div className="hidden mobile:fixed mobile:inset-x-4 mobile:bottom-[max(12px,env(safe-area-inset-bottom))] mobile:z-20 mobile:grid mobile:grid-cols-3 mobile:gap-2">
-        <Button type="button" variant="secondary" className="min-h-[48px] bg-surface shadow-lg" onClick={ctx.openCallPicker}>บันทึกการโทร</Button>
-        <Button type="button" variant="secondary" className="min-h-[48px] bg-surface shadow-lg" onClick={ctx.openCreate}>งานใหม่</Button>
-        <Button type="button" data-testid="log-visit-sticky" className="min-h-[48px] shadow-lg" onClick={ctx.openLog}>บันทึกเข้าพบ</Button>
+      <div className="hidden mobile:fixed mobile:inset-x-4 mobile:bottom-[max(12px,env(safe-area-inset-bottom))] mobile:z-20 mobile:grid mobile:grid-cols-2 mobile:gap-2">
+        <Button type="button" variant="secondary" className="min-h-[48px] whitespace-nowrap bg-surface shadow-lg" onClick={ctx.openCallPicker}>บันทึกการโทร</Button>
+        <Button type="button" variant="secondary" className="min-h-[48px] whitespace-nowrap bg-surface shadow-lg" onClick={ctx.openCreate}>งานใหม่</Button>
+        <Button type="button" data-testid="log-visit-sticky" className="col-span-2 min-h-[48px] whitespace-nowrap shadow-lg" onClick={ctx.openLog}>บันทึกเข้าพบ</Button>
       </div>
     </>
   );

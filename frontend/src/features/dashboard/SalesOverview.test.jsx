@@ -129,7 +129,7 @@ function LocationProbe() {
 
 /** Row names of one group, in order. */
 const groupNames = (key) => [...screen.getByTestId(`today-group-${key}`).querySelectorAll('[data-testid^="today-row-"]')]
-  .map((row) => row.querySelector('a').textContent);
+  .map((row) => row.querySelector('a > span').textContent);
 const rowOf = (id) => screen.getByTestId(`today-row-deal-${id}`);
 const buttonOf = (id) => within(rowOf(id)).getByRole('button').textContent;
 
