@@ -44,8 +44,16 @@ public record RemainingInvoiceDocumentDto(
     Long              issuedById,
     String            issuedByName,
     OffsetDateTime    issuedAt,
-    // ออกในนาม (feedback #74): the customer-list name the invoice is issued to instead of the quotation's; null = that
+    // เรียน / ออกในนาม (feedback #74), see IssueNames
+    Long              addresseeCustomerId,
     Long              payerCustomerId,
+    String            payerName,
+    String            payerPhone,
+    String            payerEmail,
 
     List<RemainingInvoiceDocumentItemDto> items
-) {}
+) {
+    public IssueNames names() {
+        return new IssueNames(addresseeCustomerId, payerCustomerId, payerName, payerPhone, payerEmail);
+    }
+}

@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.Map;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.http.HttpStatus;
@@ -58,6 +59,8 @@ public class CustomerController {
         return Map.of("customers", customerService.search(search, actor));
     }
 
+    // One transaction: an email (customers store none) becomes a contact of the same name, created with the customer.
+    @Transactional
     @PostMapping
     Map<String, CustomerDto> create(@Valid @RequestBody CreateCustomerRequest req, HttpSession session) {
         // Customer/contact/project creation is the deal-entry flow (TicketCreateModal /
@@ -67,11 +70,17 @@ public class CustomerController {
         DealEntryAccess.requireCanEnterDeal(sessions.requireUser(session), employeeAuth);
         // branch has a DB default ('สำนักงานใหญ่') but an explicit NULL bypasses it and violates NOT NULL; coalesce so
         // a create that omits branch succeeds (mirrors the mock).
-        if (structured(req.addressLine(), req.provinceCode(), req.districtCode(), req.subdistrictCode(), req.postalCode())) {
-            return Map.of("customer", customers.createStructured(req.name(), req.taxId(), branchOrDefault(req.branch()), req.phone(),
-                req.addressLine(), req.provinceCode(), req.districtCode(), req.subdistrictCode(), req.postalCode()));
+        CustomerDto customer = structured(req.addressLine(), req.provinceCode(), req.districtCode(), req.subdistrictCode(), req.postalCode())
+            ? customers.createStructured(req.name(), req.taxId(), branchOrDefault(req.branch()), req.phone(),
+                req.addressLine(), req.provinceCode(), req.districtCode(), req.subdistrictCode(), req.postalCode())
+            : customers.create(req.name(), req.taxId(), req.address(), branchOrDefault(req.branch()), req.phone());
+        if (req.email() != null && !req.email().isBlank()) {
+            String name = req.name().trim();
+            // contact.first_name is VARCHAR(100), the customer name 200
+            contacts.create(customer.id(), name.length() > 100 ? name.substring(0, 100) : name, null, null,
+                req.email().trim(), req.phone());
         }
-        return Map.of("customer", customers.create(req.name(), req.taxId(), req.address(), branchOrDefault(req.branch()), req.phone()));
+        return Map.of("customer", customer);
     }
 
     /**
@@ -206,7 +215,9 @@ public class CustomerController {
         @Size(max = 2) String provinceCode,
         @Size(max = 4) String districtCode,
         @Size(max = 6) String subdistrictCode,
-        @Size(max = 5) String postalCode
+        @Size(max = 5) String postalCode,
+        // ออกในนาม's quick add (feedback #74): stored on a contact of the same name, since customers have no email column
+        @Email(message = "รูปแบบอีเมลไม่ถูกต้อง") @Size(max = 200) String email
     ) {}
 
     /** Every field optional — see #update: null means "leave it alone". The @Size caps mirror

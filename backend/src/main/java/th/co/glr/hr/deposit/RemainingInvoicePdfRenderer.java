@@ -26,6 +26,7 @@ public class RemainingInvoicePdfRenderer {
         DocumentSheet.str(sh, 6, 1, DocumentSheet.customerLine(m.customerName(), m.customerBranch(), m.customerTaxId()));
         DocumentSheet.str(sh, 6, 7, DocumentSheet.thaiDate(m.docDate()));
         DocumentSheet.str(sh, 7, 1, m.customerAddress());
+        DocumentSheet.issueInName(sh, 8, m.payerLine());
         DocumentSheet.str(sh, 7, 7, m.docNumber());
         DocumentSheet.str(sh, 8, 7, m.reference());
         DocumentSheet.str(sh, 10, 1, "Project : " + (m.projectName() == null ? "" : m.projectName()));

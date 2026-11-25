@@ -39,6 +39,14 @@ public record DepositNoticeDto(
     List<DepositNoticeItemDto> items,
     // true when customerName/TaxId/Address are the quotation party's (read-only in the editor), false for stored values
     boolean           customerFromQuotation,
-    // the payer customer the notice is issued to instead of the quotation's (feedback #74); null = the quotation's
-    Long              payerCustomerId
-) {}
+    // เรียน / ออกในนาม (feedback #74), see IssueNames
+    Long              addresseeCustomerId,
+    Long              payerCustomerId,
+    String            payerName,
+    String            payerPhone,
+    String            payerEmail
+) {
+    public IssueNames names() {
+        return new IssueNames(addresseeCustomerId, payerCustomerId, payerName, payerPhone, payerEmail);
+    }
+}

@@ -149,7 +149,7 @@ public class RemainingInvoiceService {
 
         DepositNoticeService.RemainingInvoiceSnapshot snap =
             depositNoticeService.resolveRemainingInvoiceSnapshot(ticketId, req == null ? null : req.quotationId(), actor,
-                req == null ? null : req.payerCustomerId());
+                null, req == null ? IssueNames.Choice.KEEP : req.nameChoice());
         depositNoticeService.requireActiveLifecycle(snap.ticketSummary());
         DepositNoticeService.ResolvedRemainingInvoice resolved = snap.resolved();
         if (resolved.blockingReason() != null) {
@@ -206,7 +206,7 @@ public class RemainingInvoiceService {
             id = stored.insertDraft(ticketId, quotationId, resolved.matchedDepositNoticeId(),
                 reference, depositReference, docDate, notes,
                 header.customerNameOr(s.customerName()), header.taxId(), header.branch(), header.addressOnly(), header.projectName(),
-                itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal(), snap.payerCustomerId(),
+                itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal(), snap.names(),
                 actor.id(), actor.name());
         } catch (DataIntegrityViolationException e) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -227,11 +227,14 @@ public class RemainingInvoiceService {
         depositNoticeService.requirePreparerInDeal(existing.ticketId(), req == null ? null : req.preparerId(), existing.preparerId());
 
         DepositNoticeService.RemainingInvoiceSnapshot snap = depositNoticeService.resolveRemainingInvoiceSnapshot(
-            existing.ticketId(), existing.customerQuotationId(), actor, req == null ? null : req.payerCustomerId());
+            existing.ticketId(), existing.customerQuotationId(), actor, existing.names(),
+            req == null ? IssueNames.Choice.KEEP : req.nameChoice());
         DepositNoticeService.ResolvedRemainingInvoice resolved = snap.resolved();
         if (resolved.blockingReason() != null) {
             throw new ApiException(HttpStatus.CONFLICT, resolved.blockingReason());
         }
+        depositNoticeService.requireNamesUnbilled("REMAINING_INVOICE", id, existing.names(), snap.names(),
+            "ใบแจ้งหนี้ส่วนที่เหลือ");
 
         List<RemainingInvoiceItemDto> items = resolved.items();
         BigDecimal depositAmount = nz(resolved.depositAmount());
@@ -252,7 +255,7 @@ public class RemainingInvoiceService {
             ? req.depositReference() : existing.depositReference();
         LocalDate docDate = req != null && req.docDate() != null ? req.docDate() : existing.docDate();
         requireRowUpdated(stored.updateDraftFields(id, reference, depositReference, docDate, notes,
-            req == null ? null : req.preparerId(), snap.payerCustomerId(), existing.status()), id);
+            req == null ? null : req.preparerId(), snap.names(), existing.status()), id);
 
         RemainingInvoiceDocumentDto updated = requireStored(id);
         if ("ISSUED".equals(existing.status())) {
@@ -261,6 +264,11 @@ public class RemainingInvoiceService {
                     + "อ้างอิง \"" + Objects.toString(existing.reference(), "") + "\" → \"" + Objects.toString(updated.reference(), "") + "\""
                     + " · อ้างอิงมัดจำ \"" + Objects.toString(existing.depositReference(), "") + "\" → \"" + Objects.toString(updated.depositReference(), "") + "\""
                     + " · วันที่ " + existing.docDate() + " → " + updated.docDate()
+                    + (Objects.equals(existing.customerName(), updated.customerName()) ? ""
+                        : " · เรียน \"" + Objects.toString(existing.customerName(), "") + "\" → \"" + Objects.toString(updated.customerName(), "") + "\"")
+                    + (Objects.equals(existing.names().payerLine(), updated.names().payerLine()) ? ""
+                        : " · ออกในนาม \"" + Objects.toString(existing.names().payerLine(), "") + "\" → \""
+                            + Objects.toString(updated.names().payerLine(), "") + "\"")
                     + " · ยอดชำระ " + ThaiText.money(existing.grandTotal()) + " → " + ThaiText.money(updated.grandTotal()));
             if (existing.grandTotal().compareTo(updated.grandTotal()) != 0) {
                 // account collects against this total, same channel as issue()
@@ -307,7 +315,7 @@ public class RemainingInvoiceService {
 
         // Refresh the snapshot from the current live state before freezing anything.
         DepositNoticeService.RemainingInvoiceSnapshot snap = depositNoticeService.resolveRemainingInvoiceSnapshot(
-            draft.ticketId(), draft.customerQuotationId(), actor, draft.payerCustomerId());
+            draft.ticketId(), draft.customerQuotationId(), actor, draft.names(), IssueNames.Choice.KEEP);
         DepositNoticeService.ResolvedRemainingInvoice resolved = snap.resolved();
         if (resolved.blockingReason() != null) {
             throw new ApiException(HttpStatus.CONFLICT, resolved.blockingReason());
@@ -430,7 +438,7 @@ public class RemainingInvoiceService {
                 issued.reference(), issued.depositReference(), issued.docDate(), issued.notes(),
                 issued.customerName(), issued.customerTaxId(), issued.customerBranch(), issued.customerAddress(),
                 issued.projectName(), issued.itemsTotal(), issued.depositDeduction(), issued.netAmount(),
-                issued.vatAmount(), issued.grandTotal(), issued.payerCustomerId(), actor.id(), actor.name());
+                issued.vatAmount(), issued.grandTotal(), issued.names(), actor.id(), actor.name());
             if (issued.preparerId() != null) stored.copyPreparer(draftId, issued.preparerId(), issued.preparerName());
         } catch (DataIntegrityViolationException e) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -472,7 +480,7 @@ public class RemainingInvoiceService {
             doc.reference(), doc.depositReference(), items,
             nz(doc.depositDeduction()), doc.netAmount(), doc.vatAmount(), doc.grandTotal(),
             doc.preparerName() != null ? doc.preparerName() : doc.createdByName(),
-            sig.map(x -> x.image()).orElse(null));
+            sig.map(x -> x.image()).orElse(null), doc.names().payerLine());
     }
 
     private List<String> defaultNotes() {

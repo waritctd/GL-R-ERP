@@ -295,15 +295,16 @@ describe('DepositNoticePage', () => {
       expect(screen.getByLabelText(/เลขประจำตัวผู้เสียภาษี/).readOnly).toBe(true);
       expect(screen.getByLabelText('ที่อยู่').readOnly).toBe(true);
 
-      // feedback #74: ออกในนามลูกค้าอื่น picks a payer from the master and saves its id
-      api.customers.search.mockResolvedValue({ customers: [{ id: 77, name: 'ผู้ชำระ ทดสอบ', taxId: '0100000000077', address: 'กรุงเทพ' }] });
-      fireEvent.click(screen.getByTestId('pick-payer'));
+      // feedback #74: เรียน and ออกในนาม are choosable; a name picked for ออกในนาม is saved as the payer, เรียน untouched
+      api.customers.search.mockResolvedValue({ customers: [{ id: 77, name: 'ผู้ชำระ ทดสอบ', taxId: null, address: null }] });
+      fireEvent.click(screen.getByTestId('doc-payer-change'));
       fireEvent.change(screen.getByLabelText('ค้นหาลูกค้า (master)'), { target: { value: 'ผู้ชำระ' } });
       fireEvent.click(await screen.findByRole('button', { name: /ผู้ชำระ ทดสอบ/ }));
-      expect(screen.getByLabelText(/ชื่อบริษัท/).value).toBe('ผู้ชำระ ทดสอบ');
+      expect(screen.getByTestId('doc-payer-name').textContent).toBe('ผู้ชำระ ทดสอบ');
+      expect(screen.getByLabelText(/ชื่อบริษัท/).value).toBe(validDraftDoc.customerName);
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
       await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalled());
-      expect(api.depositNotices.update.mock.calls.at(-1)[1]).toMatchObject({ payerCustomerId: 77 });
+      expect(api.depositNotices.update.mock.calls.at(-1)[1]).toMatchObject({ payerCustomerId: 77, addresseeCustomerId: null });
     });
 
     it('lets a draft be re-pointed to another party quotation of the deal (a select with number and customer)', async () => {
@@ -499,7 +500,7 @@ describe('DepositNoticePage', () => {
       await waitFor(() => expect(api.depositNotices.issue).toHaveBeenCalledTimes(1));
       expect(api.depositNotices.update.mock.calls).toEqual([[9002, {
         customerName: 'บริษัท ลุมพินี จำกัด', customerTaxId: '0105551234567', customerAddress: 'กรุงเทพฯ',
-        projectName: 'บ้านชะอำ', reference: 'QT-2026-0201', depositPercent: 0.4, notes: ['หมายเหตุมาตรฐาน'], preparerId: null, payerCustomerId: null,
+        projectName: 'บ้านชะอำ', reference: 'QT-2026-0201', depositPercent: 0.4, notes: ['หมายเหตุมาตรฐาน'], preparerId: null, addresseeCustomerId: null, addresseeReset: null, payerCustomerId: null, payerReset: null,
         expectedUpdatedAt: 'T1',
         items: [{ seq: 1, description: 'กระเบื้อง Raku', qty: 3, unit: 'ตร.ม.', unitPrice: 1500, discountLabel: '-', netUnitPrice: 1234.57, amount: null }],
       }]]);

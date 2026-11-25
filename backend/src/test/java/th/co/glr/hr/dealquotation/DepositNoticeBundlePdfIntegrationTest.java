@@ -232,6 +232,20 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
     // ── customer header follows the quotation's party ───────────────────────────────────────
 
     /** A second BUYER party (another customer) and the quotation re-addressed to it. */
+    private long customer(String name, String taxId) {
+        return jdbc.queryForObject("INSERT INTO customers.customer (name, tax_id) VALUES (:n, :t) RETURNING customer_id",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("n", name).addValue("t", taxId), Long.class);
+    }
+
+    private static DepositNoticeDraftRequest noticeNames(Long addressee, Boolean addresseeReset, Long payer, String payerReset) {
+        return new DepositNoticeDraftRequest(null, null, null, "โครงการใหม่", null, null, null, null, null, null,
+            addressee, addresseeReset, payer, payerReset);
+    }
+
+    private static RemainingInvoiceDraftRequest invoiceNames(Long addressee, Long payer) {
+        return new RemainingInvoiceDraftRequest(null, null, null, null, null, null, addressee, null, payer, null);
+    }
+
     private th.co.glr.hr.customer.CustomerDto addressToSecondBuyer(long ticketId, long quotationId) {
         return addressToBuyer(ticketId, quotationId, "คุณมะนาว", "0100000000444", "44 ถนนทดสอบ");
     }
@@ -285,23 +299,25 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         assertThat(invoice.customerName()).isEqualTo(buyer.name());
         assertThat(invoice.customerTaxId()).isEqualTo(buyer.taxId());
 
-        // ออกในนาม (feedback #74), as the deposit notice: a customer-list name replaces the quotation's customer in the
-        // stored header too (receipt import reads it), the quotation's own customer is no payer, and an issued invoice's
-        // revision keeps it
-        long payer = jdbc.queryForObject("INSERT INTO customers.customer (name, tax_id, address) VALUES "
-            + "('ในนาม ทดสอบ', '0100000000075', '75 ถนนทดสอบ') RETURNING customer_id", java.util.Map.of(), Long.class);
-        assertThat(remainingInvoiceService.updateDraft(invoice.id(), new RemainingInvoiceDraftRequest(null, null, null,
-            null, null, null, buyer.id()), salesActor).payerCustomerId()).isNull();
-        RemainingInvoiceDocumentDto named = remainingInvoiceService.updateDraft(invoice.id(),
-            new RemainingInvoiceDraftRequest(null, null, null, null, null, null, payer), salesActor);
-        assertThat(named.payerCustomerId()).isEqualTo(payer);
-        assertThat(named.customerName()).isEqualTo("ในนาม ทดสอบ");
+        // เรียน / ออกในนาม (feedback #74), as the deposit notice: ออกในนาม defaults to the quotation's contact; a picked
+        // customer prints as its own line while the header stays เรียน; picking เรียน's own customer means the same
+        // person (none); a picked เรียน replaces the header, stored too (receipt import reads it); a revision keeps both
+        assertThat(invoice.payerName()).isEqualTo(jdbc.queryForObject(
+            "SELECT contact_name FROM sales.quotation WHERE quotation_id = :q", java.util.Map.of("q", quotation.id()), String.class));
+        long payer = customer("ในนาม ทดสอบ", null);
+        long addressee = customer("เรียน ทดสอบ", "0105500000075");
+        assertThat(remainingInvoiceService.updateDraft(invoice.id(), invoiceNames(null, buyer.id()), salesActor).payerName())
+            .isNull();
+        remainingInvoiceService.updateDraft(invoice.id(), invoiceNames(null, payer), salesActor);
+        RemainingInvoiceDocumentDto named = remainingInvoiceService.updateDraft(invoice.id(), invoiceNames(addressee, null),
+            salesActor);
+        assertThat(named.payerName()).isEqualTo("ในนาม ทดสอบ");
+        assertThat(named.customerName()).isEqualTo("เรียน ทดสอบ");
         RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(invoice.id(), salesActor);
         assertThat(jdbc.queryForObject("SELECT customer_name FROM sales.remaining_invoice WHERE id = :id",
-            java.util.Map.of("id", issued.id()), String.class)).isEqualTo("ในนาม ทดสอบ");
+            java.util.Map.of("id", issued.id()), String.class)).isEqualTo("เรียน ทดสอบ");
         RemainingInvoiceDocumentDto revision = remainingInvoiceService.revise(issued.id(), salesActor);
-        assertThat(revision.payerCustomerId()).isEqualTo(payer);
-        assertThat(revision.customerName()).isEqualTo("ในนาม ทดสอบ");
+        assertThat(revision.names()).isEqualTo(issued.names());
     }
 
     /** The read joins on the invoice's own customer_quotation_id; its free-text reference (which users edit) is only the
@@ -348,34 +364,36 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         assertThat(updated.projectName()).isEqualTo("โครงการใหม่");
         assertThat(updated.customerFromQuotation()).isTrue();
 
-        // feedback #74: a payer picked from the customer master replaces the quotation's customer, stored and served
-        // (receipt import matches the stored name); null goes back to the quotation's customer; an unknown id is a 400
-        long payer = jdbc.queryForObject("INSERT INTO customers.customer (name, tax_id, address) VALUES "
-            + "('ผู้ชำระ ทดสอบ', '0100000000074', '74 ถนนทดสอบ') RETURNING customer_id", java.util.Map.of(), Long.class);
-        DepositNoticeDto paid = depositNoticeService.update(n.id(), new DepositNoticeDraftRequest("พิมพ์เอง", null, null,
-            "โครงการใหม่", null, null, null, null, null, null, payer), salesActor);
-        assertThat(paid.payerCustomerId()).isEqualTo(payer);
-        assertThat(paid.customerName()).isEqualTo("ผู้ชำระ ทดสอบ");
-        assertThat(paid.customerTaxId()).isEqualTo("0100000000074");
-        assertThat(paid.reference()).isEqualTo(deal.quotation().number());
+        // เรียน / ออกในนาม (feedback #74, "make everything choosable just put in the default value first"): ออกในนาม is
+        // its own line (stored snapshot), เรียน the header (served and stored: receipt import reads it); a new version for
+        // the same quotation keeps both; picking เรียน's own customer as ออกในนาม means the same person; an unknown id is
+        // a 400; the resets go back to the quotation's customer and contact
+        long payer = customer("ผู้ชำระ ทดสอบ", null);
+        jdbc.update("INSERT INTO customers.contact (customer_id, first_name, email) VALUES (:c, 'ผู้ชำระ ทดสอบ', 'pay@example.com')",
+            java.util.Map.of("c", payer));
+        long addressee = customer("เรียน ทดสอบ", "0105500000076");
+        DepositNoticeDto paid = depositNoticeService.update(n.id(), noticeNames(null, null, payer, null), salesActor);
+        assertThat(paid.payerName()).isEqualTo("ผู้ชำระ ทดสอบ");
+        assertThat(paid.payerEmail()).isEqualTo("pay@example.com");
+        assertThat(paid.customerName()).isEqualTo(buyer.name());
+        DepositNoticeDto addressed = depositNoticeService.update(n.id(), noticeNames(addressee, null, null, null), salesActor);
+        assertThat(addressed.customerName()).isEqualTo("เรียน ทดสอบ");
+        assertThat(addressed.payerName()).isEqualTo("ผู้ชำระ ทดสอบ");
         assertThat(jdbc.queryForObject("SELECT customer_name FROM sales.deposit_notice WHERE deposit_notice_id = :id",
-            java.util.Map.of("id", n.id()), String.class)).isEqualTo("ผู้ชำระ ทดสอบ");
-        // a new version for the same quotation keeps the name, in the stored header too (receipt import reads it)
+            java.util.Map.of("id", n.id()), String.class)).isEqualTo("เรียน ทดสอบ");
         DepositNoticeDto next = depositNoticeService.createDraft(deal.ticketId(),
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
-        assertThat(next.payerCustomerId()).isEqualTo(payer);
-        assertThat(jdbc.queryForObject("SELECT customer_name FROM sales.deposit_notice WHERE deposit_notice_id = :id",
-            java.util.Map.of("id", next.id()), String.class)).isEqualTo("ผู้ชำระ ทดสอบ");
-        assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(), new DepositNoticeDraftRequest(null, null,
-            null, null, null, null, null, null, null, null, -1L), salesActor), ApiException.class).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-        DepositNoticeDto back = depositNoticeService.update(n.id(), new DepositNoticeDraftRequest(null, null, null,
-            "โครงการใหม่", null, null, null, null), salesActor);
-        assertThat(back.payerCustomerId()).isNull();
+        assertThat(next.names()).isEqualTo(addressed.names());
+        assertThat(next.customerName()).isEqualTo("เรียน ทดสอบ");
+        assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(), noticeNames(null, null, -1L, null),
+            salesActor), ApiException.class).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(depositNoticeService.update(n.id(), noticeNames(null, null, addressee, null), salesActor).payerName())
+            .isNull();
+        DepositNoticeDto back = depositNoticeService.update(n.id(), noticeNames(null, true, null, "DEFAULT"), salesActor);
         assertThat(back.customerName()).isEqualTo(buyer.name());
-        // the quotation's own customer picked as payer is no payer
-        assertThat(depositNoticeService.update(n.id(), new DepositNoticeDraftRequest(null, null, null, "โครงการใหม่",
-            null, null, null, null, null, null, buyer.id()), salesActor).payerCustomerId()).isNull();
+        assertThat(back.addresseeCustomerId()).isNull();
+        assertThat(back.payerName()).isEqualTo(jdbc.queryForObject("SELECT contact_name FROM sales.quotation"
+            + " WHERE quotation_id = :q", java.util.Map.of("q", deal.quotation().id()), String.class));
 
         // not a party quotation of this deal (unknown number, or one without a party): 409, notice untouched
         cloneQuotation(deal.quotation().id(), "QT-NOPARTY", 91, false);

@@ -99,13 +99,12 @@ public class DealDocumentListRepository {
                       COALESCE(q.number = d.reference, FALSE) DESC, q.quotation_id DESC LIMIT 1) rq ON TRUE
         """;
 
-    /** Same party lookup as RemainingInvoiceRepository#SELECT_RI, so the name is the one printed. */
-    // The remaining invoice's customer, as RemainingInvoiceRepository#SELECT_RI resolves it: its ออกในนาม name, else its
-    // quotation's party customer.
+    /** Same lookup as RemainingInvoiceRepository#SELECT_RI, so the name is the one printed after เรียน: a picked เรียน
+     * (feedback #74), else the quotation's party customer. */
     private static final String INVOICE_CUSTOMER = """
         LEFT JOIN LATERAL (
             SELECT c.name FROM customers.customer c
-             WHERE c.customer_id = COALESCE(d.payer_customer_id, (
+             WHERE c.customer_id = COALESCE(d.addressee_customer_id, (
                    SELECT dp.customer_id FROM sales.quotation q
                      JOIN sales.deal_party dp ON dp.party_id = q.party_id
                     WHERE q.ticket_id = d.ticket_id AND q.origin IS NOT NULL

@@ -53,6 +53,16 @@ class CustomerControllerTest {
         mvc.perform(post("/api/customers").session(session("sales"))
                 .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"ACME\"}"))
             .andExpect(status().is2xxSuccessful());
+        org.mockito.Mockito.verifyNoInteractions(contacts);
+
+        // ออกในนาม's quick add (feedback #74): name only, an email lands on a contact of the same name; a malformed one is a 400
+        mvc.perform(post("/api/customers").session(session("sales")).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"ACME\",\"email\":\"pay@example.com\",\"phone\":\"0800000000\"}"))
+            .andExpect(status().is2xxSuccessful());
+        org.mockito.Mockito.verify(contacts).create(1L, "ACME", null, null, "pay@example.com", "0800000000");
+        mvc.perform(post("/api/customers").session(session("sales")).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"ACME\",\"email\":\"not-an-email\"}"))
+            .andExpect(status().isBadRequest());
     }
 
     private MockHttpSession session(String role) {

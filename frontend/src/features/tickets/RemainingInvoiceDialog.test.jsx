@@ -159,12 +159,12 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
 
     const input = await screen.findByDisplayValue('QT-2026-0099');
     fireEvent.change(input, { target: { value: 'PO-EDIT-1' } });
-    // ออกในนาม (feedback #74): a name picked from the customer list is saved as the payer
+    // เรียน / ออกในนาม (feedback #74): a name picked from the customer list for ออกในนาม is saved as the payer
     api.customers.search.mockResolvedValue({ customers: [{ id: 77, name: 'ในนาม ทดสอบ', taxId: '0100000000077', address: 'กรุงเทพ' }] });
-    fireEvent.click(screen.getByTestId('pick-payer'));
+    fireEvent.click(screen.getByTestId('remaining-invoice-payer-change'));
     fireEvent.change(screen.getByLabelText('ค้นหาลูกค้า (master)'), { target: { value: 'ในนาม' } });
     fireEvent.click(await screen.findByRole('button', { name: /ในนาม ทดสอบ/ }));
-    expect(screen.getByTestId('customer-from-quotation').textContent).toContain('ออกในนาม ในนาม ทดสอบ');
+    expect(screen.getByTestId('remaining-invoice-payer-name').textContent).toBe('ในนาม ทดสอบ');
     fireEvent.click(screen.getByTestId('remaining-invoice-save-draft'));
 
     await waitFor(() => expect(api.storedRemainingInvoices.update).toHaveBeenCalledWith(900,

@@ -437,18 +437,29 @@ let sessionUser = null;
 const passwordResetTokens = new Map();
 
 // ── Mock in-memory document store ─────────────────────────────────────────────
-// ออกในนาม (feedback #74), as DepositNoticeService#effectivePayer: 400 for an unknown id; the deal's own customer is
-// no payer. Returns the customer whose data the document shows (the named one, else the deal's) and the id to store.
-function mockIssueInName(payerCustomerId, ticket) {
-  const payer = payerCustomerId == null ? null : mockCustomers.find((c) => c.id === Number(payerCustomerId));
-  if (payerCustomerId != null && !payer) fail('ไม่พบลูกค้าที่ออกในนาม', 400);
+// เรียน / ออกในนาม (feedback #74), as DepositNoticeService#chooseNames: a picked customer-list row (400 when unknown) or
+// a reset. เรียน picked equal to the deal's customer is no override and replaces the header otherwise; ออกในนาม equal to
+// เรียน is none (the same person). The mock has no quotation contact, so ออกในนาม's DEFAULT is none too.
+function mockApplyIssueNames(row, payload, ticket) {
+  const listed = (id) => mockCustomers.find((c) => c.id === Number(id)) ?? fail('ไม่พบลูกค้าที่เลือก', 400);
+  const addressee = payload.addresseeCustomerId != null ? listed(payload.addresseeCustomerId) : null;
+  const payer = payload.payerCustomerId != null ? listed(payload.payerCustomerId) : null;
   const own = mockCustomers.find((c) => c.id === ticket?.customerId) ?? null;
-  const named = payer && payer.id !== own?.id ? payer : null;
-  return { payerCustomerId: named ? named.id : null, shown: named ?? own };
-}
-
-function mockShowCustomer(row, customer) {
-  if (customer) Object.assign(row, { customerName: customer.name, customerTaxId: customer.taxId ?? null, customerAddress: customer.address ?? null });
+  if (addressee || payload.addresseeReset) {
+    row.addresseeCustomerId = addressee && addressee.id !== own?.id ? addressee.id : null;
+    const header = addressee ?? own;
+    if (header) Object.assign(row, { customerName: header.name, customerTaxId: header.taxId ?? null, customerAddress: header.address ?? null });
+  }
+  const clearPayer = () => Object.assign(row, { payerCustomerId: null, payerName: null, payerPhone: null, payerEmail: null });
+  if (payer) {
+    if (payer.id === (row.addresseeCustomerId ?? own?.id)) clearPayer();
+    else {
+      const email = mockContacts.find((ct) => ct.customerId === payer.id && ct.email?.trim())?.email ?? null;
+      Object.assign(row, { payerCustomerId: payer.id, payerName: payer.name, payerPhone: payer.phone ?? null, payerEmail: email });
+    }
+  } else if (payload.payerReset) {
+    clearPayer();
+  }
 }
 
 // CustomerPrintRule#branch: a branch prints only with a company's tax id, never a person's (13 digits starting 1-8).
@@ -18144,8 +18155,15 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   customers: {
     async create(payload) {
       requireDealEntry();
+      // CreateCustomerRequest's @Email: a malformed email is a 400 before anything is written
+      if (payload.email?.trim() && !/^[^\s@]+@[^\s@]+$/.test(payload.email.trim())) fail('รูปแบบอีเมลไม่ถูกต้อง', 400);
       const customer = { id: mockCustomerSeq++, name: payload.name, taxId: payload.taxId || null, address: payload.address || null, branch: payload.branch || 'สำนักงานใหญ่', phone: payload.phone || null, ...structuredCustomerAddress(payload) };
       mockCustomers.push(customer);
+      // CustomerController#create: an email (customers store none) becomes a contact of the same name
+      if (payload.email?.trim()) {
+        mockContacts.push({ id: mockContactSeq++, customerId: customer.id, firstName: payload.name.trim(), lastName: null,
+          position: null, email: payload.email.trim(), phone: payload.phone || null });
+      }
       return delay({ customer });
     },
     // Same requireDealEntry() gate as create() above — mirrors CustomerController#update's
@@ -18358,7 +18376,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (payload.expectedUpdatedAt != null && payload.expectedUpdatedAt !== doc.updatedAt) {
         fail('ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง', 409);
       }
-      const inName = mockIssueInName(payload.payerCustomerId, findTicketRaw(doc.ticketId));
+      const ticketForName = findTicketRaw(doc.ticketId);
+      const listedId = (id) => id == null || mockCustomers.some((c) => c.id === Number(id));
+      if (!listedId(payload.addresseeCustomerId) || !listedId(payload.payerCustomerId)) fail('ไม่พบลูกค้าที่เลือก', 400);
       applyMockPreparer(doc, findTicketRaw(doc.ticketId), payload.preparerId);
       Object.assign(doc, {
         customerName:    payload.customerName    ?? doc.customerName,
@@ -18372,12 +18392,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         // Strictly later than the stored stamp, so two saves in one millisecond still differ.
         updatedAt:       new Date(Math.max(Date.now(), (Date.parse(doc.updatedAt) || 0) + 1)).toISOString(),
       });
-      // ออกในนาม (feedback #74): a list customer replaces the quotation's; clearing goes back to it
-      if (inName.payerCustomerId != null || doc.payerCustomerId != null) {
-        mockShowCustomer(doc, inName.shown);
-        doc.customerFromQuotation = true;
-      }
-      doc.payerCustomerId = inName.payerCustomerId;
+      mockApplyIssueNames(doc, payload, ticketForName);
       const updated = buildMockDoc(doc);
       Object.assign(doc, updated);
       return delay({ depositNotice: structuredClone(doc) });
@@ -18620,9 +18635,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const ticket = findTicketRaw(row.ticketId);
       requireRemainingInvoiceWriteGate(ticket);
       if (row.status !== 'DRAFT') fail('ใบแจ้งหนี้ส่วนที่เหลือนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
-      const inName = mockIssueInName(payload.payerCustomerId, ticket);
-      if (inName.payerCustomerId != null || row.payerCustomerId != null) mockShowCustomer(row, inName.shown);
-      row.payerCustomerId = inName.payerCustomerId;
+      mockApplyIssueNames(row, payload, ticket);
       const snap = mockRemainingInvoiceSnapshot(ticket);
       row.items = snap.items.map((it, i) => ({ id: `${row.id}-${i + 1}`, remainingInvoiceId: row.id, ...it }));
       row.itemsTotal = snap.itemsTotal; row.depositDeduction = snap.depositDeduction;
