@@ -97,7 +97,8 @@ public class DepositNoticePdfRenderer {
         sb.append("<div style='margin-bottom:16px;font-size:13px;'>")
           .append("<div>เรียน: <strong>").append(escHtml(doc.customerName())).append("</strong></div>")
           .append("<div style='color:#64748b;font-size:12px;'>").append(escHtml(doc.customerAddress())).append("</div>")
-          .append("<div style='font-size:12px;'>เลขภาษี: ").append(escHtml(doc.customerTaxId())).append("</div>")
+          .append(doc.customerTaxId() != null && !doc.customerTaxId().isBlank()
+              ? "<div style='font-size:12px;'>เลขภาษี: " + escHtml(doc.customerTaxId()) + "</div>" : "")
           .append(doc.projectName() != null ? "<div style='font-size:12px;'>โครงการ: " + escHtml(doc.projectName()) + "</div>" : "")
           .append("</div>");
 

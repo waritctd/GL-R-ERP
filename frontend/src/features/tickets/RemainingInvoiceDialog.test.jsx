@@ -159,16 +159,16 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
 
     const input = await screen.findByDisplayValue('QT-2026-0099');
     fireEvent.change(input, { target: { value: 'PO-EDIT-1' } });
-    // ออกในนาม (feedback #74): a name picked from the customer list is saved as the payer
-    api.customers.search.mockResolvedValue({ customers: [{ id: 77, name: 'ในนาม ทดสอบ', taxId: '0100000000077', address: 'กรุงเทพ' }] });
-    fireEvent.click(screen.getByTestId('pick-payer'));
-    fireEvent.change(screen.getByLabelText('ค้นหาลูกค้า (master)'), { target: { value: 'ในนาม' } });
-    fireEvent.click(await screen.findByRole('button', { name: /ในนาม ทดสอบ/ }));
-    expect(screen.getByTestId('customer-from-quotation').textContent).toContain('ออกในนาม ในนาม ทดสอบ');
+    // เรียน (feedback #74): a customer picked from the list is saved as the addressee
+    api.customers.search.mockResolvedValue({ customers: [{ id: 77, name: 'บริษัท ผู้ซื้อ ทดสอบ จำกัด', taxId: '0100000000077', address: 'กรุงเทพ' }] });
+    fireEvent.click(screen.getByTestId('remaining-invoice-addressee-change'));
+    fireEvent.change(screen.getByLabelText('ค้นหาลูกค้า หรือเพิ่มลูกค้าใหม่'), { target: { value: 'ผู้ซื้อ' } });
+    fireEvent.click(await screen.findByRole('button', { name: /บริษัท ผู้ซื้อ ทดสอบ จำกัด/ }));
+    expect(screen.getByTestId('remaining-invoice-addressee-name').textContent).toBe('บริษัท ผู้ซื้อ ทดสอบ จำกัด');
     fireEvent.click(screen.getByTestId('remaining-invoice-save-draft'));
 
     await waitFor(() => expect(api.storedRemainingInvoices.update).toHaveBeenCalledWith(900,
-      expect.objectContaining({ reference: 'PO-EDIT-1', payerCustomerId: 77 })));
+      expect.objectContaining({ reference: 'PO-EDIT-1', addresseeCustomerId: 77 })));
   });
 
   it('ออกใบแจ้งหนี้ calls issue', async () => {

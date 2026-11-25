@@ -199,14 +199,13 @@ public class DepositNoticeService {
         // deal created through the pricing-request chain — only customerName had a ticket-summary fallback.
         // The customer is the one the referenced quotation is addressed to (a deal can hold several BUYER parties).
         String headerReference = req.reference() == null && linesFromGoverning ? governing.number() : req.reference();
-        // ออกในนาม (feedback #74): a new version keeps the latest earlier notice's name only for the same quotation, and
-        // never when it is that quotation's own customer. The stored header is built from it, so what prints and what
-        // receipt import matches on (the stored customer_name) agree.
-        Long payer = headerReference == null ? null : effectivePayer(docs.findByTicket(ticketId).stream().findFirst()
-            .filter(prev -> headerReference.equals(prev.reference()))
-            .map(DepositNoticeDto::payerCustomerId).orElse(null), ticketId, headerReference);
+        // เรียน (feedback #74): a new version keeps the latest earlier notice's choice for the same quotation, else the
+        // default (see chooseNames).
+        IssueNames names = headerReference == null ? IssueNames.NONE : docs.findByTicket(ticketId).stream().findFirst()
+            .filter(prev -> headerReference.equals(prev.reference())).map(DepositNoticeDto::names)
+            .orElseGet(() -> chooseNames(null, IssueNames.Choice.KEEP, ticketId, headerReference));
         CustomerHeaderInfo header = resolveCustomerHeader(s, req.customerTaxId(), req.customerAddress(), req.projectName(),
-            ticketId, headerReference, payer);
+            ticketId, headerReference, names.addresseeCustomerId());
 
         // The deposit percent is the one the
         // source quotation's PDF printed: a legacy quotation 50% (the constant its PDF prints), a
@@ -227,10 +226,10 @@ public class DepositNoticeService {
             header.taxId(), header.address(),
             header.projectName(), reference,
             effectiveDepositPercent,
-            notes, items, null, actor.id(), payer
+            notes, items, null, actor.id()
         );
 
-        long docId = docs.createDraft(ticketId, effective, items, actor.name());
+        long docId = docs.createDraft(ticketId, effective, items, actor.name(), names);
         return docs.findById(docId).orElseThrow();
     }
 
@@ -290,23 +289,24 @@ public class DepositNoticeService {
             quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference);
             repointed = true;
         }
-        // ออกในนาม (feedback #74): a customer-list name replaces the quotation's customer; null goes back to it. A re-point
-        // is a new buyer's document, so it starts from that quotation's customer.
-        Long payer = repointed ? null : effectivePayer(req.payerCustomerId(), doc.ticketId(), reference);
-        requireNameChangeUnbilled("DEPOSIT_NOTICE", docId, doc.payerCustomerId(), payer, "ใบแจ้งยอด");
-        if (payer != null) {
-            quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference, payer);
+        // เรียน (feedback #74): the quotation's customer by default, or any customer the rep picks or creates. A re-point is
+        // a new buyer's document, so it starts from that quotation's default, with this save's choice on top.
+        IssueNames names = chooseNames(repointed ? null : doc.names(), req.nameChoice(), doc.ticketId(), reference);
+        requireNamesUnbilled("DEPOSIT_NOTICE", docId, doc.names(), names, "ใบแจ้งยอด");
+        if (names.addresseeCustomerId() != null) {
+            quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference,
+                names.addresseeCustomerId());
         }
-        boolean fromMaster = fromQuotation || payer != null;
+        boolean fromMaster = fromQuotation || names.addresseeCustomerId() != null;
         var effective = new DepositNoticeDraftRequest(
             fromMaster ? quotationHeader.customerName() : req.customerName(),
             fromMaster ? quotationHeader.taxId() : req.customerTaxId(),
             fromMaster ? quotationHeader.address() : req.customerAddress(),
             req.projectName(), fromQuotation ? reference : req.reference(),
             depositPercent,
-            req.notes(), items, req.expectedUpdatedAt(), req.preparerId(), payer
+            req.notes(), items, req.expectedUpdatedAt(), req.preparerId()
         );
-        docs.update(docId, effective, doc.items(), doc.status());
+        docs.update(docId, effective, doc.items(), doc.status(), names);
         DepositNoticeDto updated = docs.findById(docId).orElseThrow();
         if ("ISSUED".equals(doc.status())) {
             BigDecimal netReceived = tickets.netDepositReceived(doc.ticketId());
@@ -398,7 +398,7 @@ public class DepositNoticeService {
             String skipReason = null;
             try {
                 RemainingInvoiceSnapshot snap = resolveRemainingInvoiceSnapshot(ticketId, inv.customerQuotationId(), actor,
-                    inv.payerCustomerId());
+                    inv.names(), IssueNames.Choice.KEEP);
                 ResolvedRemainingInvoice resolved = snap.resolved();
                 if (resolved.blockingReason() != null) {
                     skipReason = resolved.blockingReason();
@@ -823,11 +823,11 @@ public class DepositNoticeService {
      * in the caller would risk reading a different row between the two (a benign race, but an
      * avoidable one). */
     record RemainingInvoiceSnapshot(TicketSummaryDto ticketSummary, CustomerHeaderInfo header,
-                                    ResolvedRemainingInvoice resolved, Long payerCustomerId) {}
+                                    ResolvedRemainingInvoice resolved, IssueNames names) {}
 
-    /** {@code payer}: the ออกในนาม name asked for (feedback #74), see {@link #effectivePayer}; the header follows it. */
+    /** {@code stored} (null on create) and {@code choice}: เรียน, see {@link #chooseNames}; the header follows it. */
     RemainingInvoiceSnapshot resolveRemainingInvoiceSnapshot(long ticketId, Long quotationId, UserPrincipal actor,
-            Long payer) {
+            IssueNames stored, IssueNames.Choice choice) {
         TicketDto ticket = requireTicketViewer(ticketId, actor);
         TicketSummaryDto s = ticket.summary();
         requireQuotationIssuedForRemainingInvoice(s);
@@ -835,10 +835,10 @@ public class DepositNoticeService {
         List<DepositNoticeDto> notices = docs.findByTicket(ticketId);
         ResolvedRemainingInvoice resolved = resolveRemainingInvoice(
             ticketId, ticket, s, quotationId, quotationCandidates, notices);
-        Long payerCustomerId = effectivePayer(payer, ticketId, resolved.defaultReference());
+        IssueNames names = chooseNames(stored, choice, ticketId, resolved.defaultReference());
         CustomerHeaderInfo header = resolveCustomerHeader(s, null, null, null, ticketId, resolved.defaultReference(),
-            payerCustomerId);
-        return new RemainingInvoiceSnapshot(s, header, resolved, payerCustomerId);
+            names.addresseeCustomerId());
+        return new RemainingInvoiceSnapshot(s, header, resolved, names);
     }
 
     /** Package-private — EXACTLY the predicate {@link #issue} uses to gate issuing a deposit
@@ -1590,36 +1590,52 @@ public class DepositNoticeService {
         return resolveCustomerHeader(s, reqTaxId, reqAddress, reqProjectName, s.id(), null);
     }
 
-    /** ออกในนาม (feedback #74): the customer-list name a document of this deal is issued to instead of the customer of
-     * quotation {@code quotationNumber}. 400 for an unknown id; null when none was asked for or it is that quotation's
-     * own customer. Shared by the deposit notice and the remaining invoice. */
-    Long effectivePayer(Long requested, long ticketId, String quotationNumber) {
-        if (requested == null) return null;
-        if (customers.findById(requested).isEmpty()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าที่ออกในนาม");
+    /**
+     * เรียน of a document of this deal (feedback #74, Ploy: "select the same customer for quotation (default) or create an
+     * entirely new customer"). Starts from {@code stored}, or on create from the default: the เรียน already chosen on this
+     * deal's documents for quotation {@code quotationNumber}, else that quotation's customer (rule #65). Then applies
+     * {@code c}: a picked customer-list row (400 when unknown; the quotation's own customer is no override) or a reset.
+     * Shared by the deposit notice and the remaining invoice.
+     */
+    IssueNames chooseNames(IssueNames stored, IssueNames.Choice c, long ticketId, String quotationNumber) {
+        IssueNames names = stored != null ? stored
+            : new IssueNames(quotationNumber == null ? null : docs.findChosenAddressee(ticketId, quotationNumber).orElse(null));
+        if (c.addresseeCustomerId() != null) {
+            requireListedCustomer(c.addresseeCustomerId());
+            Long quotationCustomer = quotationNumber == null ? null
+                : docs.findQuotationPartyCustomerId(ticketId, quotationNumber).orElse(null);
+            names = new IssueNames(c.addresseeCustomerId().equals(quotationCustomer) ? null : c.addresseeCustomerId());
+        } else if (Boolean.TRUE.equals(c.addresseeReset())) {
+            names = IssueNames.NONE;
         }
-        boolean quotationsOwn = quotationNumber != null
-            && requested.equals(docs.findQuotationPartyCustomerId(ticketId, quotationNumber).orElse(null));
-        return quotationsOwn ? null : requested;
+        return names;
     }
 
-    /** A document a live billing note claims is billed under its customer (BillingNoteRepository#candidatesForCustomer),
-     * so its ออกในนาม name may not change until that billing note is cancelled or revised without it. */
-    void requireNameChangeUnbilled(String sourceType, long sourceId, Long before, Long after, String documentLabel) {
+    private void requireListedCustomer(long customerId) {
+        if (customers.findById(customerId).isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าที่เลือก");
+        }
+    }
+
+    /** A document a live billing note claims is billed under its เรียน customer (BillingNoteRepository#candidatesForCustomer),
+     * so เรียน may not change until that billing note is cancelled or revised without it. */
+    void requireNamesUnbilled(String sourceType, long sourceId, IssueNames before, IssueNames after, String documentLabel) {
         if (java.util.Objects.equals(before, after)) return;
         docs.findLiveBillingNoteClaim(sourceType, sourceId).ifPresent(claim -> {
             throw new ApiException(HttpStatus.CONFLICT, documentLabel + "นี้อยู่ในใบวางบิล "
                 + (claim.docNumber() == null ? "ฉบับร่าง" : claim.docNumber())
-                + " แล้ว จึงเปลี่ยนชื่อที่ออกในนามไม่ได้ ให้ยกเลิกใบวางบิลหรือนำเอกสารนี้ออกจากใบวางบิลก่อน");
+                + " แล้ว จึงเปลี่ยนลูกค้าที่เรียนไม่ได้ ให้ยกเลิกใบวางบิลหรือนำเอกสารนี้ออกจากใบวางบิลก่อน");
         });
     }
 
-    /** The buyer printed on anything tied to a quotation (owner rule #65): that quotation's party customer, else the
-     * deal's own customer ({@code fromDeal}). Read-only; delivery rounds show it to sales, the warehouse and the issuer. */
+    /** The buyer printed on anything tied to a quotation: the เรียน chosen on the deal's documents for it (feedback #74), else
+     * that quotation's party customer (owner rule #65), else the deal's own customer ({@code fromDeal}). Read-only; delivery rounds show it to sales, the warehouse and the issuer. */
     public record QuotationBuyer(String name, String taxId, String branch, boolean fromDeal) {}
 
     public QuotationBuyer quotationBuyer(TicketSummaryDto s, String quotationNumber) {
-        CustomerHeaderInfo h = resolveCustomerHeader(s, null, null, null, s.id(), quotationNumber);
+        // the เรียน chosen on the deal's documents for this quotation (feedback #74: the tax invoice goes in that name too)
+        Long chosen = quotationNumber == null ? null : docs.findChosenAddressee(s.id(), quotationNumber).orElse(null);
+        CustomerHeaderInfo h = resolveCustomerHeader(s, null, null, null, s.id(), quotationNumber, chosen);
         return new QuotationBuyer(h.customerNameOr(s.customerName()), h.taxId(), h.branch(), h.customerName() == null);
     }
 
@@ -1631,16 +1647,16 @@ public class DepositNoticeService {
         return resolveCustomerHeader(s, reqTaxId, reqAddress, reqProjectName, ticketId, quotationNumber, null);
     }
 
-    /** As above; a non-null {@code payerCustomerId} (a deposit notice's ผู้ชำระเงิน, feedback #74) takes the quotation
-     * party customer's place. */
+    /** As above; a non-null {@code addresseeCustomerId} (เรียน picked from the customer list, feedback #74) takes the
+     * quotation party customer's place. */
     CustomerHeaderInfo resolveCustomerHeader(TicketSummaryDto s, String reqTaxId, String reqAddress,
-            String reqProjectName, long ticketId, String quotationNumber, Long payerCustomerId) {
+            String reqProjectName, long ticketId, String quotationNumber, Long addresseeCustomerId) {
         Long customerId = s.customerId();
         String partyCustomerName = null;
         String customerTaxId = blankToNull(reqTaxId);
         String customerAddress = blankToNull(reqAddress);
-        if (payerCustomerId != null || (quotationNumber != null && !quotationNumber.isBlank())) {
-            Long partyCustomerId = payerCustomerId != null ? payerCustomerId
+        if (addresseeCustomerId != null || (quotationNumber != null && !quotationNumber.isBlank())) {
+            Long partyCustomerId = addresseeCustomerId != null ? addresseeCustomerId
                 : docs.findQuotationPartyCustomerId(ticketId, quotationNumber).orElse(null);
             CustomerDto party = partyCustomerId == null ? null : customers.findById(partyCustomerId).orElse(null);
             if (party != null) {
