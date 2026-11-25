@@ -284,24 +284,23 @@ describe('DepositNoticePage', () => {
       });
     }
 
-    it('makes the customer fields read-only, labelled as from the quotation, when it is addressed to a party', async () => {
+    it('shows เรียน from the quotation as a choosable row (no free-typed header) when it is addressed to a party', async () => {
       draftWith({ customerFromQuotation: true });
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotation] });
       renderDepositNoticePage();
 
       expect(await screen.findByTestId('customer-from-quotation')).not.toBeNull();
       expect(screen.getByLabelText(/อ้างอิง PO/).readOnly).toBe(true);
-      expect(screen.getByLabelText(/ชื่อบริษัท/).readOnly).toBe(true);
-      expect(screen.getByLabelText(/เลขประจำตัวผู้เสียภาษี/).readOnly).toBe(true);
-      expect(screen.getByLabelText('ที่อยู่').readOnly).toBe(true);
+      expect(screen.queryByLabelText(/ชื่อบริษัท/)).toBeNull();
+      expect(screen.getByTestId('doc-addressee-name').textContent).toBe(validDraftDoc.customerName);
 
       // feedback #74: เรียน and ออกในนาม are choosable; a name picked for ออกในนาม is saved as the payer, เรียน untouched
       api.customers.search.mockResolvedValue({ customers: [{ id: 77, name: 'ผู้ชำระ ทดสอบ', taxId: null, address: null }] });
       fireEvent.click(screen.getByTestId('doc-payer-change'));
-      fireEvent.change(screen.getByLabelText('ค้นหาลูกค้า (master)'), { target: { value: 'ผู้ชำระ' } });
+      fireEvent.change(screen.getByLabelText('ค้นหาจากรายชื่อลูกค้า หรือพิมพ์ชื่อใหม่'), { target: { value: 'ผู้ชำระ' } });
       fireEvent.click(await screen.findByRole('button', { name: /ผู้ชำระ ทดสอบ/ }));
       expect(screen.getByTestId('doc-payer-name').textContent).toBe('ผู้ชำระ ทดสอบ');
-      expect(screen.getByLabelText(/ชื่อบริษัท/).value).toBe(validDraftDoc.customerName);
+      expect(screen.getByTestId('doc-addressee-name').textContent).toBe(validDraftDoc.customerName);
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
       await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalled());
       expect(api.depositNotices.update.mock.calls.at(-1)[1]).toMatchObject({ payerCustomerId: 77, addresseeCustomerId: null });

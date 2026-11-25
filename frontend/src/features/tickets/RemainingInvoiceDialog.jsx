@@ -6,7 +6,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DialogSummary } from '../../components/common/DocumentDialogParts.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
-import { AddresseePicker, KEEP_NAMES, PayerPicker } from '../deposits/IssueInNamePicker.jsx';
+import { IssueNamesSection, KEEP_NAMES } from '../deposits/IssueInNamePicker.jsx';
 import { DocumentPreparerSelect } from '../deposits/DocumentPreparerSelect.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
@@ -34,6 +34,21 @@ function Section({ title, children }) {
       {children}
     </section>
   );
+}
+
+/** เรียน / ออกในนาม as the stored invoice shows them (feedback #74). */
+function shownNames(draft) {
+  return {
+    addressee: { name: draft.customerName, detail: customerDetail(draft.customerTaxId, draft.customerAddress) },
+    payer: {
+      name: draft.payerName ?? null,
+      detail: [draft.payerPhone && `โทร ${draft.payerPhone}`, draft.payerEmail].filter(Boolean).join(' · ') || null,
+    },
+  };
+}
+
+function customerDetail(taxId, address) {
+  return [taxId && `เลขประจำตัวผู้เสียภาษี ${taxId}`, address].filter(Boolean).join('\n') || null;
 }
 
 /** The deposit notice page's field grid: two columns, one on mobile. */
@@ -423,7 +438,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
   const [preparerId, setPreparerId] = useState(draft.preparerId ?? null);
   // เรียน / ออกในนาม (feedback #74): the pending choice sent on save, and what the two pickers show meanwhile
   const [names, setNames] = useState(KEEP_NAMES);
-  const [shown, setShown] = useState(() => ({ addressee: draft.customerName, payer: draft.payerName ?? null }));
+  const [shown, setShown] = useState(() => shownNames(draft));
   const [saving, setSaving] = useState(false);
   const [issuing, setIssuing] = useState(false);
   // Issuing mints the legal document number and cannot be undone, so it asks first.
@@ -441,7 +456,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
     setDocDate(draft.docDate ?? '');
     setPreparerId(draft.preparerId ?? null);
     setNames(KEEP_NAMES);
-    setShown({ addressee: draft.customerName, payer: draft.payerName ?? null });
+    setShown(shownNames(draft));
     setNotes(draft.notes ?? []);
   }, [draft]);
 
@@ -515,17 +530,28 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
           re-reads the server's fresh preview before anything is issued. */}
       <RemainingSummaryLine net={draft.netAmount} itemsTotal={draft.itemsTotal} deposit={draft.depositDeduction} />
       <Section title="ลูกค้า">
-        <AddresseePicker idPrefix="remaining-invoice" name={shown.addressee} showToast={showToast}
-          isDefault={names.addresseeReset === true || (draft.addresseeCustomerId == null && names.addresseeCustomerId == null)}
-          unsaved={names.addresseeCustomerId != null || names.addresseeReset != null}
-          onPick={(c) => { setNames((n) => ({ ...n, addresseeCustomerId: c.id, addresseeReset: null })); setShown((v) => ({ ...v, addressee: c.name })); }}
-          onReset={() => { setNames((n) => ({ ...n, addresseeCustomerId: null, addresseeReset: true })); setShown((v) => ({ ...v, addressee: 'ลูกค้าในใบเสนอราคา' })); }} />
-        <PayerPicker idPrefix="remaining-invoice" name={shown.payer} showToast={showToast}
-          unsaved={names.payerCustomerId != null || names.payerReset != null}
-          onPick={(c) => { setNames((n) => ({ ...n, payerCustomerId: c.id, payerReset: null })); setShown((v) => ({ ...v, payer: c.name })); }}
-          onReset={(key) => {
+        <IssueNamesSection idPrefix="remaining-invoice" showToast={showToast}
+          addressee={{
+            ...shown.addressee,
+            isDefault: names.addresseeReset === true || (draft.addresseeCustomerId == null && names.addresseeCustomerId == null),
+            pending: names.addresseeCustomerId != null || names.addresseeReset != null,
+          }}
+          payer={{ ...shown.payer, pending: names.payerCustomerId != null || names.payerReset != null }}
+          onPickAddressee={(c) => {
+            setNames((n) => ({ ...n, addresseeCustomerId: c.id, addresseeReset: null }));
+            setShown((v) => ({ ...v, addressee: { name: c.name, detail: customerDetail(c.taxId, c.address) } }));
+          }}
+          onResetAddressee={() => {
+            setNames((n) => ({ ...n, addresseeCustomerId: null, addresseeReset: true }));
+            setShown((v) => ({ ...v, addressee: { name: 'ลูกค้าตามใบเสนอราคา', detail: null } }));
+          }}
+          onPickPayer={(c) => {
+            setNames((n) => ({ ...n, payerCustomerId: c.id, payerReset: null }));
+            setShown((v) => ({ ...v, payer: { name: c.name, detail: c.phone ? `โทร ${c.phone}` : null } }));
+          }}
+          onResetPayer={(key) => {
             setNames((n) => ({ ...n, payerCustomerId: null, payerReset: key }));
-            setShown((v) => ({ ...v, payer: key === 'NONE' ? null : 'ผู้ติดต่อในใบเสนอราคา' }));
+            setShown((v) => ({ ...v, payer: { name: key === 'NONE' ? null : 'ผู้ติดต่อตามใบเสนอราคา', detail: null } }));
           }} />
       </Section>
 

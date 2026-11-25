@@ -162,7 +162,7 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
     // เรียน / ออกในนาม (feedback #74): a name picked from the customer list for ออกในนาม is saved as the payer
     api.customers.search.mockResolvedValue({ customers: [{ id: 77, name: 'ในนาม ทดสอบ', taxId: '0100000000077', address: 'กรุงเทพ' }] });
     fireEvent.click(screen.getByTestId('remaining-invoice-payer-change'));
-    fireEvent.change(screen.getByLabelText('ค้นหาลูกค้า (master)'), { target: { value: 'ในนาม' } });
+    fireEvent.change(screen.getByLabelText('ค้นหาจากรายชื่อลูกค้า หรือพิมพ์ชื่อใหม่'), { target: { value: 'ในนาม' } });
     fireEvent.click(await screen.findByRole('button', { name: /ในนาม ทดสอบ/ }));
     expect(screen.getByTestId('remaining-invoice-payer-name').textContent).toBe('ในนาม ทดสอบ');
     fireEvent.click(screen.getByTestId('remaining-invoice-save-draft'));

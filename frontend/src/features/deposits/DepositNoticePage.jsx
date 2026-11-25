@@ -26,7 +26,7 @@ import {
   subtotalsDiffer,
 } from './createDepositNoticeDraft.js';
 import { DocumentPreparerSelect } from './DocumentPreparerSelect.jsx';
-import { AddresseePicker, KEEP_NAMES, PayerPicker } from './IssueInNamePicker.jsx';
+import { IssueNamesSection, KEEP_NAMES } from './IssueInNamePicker.jsx';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 // CustomerPrintRule#addressWithBranch: a branch prints only for a customer with a tax id (feedback #72).
@@ -312,6 +312,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
     names: KEEP_NAMES,
     addresseeName: null,
     payerName: null,
+    payerDetail: null,
   });
 
   // Reads (TanStack Query) --- Mount only LOADS existing documents — it must never create one as a side effect
@@ -411,6 +412,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
       names:           KEEP_NAMES,
       addresseeName:   null,
       payerName:       d.payerName ?? null,
+      payerDetail:     [d.payerPhone && `โทร ${d.payerPhone}`, d.payerEmail].filter(Boolean).join(' · ') || null,
       // A qty < 0 line is the quotation's ส่วนลดพิเศษ: its qty is not editable and is allowed past the qty > 0 check.
       items:           (d.items ?? []).map((it) => ({ ...it, discount: Number(it.qty) < 0 })),
     };
@@ -587,18 +589,24 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
   }
 
   function resetAddressee() {
-    setForm((f) => ({ ...f, names: { ...f.names, addresseeCustomerId: null, addresseeReset: true }, addresseeName: 'ลูกค้าในใบเสนอราคา' }));
+    setForm((f) => ({ ...f, names: { ...f.names, addresseeCustomerId: null, addresseeReset: true }, addresseeName: 'ลูกค้าตามใบเสนอราคา' }));
   }
 
   function pickPayer(c) {
-    setForm((f) => ({ ...f, names: { ...f.names, payerCustomerId: c.id, payerReset: null }, payerName: c.name }));
+    setForm((f) => ({
+      ...f,
+      names: { ...f.names, payerCustomerId: c.id, payerReset: null },
+      payerName: c.name,
+      payerDetail: c.phone ? `โทร ${c.phone}` : null,
+    }));
   }
 
   function resetPayer(key) {
     setForm((f) => ({
       ...f,
       names: { ...f.names, payerCustomerId: null, payerReset: key },
-      payerName: key === 'NONE' ? null : 'ผู้ติดต่อในใบเสนอราคา',
+      payerName: key === 'NONE' ? null : 'ผู้ติดต่อตามใบเสนอราคา',
+      payerDetail: null,
     }));
   }
 
@@ -839,16 +847,22 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
             ) : (
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
                 {customerFromQuotation ? (
-                  <div className="col-span-full flex flex-col gap-3" data-testid="customer-from-quotation">
-                    <AddresseePicker idPrefix="doc" name={form.addresseeName ?? form.customerName} showToast={showToast}
-                      isDefault={form.names.addresseeReset === true
-                        || (doc?.addresseeCustomerId == null && form.names.addresseeCustomerId == null)}
-                      unsaved={form.names.addresseeCustomerId != null || form.names.addresseeReset != null}
-                      onPick={pickAddressee} onReset={resetAddressee} />
-                    <PayerPicker idPrefix="doc" name={form.payerName} showToast={showToast}
-                      unsaved={form.names.payerCustomerId != null || form.names.payerReset != null}
-                      onPick={pickPayer} onReset={resetPayer} />
-                  </div>
+                  <IssueNamesSection idPrefix="doc" showToast={showToast}
+                    addressee={{
+                      name: form.addresseeName ?? form.customerName,
+                      detail: form.addresseeName ? null : [form.customerTaxId && `เลขประจำตัวผู้เสียภาษี ${form.customerTaxId}`,
+                        form.customerAddress].filter(Boolean).join('\n'),
+                      isDefault: form.names.addresseeReset === true
+                        || (doc?.addresseeCustomerId == null && form.names.addresseeCustomerId == null),
+                      pending: form.names.addresseeCustomerId != null || form.names.addresseeReset != null,
+                    }}
+                    payer={{
+                      name: form.payerName,
+                      detail: form.payerDetail,
+                      pending: form.names.payerCustomerId != null || form.names.payerReset != null,
+                    }}
+                    onPickAddressee={pickAddressee} onResetAddressee={resetAddressee}
+                    onPickPayer={pickPayer} onResetPayer={resetPayer} />
                 ) : (
                   <div className="relative col-span-full">
                     <FormField label="ค้นหาลูกค้า (master)" htmlFor="doc-customer-search">
@@ -873,24 +887,26 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                     )}
                   </div>
                 )}
+                {customerFromQuotation ? null : (<>
                 <FormField label="ชื่อบริษัท / หน่วยงาน" htmlFor="doc-customer-name" required error={fieldErrors.customerName}>
                   <input
                     id="doc-customer-name"
                     ref={(el) => { fieldRefs.current.customerName = el; }}
-                    value={form.customerName} readOnly={customerFromQuotation}
+                    value={form.customerName}
                     onChange={(e) => setField('customerName', e.target.value)} placeholder="บริษัท…"
                   />
                 </FormField>
                 <FormField label="เลขประจำตัวผู้เสียภาษี" htmlFor="doc-customer-tax">
-                  <input id="doc-customer-tax" value={form.customerTaxId} readOnly={customerFromQuotation}
+                  <input id="doc-customer-tax" value={form.customerTaxId}
                     onChange={(e) => changeTaxId(e.target.value)} placeholder="0000000000000" />
                 </FormField>
                 <div className="col-span-full">
                   <FormField label="ที่อยู่" htmlFor="doc-customer-address">
-                    <textarea id="doc-customer-address" rows={2} value={form.customerAddress} readOnly={customerFromQuotation}
+                    <textarea id="doc-customer-address" rows={2} value={form.customerAddress}
                       onChange={(e) => setField('customerAddress', e.target.value)} placeholder="ที่อยู่…" className="resize-y" />
                   </FormField>
                 </div>
+                </>)}
                 <FormField label="โครงการ" htmlFor="doc-project">
                   <input id="doc-project" value={form.projectName}
                     onChange={(e) => setField('projectName', e.target.value)} placeholder="โครงการ…" />
