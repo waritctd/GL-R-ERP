@@ -389,6 +389,10 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
             salesActor), ApiException.class).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(depositNoticeService.update(n.id(), noticeNames(null, null, addressee, null), salesActor).payerName())
             .isNull();
+        // also when เรียน is changed to the person already set as ออกในนาม: the name never prints twice
+        depositNoticeService.update(n.id(), noticeNames(null, null, payer, null), salesActor);
+        assertThat(depositNoticeService.update(n.id(), noticeNames(payer, null, null, null), salesActor).payerName())
+            .isNull();
         DepositNoticeDto back = depositNoticeService.update(n.id(), noticeNames(null, true, null, "DEFAULT"), salesActor);
         assertThat(back.customerName()).isEqualTo(buyer.name());
         assertThat(back.addresseeCustomerId()).isNull();
@@ -424,7 +428,10 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         jdbc.update("DROP TABLE qi_keep", java.util.Map.of());
         assertThat(depositNoticeService.getById(n.id(), salesActor).reference()).isEqualTo(deal.quotation().number());
 
-        DepositNoticeDto moved = depositNoticeService.update(n.id(), repoint, salesActor);
+        // the re-point starts from that quotation's defaults with this save's choice on top (an ออกในนาม picked with it)
+        DepositNoticeDto moved = depositNoticeService.update(n.id(), new DepositNoticeDraftRequest(null, null, null, null,
+            "QT-OTHER-PARTY", null, null, null, null, null, null, null, payer, null), salesActor);
+        assertThat(moved.payerName()).isEqualTo("ผู้ชำระ ทดสอบ");
         assertThat(moved.depositPercent()).isEqualByComparingTo("0.40");
         assertThat(moved.reference()).isEqualTo("QT-OTHER-PARTY");
         assertThat(moved.customerName()).isEqualTo(otherBuyer.name());

@@ -290,9 +290,8 @@ public class DepositNoticeService {
             repointed = true;
         }
         // เรียน / ออกในนาม (feedback #74, Ploy: "make everything choosable just put in the default value first"). A re-point
-        // is a new buyer's document, so it starts from that quotation's defaults.
-        IssueNames names = repointed ? chooseNames(null, IssueNames.Choice.KEEP, doc.ticketId(), reference)
-            : chooseNames(doc.names(), req.nameChoice(), doc.ticketId(), reference);
+        // is a new buyer's document, so it starts from that quotation's defaults, with this save's choice on top.
+        IssueNames names = chooseNames(repointed ? null : doc.names(), req.nameChoice(), doc.ticketId(), reference);
         requireNamesUnbilled("DEPOSIT_NOTICE", docId, doc.names(), names, "ใบแจ้งยอด");
         if (names.addresseeCustomerId() != null) {
             quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference,
@@ -1597,8 +1596,8 @@ public class DepositNoticeService {
      * เรียน / ออกในนาม of a document of this deal (feedback #74, Ploy: "make everything choosable just put in the default
      * value first"). Starts from {@code stored}, or on create from the defaults: เรียน the customer of quotation
      * {@code quotationNumber} (rule #65), ออกในนาม its contact. Then applies {@code c}: a picked customer-list row (400
-     * when unknown) or a reset. เรียน picked equal to the quotation's customer is no override; ออกในนาม equal to เรียน is
-     * none (the same person). Shared by the deposit notice and the remaining invoice.
+     * when unknown) or a reset. เรียน picked equal to the quotation's customer is no override; ออกในนาม naming เรียน
+     * (after any change of either) is none, the same person. Shared by the deposit notice and the remaining invoice.
      */
     IssueNames chooseNames(IssueNames stored, IssueNames.Choice c, long ticketId, String quotationNumber) {
         Long quotationCustomer = quotationNumber == null ? null
@@ -1612,15 +1611,22 @@ public class DepositNoticeService {
         }
         if (c.payerCustomerId() != null) {
             requireListedCustomer(c.payerCustomerId());
-            Long addressee = names.addresseeCustomerId() != null ? names.addresseeCustomerId() : quotationCustomer;
-            names = c.payerCustomerId().equals(addressee) ? names.withPayer(null, null)
-                : names.withPayer(c.payerCustomerId(), docs.findCustomerPerson(c.payerCustomerId()).orElse(null));
+            names = names.withPayer(c.payerCustomerId(), docs.findCustomerPerson(c.payerCustomerId()).orElse(null));
         } else if ("NONE".equals(c.payerReset())) {
             names = names.withPayer(null, null);
         } else if ("DEFAULT".equals(c.payerReset())) {
             names = names.withPayer(null, quotationContact(ticketId, quotationNumber));
         }
-        return names;
+        return samePersonAsAddressee(names, quotationCustomer) ? names.withPayer(null, null) : names;
+    }
+
+    /** ออกในนาม naming เรียน's own customer (by list row or by name) is the same person, so the name never prints twice. */
+    private boolean samePersonAsAddressee(IssueNames names, Long quotationCustomer) {
+        if (names.payerName() == null) return false;
+        Long addressee = names.addresseeCustomerId() != null ? names.addresseeCustomerId() : quotationCustomer;
+        if (addressee == null) return false;
+        return addressee.equals(names.payerCustomerId()) || customers.findById(addressee)
+            .map(a -> a.name() != null && a.name().trim().equalsIgnoreCase(names.payerName().trim())).orElse(false);
     }
 
     private IssueNames.Person quotationContact(long ticketId, String quotationNumber) {

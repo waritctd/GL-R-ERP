@@ -232,7 +232,6 @@ public class RemainingInvoiceRepository {
                 .addValue("id", id).addValue("expectedStatus", expectedStatus)
                 .addValue("reference", reference).addValue("depositReference", depositReference)
                 .addValue("docDate", docDate).addValue("preparerId", preparerId)
-
                 .addValue("notes", notes == null ? new String[0] : notes.toArray(new String[0])));
     }
 
