@@ -48,6 +48,7 @@ public class WeeklyReportRepository {
         SELECT t.created_by, COALESCE(q.approved_at, q.issued_at), 'QUOTATION', t.ticket_id, %1$s, q.number, NULL
           FROM sales.quotation q JOIN sales.ticket t ON t.ticket_id = q.ticket_id
          WHERE COALESCE(q.approved_at, q.issued_at) IS NOT NULL
+           AND q.doc_status NOT IN ('SUPERSEDED', 'CANCELLED', 'DRAFT', 'REJECTED')
         UNION ALL
         SELECT v.owner_id, v.done_at, 'VISIT', t.ticket_id, %1$s, NULL, NULL
           FROM sales.visit v LEFT JOIN sales.ticket t ON t.ticket_id = v.ticket_id
@@ -93,7 +94,8 @@ public class WeeklyReportRepository {
         out.put("lost", counts(ev.formatted(TicketEventKind.MARKED_LOST), p));
         out.put("quotations", counts("SELECT t.created_by AS owner_id, COUNT(*) AS n FROM sales.quotation q "
             + "JOIN sales.ticket t ON t.ticket_id = q.ticket_id WHERE COALESCE(q.approved_at, q.issued_at) >= :from "
-            + "AND COALESCE(q.approved_at, q.issued_at) < :to AND " + OWNER + " GROUP BY 1", p));
+            + "AND COALESCE(q.approved_at, q.issued_at) < :to "
+            + "AND q.doc_status NOT IN ('SUPERSEDED', 'CANCELLED', 'DRAFT', 'REJECTED') AND " + OWNER + " GROUP BY 1", p));
         // The ticket's OWN confirmation (an add-on is its own order), not the root fallback the cutoff uses.
         p.addValue("promoted", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)
             .addValue("confirmed", TicketEventKind.CUSTOMER_CONFIRMED);
@@ -113,12 +115,12 @@ public class WeeklyReportRepository {
                 rs.getString("b")));
     }
 
-    /** Each owner's latest entry ever. */
-    Map<Long, Instant> lastEntries(Long ownerId) {
+    /** Each owner's latest entry in the last 90 days (an owner with none is absent). */
+    Map<Long, Instant> lastEntries(Long ownerId, Instant now) {
         Map<Long, Instant> out = new LinkedHashMap<>();
-        jdbc.query("SELECT owner_id, MAX(at) AS at FROM (" + ENTRIES + ") x "
-                + "WHERE (CAST(:ownerId AS BIGINT) IS NULL OR owner_id = :ownerId) GROUP BY owner_id",
-            params(ownerId), rs -> {
+        jdbc.query("SELECT owner_id, MAX(at) AS at FROM (" + ENTRIES + ") x WHERE at >= :since "
+                + "AND (CAST(:ownerId AS BIGINT) IS NULL OR owner_id = :ownerId) GROUP BY owner_id",
+            params(ownerId).addValue("since", Timestamp.from(now.minus(java.time.Duration.ofDays(90)))), rs -> {
                 out.put(rs.getLong("owner_id"), rs.getTimestamp("at").toInstant());
             });
         return out;

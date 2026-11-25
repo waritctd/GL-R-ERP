@@ -4,12 +4,15 @@ import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { findStage } from '../tickets/stageCatalog.js';
-import { addDaysIso, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
+import { addDaysIso, bangkokTodayIso, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
 import { isoWeekdayIndex, timeLabel, visitIsDue } from '../salesBoard/visitWeek.js';
 import { quarterLabel } from '../salesBoard/boardFormat.js';
 
 const DAY_NAMES = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
 const PAYMENT_KIND = { DEPOSIT: 'มัดจำ', ON_DELIVERY: 'รับชำระวันส่งมอบ', BALANCE: 'ส่วนที่เหลือ' };
+
+/** The Bangkok calendar day of an instant (ISO timestamp), as an ISO date. */
+export const bangkokDay = (instant) => bangkokTodayIso(new Date(instant));
 
 /** "26 พ.ย." for an ISO date. */
 export const dayMonth = (iso) => formatThaiDate(iso).split(' ').slice(0, 2).join(' ');
@@ -89,7 +92,7 @@ export function Worklist({ items }) {
 /** The week's counts, summed over the reps in scope. */
 export function WeekCounts({ reps, orders, weekStart, weekEnd }) {
   const sum = (key) => reps.reduce((total, rep) => total + rep[key], 0);
-  const confirmed = orders.filter((o) => o.orderConfirmedAt && o.orderConfirmedAt.slice(0, 10) >= weekStart && o.orderConfirmedAt.slice(0, 10) <= weekEnd);
+  const confirmed = orders.filter((o) => o.orderConfirmedAt && bangkokDay(o.orderConfirmedAt) >= weekStart && bangkokDay(o.orderConfirmedAt) <= weekEnd);
   const waiting = sum('visitsDue') - sum('visitsDueWithResult');
   const rows = [
     ['งานใหม่', `${sum('newDeals')} งาน`],
@@ -179,7 +182,7 @@ export function ExpectedTable({ rows, catalog }) {
     { key: 'stage', header: 'ขั้นงาน', render: (d) => <span className="text-xs">{stageText(catalog, d.salesStage)}</span> },
     { key: 'buyer', header: 'ผู้ออกแบบ / ผู้ซื้อ', render: (d) => <span className="text-xs">{d.designerName || '–'}<Sub>{d.buyerName}</Sub></span> },
     { key: 'quarter', header: 'ไตรมาสที่คาด', render: (d) => quarterLabel(d.expectedQuarter) || '–' },
-    { key: 'touched', header: 'อัปเดตล่าสุด', render: (d) => (d.lastTouchedAt ? dayMonth(d.lastTouchedAt.slice(0, 10)) : '–') },
+    { key: 'touched', header: 'อัปเดตล่าสุด', render: (d) => (d.lastTouchedAt ? dayMonth(bangkokDay(d.lastTouchedAt)) : '–') },
   ];
   return (
     <DataTable
@@ -247,7 +250,7 @@ export function RepTable({ reps, orders, hrefFor, todayIso }) {
     { key: 'moves', header: 'เลื่อนขั้น', align: 'right', render: (r) => r.stageMoves },
     { key: 'quotes', header: 'ใบเสนอราคา', align: 'right', render: (r) => r.quotationsIssued },
     { key: 'visits', header: 'เข้าพบ', align: 'right', render: (r) => `${r.visitsDone} / ${r.visitsPlanned}` },
-    { key: 'last', header: 'อัปเดตล่าสุด', render: (r) => (!r.lastEntryAt ? '–' : r.lastEntryAt.slice(0, 10) === todayIso ? 'วันนี้' : dayMonth(r.lastEntryAt.slice(0, 10))) },
+    { key: 'last', header: 'อัปเดตล่าสุด', render: (r) => (!r.lastEntryAt ? '–' : bangkokDay(r.lastEntryAt) === todayIso ? 'วันนี้' : dayMonth(bangkokDay(r.lastEntryAt))) },
   ];
   return (
     <DataTable
@@ -258,7 +261,7 @@ export function RepTable({ reps, orders, hrefFor, todayIso }) {
       gridClassName="grid-cols-[minmax(0,1.6fr)_minmax(0,1.7fr)_minmax(0,1.1fr)_repeat(4,minmax(4.5rem,0.8fr))_minmax(5rem,0.9fr)]"
       mobileCard={(r) => (
         <Link to={hrefFor(r.ownerId)} className="grid gap-1 px-3.5 py-3 text-text no-underline">
-          <span className="flex items-baseline justify-between gap-3"><b className="text-sm">{r.name}</b><small className="text-xs text-text-muted">อัปเดตล่าสุด {!r.lastEntryAt ? '–' : r.lastEntryAt.slice(0, 10) === todayIso ? 'วันนี้' : dayMonth(r.lastEntryAt.slice(0, 10))}</small></span>
+          <span className="flex items-baseline justify-between gap-3"><b className="text-sm">{r.name}</b><small className="text-xs text-text-muted">อัปเดตล่าสุด {!r.lastEntryAt ? '–' : bangkokDay(r.lastEntryAt) === todayIso ? 'วันนี้' : dayMonth(bangkokDay(r.lastEntryAt))}</small></span>
           <small className="text-xs text-text-muted">สั่งซื้อแล้ว {r.ordersOpen} งาน · ระบุวันรับเงิน {r.ordersWithDate} / {r.ordersOpen}</small>
           <small className="text-xs text-text-muted">ยืนยันคำสั่งซื้อ {r.ordersConfirmed} · เลื่อนขั้น {r.stageMoves} · ใบเสนอราคา {r.quotationsIssued} · เข้าพบ {r.visitsDone} / {r.visitsPlanned}</small>
         </Link>

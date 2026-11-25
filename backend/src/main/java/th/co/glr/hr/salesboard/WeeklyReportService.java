@@ -18,6 +18,7 @@ import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import th.co.glr.hr.auth.DivisionAccessPolicy;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -116,7 +117,10 @@ public class WeeklyReportService {
             got[i] = got[i].add(r.received());
         }
         // A week before the current one carries no OPEN money: its rows are slips, counted once below.
-        for (CashRepository.ExpectedWeekRow r : cash.expectedByWeek(owner, first, last)) {
+        // Every OPEN row lands in exactly one line: the stage buckets first, the rest by kind.
+        List<CashRepository.ExpectedWeekRow> inMonth = new ArrayList<>(cash.expectedByWeek(owner, first, last));
+        inMonth.addAll(cash.unbucketedOpenByWeek(owner, first, last));
+        for (CashRepository.ExpectedWeekRow r : inMonth) {
             int i = mondays.indexOf(r.week());
             if (i >= 0 && !r.week().isBefore(currentMonday)) {
                 open[0][i] = open[0][i].add(r.deliveredAwaiting());
@@ -125,7 +129,10 @@ public class WeeklyReportService {
             }
         }
         BigDecimal[] slip = zeros(3);
-        for (CashRepository.ExpectedWeekRow r : cash.expectedByWeek(owner, EPOCH, currentMonday.plusDays(2))) {
+        List<CashRepository.ExpectedWeekRow> late = new ArrayList<>(
+            cash.expectedByWeek(owner, EPOCH, currentMonday.plusDays(2)));
+        late.addAll(cash.unbucketedOpenByWeek(owner, EPOCH, currentMonday.plusDays(2)));
+        for (CashRepository.ExpectedWeekRow r : late) {
             slip[0] = slip[0].add(r.deliveredAwaiting());
             slip[1] = slip[1].add(r.deliveriesScheduled());
             slip[2] = slip[2].add(r.depositsExpected());
@@ -200,7 +207,7 @@ public class WeeklyReportService {
         Instant to = sunday.plusDays(1).atStartOfDay(CashRepository.BANGKOK).toInstant();
         Instant dayFrom = today.atStartOfDay(CashRepository.BANGKOK).toInstant();
         Map<String, Map<Long, Integer>> counts = repository.weekCounts(owner, from, to);
-        Map<Long, Instant> last = repository.lastEntries(owner);
+        Map<Long, Instant> last = repository.lastEntries(owner, clock.instant());
         Map<Long, Integer> entriesToday = new LinkedHashMap<>();
         repository.entries(owner, dayFrom, today.plusDays(1).atStartOfDay(CashRepository.BANGKOK).toInstant())
             .forEach(e -> entriesToday.merge(e.ownerId(), 1, Integer::sum));
@@ -217,7 +224,16 @@ public class WeeklyReportService {
             orders.rows().forEach(o -> ids.add(o.ownerId()));
             weekVisits.stream().filter(v -> !VisitDtos.CANCELLED.equals(v.status())).forEach(v -> ids.add(v.ownerId()));
         }
-        Map<Long, String> names = names(ids);
+        Map<Long, String> names = new LinkedHashMap<>();
+        employees.findByEmployeeIds(ids).forEach((id, e) -> {
+            // Team rows are the sales reps; other owners' orders and money still count in the ledger.
+            if (owner != null || "sales".equals(DivisionAccessPolicy.roleFor(e))) {
+                names.put(id, e.name());
+            }
+        });
+        if (owner == null) {
+            ids.retainAll(names.keySet());
+        }
         List<WeeklyRepRow> rows = new ArrayList<>();
         for (long id : ids) {
             int done = 0;

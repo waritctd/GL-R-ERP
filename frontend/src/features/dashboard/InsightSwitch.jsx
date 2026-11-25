@@ -31,7 +31,7 @@ function useLandingView(allowed) {
  * roles without it, the sales rep). The tablist lives in the header; the tabpanel (`panelProps`) wraps only the body
  * below it, so the tablist is never inside the panel it controls.
  */
-export function InsightLanding({ title, user, renderToday, insight = true }) {
+export function InsightLanding({ title, user, renderToday, insight = true, showToast }) {
   const items = insight ? [TODAY, REPORT, INSIGHT] : [TODAY, REPORT];
   const [view, setView] = useLandingView(items.map((item) => item.id));
   const switcher = <Tabs items={items} value={view} onChange={setView} ariaLabel="มุมมองหน้าแรก" idPrefix="landing-view" onSurface tabClassName="mobile:min-h-11" />;
@@ -40,7 +40,7 @@ export function InsightLanding({ title, user, renderToday, insight = true }) {
   return (
     <PageStack>
       <PageHeader title={title} actions={switcher} />
-      <div {...panelProps}>{view === 'report' ? <WeeklyReport user={user} /> : <SalesInsights user={user} />}</div>
+      <div {...panelProps}>{view === 'report' ? <WeeklyReport user={user} showToast={showToast} /> : <SalesInsights user={user} />}</div>
     </PageStack>
   );
 }

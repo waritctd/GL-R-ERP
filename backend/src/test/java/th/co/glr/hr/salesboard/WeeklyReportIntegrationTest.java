@@ -75,6 +75,20 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
     }
 
     @Test
+    void anOpenRowNoStageBucketTakesStillLandsByKind() {
+        long id = confirmedDeal("2026-11-17T03:00:00Z");
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'ORDER_RECEIVED' WHERE ticket_id = :t", Map.of("t", id));
+        expected(id, "ON_DELIVERY", "400", "2026-11-23");
+        expected(id, "BALANCE", "50", "2026-11-23");
+
+        var ledger = service.report(salesActor, WEEK, null).ledger();
+
+        assertThat(ledger.deliveriesScheduled()).isEqualByComparingTo("400");
+        assertThat(ledger.deliveredAwaiting()).isEqualByComparingTo("50");
+        assertThat(ledger.total()).isEqualByComparingTo("450");
+    }
+
+    @Test
     void scope_salesReadsOnlyOwn_managerReadsTeamOrOneRep() {
         assertThat(refusal(() -> service.report(salesActor, WEEK, otherSalesActor.id()), HttpStatus.FORBIDDEN))
             .isNotNull();
@@ -118,10 +132,14 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
     }
 
     private void expected(long ticketId, String amount, String week) {
+        expected(ticketId, "DEPOSIT", amount, week);
+    }
+
+    private void expected(long ticketId, String kind, String amount, String week) {
         jdbc.update("""
             INSERT INTO sales.expected_payment (ticket_id, kind, amount, expected_week, status, created_by)
-            VALUES (:t, 'DEPOSIT', :a, :w, 'OPEN', :by)
-            """, Map.of("t", ticketId, "a", new BigDecimal(amount), "w", LocalDate.parse(week),
+            VALUES (:t, :k, :a, :w, 'OPEN', :by)
+            """, Map.of("t", ticketId, "k", kind, "a", new BigDecimal(amount), "w", LocalDate.parse(week),
                 "by", salesManagerActor.id()));
     }
 

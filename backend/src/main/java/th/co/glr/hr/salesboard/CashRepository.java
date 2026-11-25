@@ -102,6 +102,31 @@ public class CashRepository {
     }
 
     /**
+     * Weekly report only: OPEN rows on ACTIVE deals that no {@link #expectedByWeek} bucket takes (e.g. ON_DELIVERY
+     * still at ORDER_RECEIVED), keyed by kind in the same three fields: BALANCE in deliveredAwaiting, ON_DELIVERY in
+     * deliveriesScheduled. DEPOSIT always has its bucket. {@code forecast} is zero.
+     */
+    public List<ExpectedWeekRow> unbucketedOpenByWeek(Long ownerId, LocalDate from, LocalDate to) {
+        MapSqlParameterSource p = new MapSqlParameterSource().addValue("from", from).addValue("to", to);
+        String owner = ownerPredicate(ownerId, p) + moneyPredicate(p);
+        return jdbc.query("""
+            SELECT t.created_by AS owner_id, ep.expected_week,
+                   COALESCE(SUM(ep.amount - ep.received_amount) FILTER (WHERE ep.kind = 'BALANCE'
+                       AND t.sales_stage <> 'DELIVERED'), 0) AS balance_left,
+                   COALESCE(SUM(ep.amount - ep.received_amount) FILTER (WHERE ep.kind = 'ON_DELIVERY'
+                       AND t.sales_stage NOT IN ('DELIVERED', 'DELIVERY_SCHEDULING', 'PROCUREMENT')), 0)
+                       AS on_delivery_left
+              FROM sales.expected_payment ep
+              JOIN sales.ticket t ON t.ticket_id = ep.ticket_id
+             WHERE ep.status = 'OPEN' AND t.lifecycle = 'ACTIVE' AND ep.amount - ep.received_amount > 0
+               AND ep.expected_week + 3 BETWEEN :from AND :to
+            """ + owner + " GROUP BY t.created_by, ep.expected_week",
+            p, (rs, n) -> new ExpectedWeekRow(rs.getLong("owner_id"), rs.getObject("expected_week", LocalDate.class),
+                BigDecimal.ZERO, rs.getBigDecimal("balance_left"), rs.getBigDecimal("on_delivery_left"),
+                BigDecimal.ZERO));
+    }
+
+    /**
      * THB receipts received on Bangkok days [from, toInclusive], signed as TicketRepository.SIGNED_RECEIPT_SUM
      * (ADJUSTMENT subtracts). Every source counts (MANUAL and EXPRESS alike) — cash is cash, and the upload dedupes
      * on its own document number so it is never in here twice. A PRE_PORTAL deposit counts on the date the rep gave it.

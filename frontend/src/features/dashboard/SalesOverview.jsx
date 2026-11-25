@@ -37,6 +37,7 @@ export function SalesOverview(props) {
     <InsightLanding
       title="งานวันนี้"
       user={props.user}
+      showToast={props.showToast}
       insight={false}
       renderToday={(switcher) => (
         <MyWork user={props.user} showToast={props.showToast}>

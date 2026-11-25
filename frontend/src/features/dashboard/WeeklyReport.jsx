@@ -13,7 +13,7 @@ import { isOrderedIn } from '../tickets/movementRange.js';
 import { stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 import { WeeklyLedger } from './WeeklyLedger.jsx';
 import {
-  ExpectedTable, MovementTable, OrdersTable, RepTable, SectionTitle, SlipTable, VisitsByDay, WeekCounts, Worklist, weekRange,
+  ExpectedTable, MovementTable, OrdersTable, RepTable, SectionTitle, SlipTable, VisitsByDay, WeekCounts, Worklist, bangkokDay, weekRange,
 } from './weeklyReportParts.jsx';
 
 const TEAM_ROLES = ['sales_manager', 'ceo'];
@@ -62,7 +62,7 @@ function LoadingBody() {
  * come from GET /api/sales/weekly-report; the expected-value table is the board's own pre-order rows and the visit
  * table is the existing visits API.
  */
-export function WeeklyReport({ user }) {
+export function WeeklyReport({ user, showToast }) {
   const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
   const isTeamRole = TEAM_ROLES.includes(user?.role);
@@ -93,6 +93,7 @@ export function WeeklyReport({ user }) {
   const markDone = useMutation({
     mutationFn: (id) => api.salesVisits.done(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tickets'] }),
+    onError: (error) => showToast?.('error', error?.message || 'บันทึกการเข้าพบไม่สำเร็จ'),
   });
 
   const setWeek = (next) => setParams((prev) => {
@@ -117,6 +118,7 @@ export function WeeklyReport({ user }) {
   if (!report) return <LoadingBody />;
 
   const team = report.scope === 'TEAM';
+  const canMarkDone = !team && !repId; // only the report's own subject ticks a visit
   const visits = (visitsQuery.data ?? []).filter((v) => repId == null || v.ownerId === repId);
   const orders = report.orders;
   const pendingVisits = visits.filter((v) => visitIsDue(v, todayIso));
@@ -129,7 +131,9 @@ export function WeeklyReport({ user }) {
     items.push({
       key: 'undated', count: undated.length, title: 'งานที่ยังไม่ระบุวันคาดว่าจะรับเงิน',
       detail: `สั่งซื้อแล้ว ${undated.length} งาน · ${formatMoney(undated.reduce((t, o) => t + o.outstanding, 0))} ยังไม่รวมในประมาณการ`,
-      to: team ? '/tickets' : `/tickets/${undated[0].ticketId}?tab=money`, action: team ? 'ดูรายการ' : 'ระบุวันที่',
+      ...(team ? { to: '/tickets', action: 'ดูรายการ' }
+        : undated.length === 1 ? { to: `/tickets/${undated[0].ticketId}?tab=money`, action: 'ระบุวันที่' }
+          : { onClick: () => document.getElementById('weekly-orders')?.scrollIntoView({ behavior: 'smooth' }), action: 'ดูรายการ' }),
     });
   }
   if (team && slipped.length) {
@@ -140,9 +144,9 @@ export function WeeklyReport({ user }) {
     });
   }
   if (team && weekStart === currentWeek) {
-    report.reps.filter((r) => r.entriesToday === 0 && (!r.lastEntryAt || r.lastEntryAt.slice(0, 10) < weekStart)).forEach((r) => items.push({
+    report.reps.filter((r) => r.entriesToday === 0 && (!r.lastEntryAt || bangkokDay(r.lastEntryAt) < weekStart)).forEach((r) => items.push({
       key: `quiet-${r.ownerId}`, count: 1, title: 'พนักงานขายที่ยังไม่มีการบันทึกในสัปดาห์นี้',
-      detail: `${r.name} · อัปเดตล่าสุด ${r.lastEntryAt ? formatThaiDate(r.lastEntryAt.slice(0, 10)) : 'ยังไม่มี'}`,
+      detail: `${r.name} · อัปเดตล่าสุด ${r.lastEntryAt ? formatThaiDate(bangkokDay(r.lastEntryAt)) : 'ยังไม่มี'}`,
       to: hrefFor(r.ownerId), action: 'เปิดรายงาน',
     }));
   }
@@ -154,7 +158,7 @@ export function WeeklyReport({ user }) {
       key: `visits-${ownerId}`, count: list.length, title: `นัดเข้าพบที่รอบันทึกผล · ${list[0].ownerName} ${list.length} นัด`,
       detail: 'ผู้แทนขายยังไม่บันทึกผลการเข้าพบ', to: hrefFor(ownerId), action: 'ดูรายงาน',
     }));
-  } else {
+  } else if (canMarkDone) {
     pendingVisits.forEach((v) => items.push({
       key: `visit-${v.id}`, count: 1, title: 'นัดเข้าพบที่รอบันทึกผล',
       detail: [formatThaiDate(v.plannedDate), timeLabel(v.plannedTime), v.contactName, v.ticketTitle].filter(Boolean).join(' · '),
@@ -172,7 +176,7 @@ export function WeeklyReport({ user }) {
   const expectedRest = expectedAll.slice(EXPECTED_SHOWN);
 
   const title = team ? 'รายงานประจำสัปดาห์ของทีมขาย' : repId ? `รายงานประจำสัปดาห์ของ ${report.reps[0]?.name ?? ''}` : 'รายงานประจำสัปดาห์';
-  const confirmed = orders.filter((o) => o.orderConfirmedAt && o.orderConfirmedAt.slice(0, 10) >= weekStart && o.orderConfirmedAt.slice(0, 10) <= weekEnd);
+  const confirmed = orders.filter((o) => o.orderConfirmedAt && bangkokDay(o.orderConfirmedAt) >= weekStart && bangkokDay(o.orderConfirmedAt) <= weekEnd);
 
   return (
     <div className="grid min-w-0 gap-[18px]">
@@ -210,7 +214,7 @@ export function WeeklyReport({ user }) {
         </Panel>
       ) : null}
 
-      <Panel title={team ? 'งานที่สั่งซื้อแล้ว' : 'งานของฉัน'}>
+      <Panel id="weekly-orders" title={team ? 'งานที่สั่งซื้อแล้ว' : 'งานของฉัน'}>
         <SectionTitle title="ยอดที่สั่งซื้อแล้ว" aside={`${orders.length} งาน · ${formatMoney(orders.reduce((t, o) => t + o.value, 0))}`} />
         <OrdersTable orders={orders} catalog={catalog} showOwner={team} />
         {showExpected ? (
@@ -254,7 +258,7 @@ export function WeeklyReport({ user }) {
         ) : visitsQuery.isLoading ? (
           <Skeleton height={100} />
         ) : (
-          <VisitsByDay visits={visits} weekStart={weekStart} todayIso={todayIso} onDone={team ? null : (id) => markDone.mutate(id)} busyId={markDone.isPending ? markDone.variables : null} showOwner={team} />
+          <VisitsByDay visits={visits} weekStart={weekStart} todayIso={todayIso} onDone={canMarkDone ? (id) => markDone.mutate(id) : null} busyId={markDone.isPending ? markDone.variables : null} showOwner={team} />
         )}
       </Panel>
     </div>

@@ -17,7 +17,7 @@ import { Figure, failed, moneySum } from './dashboardParts.jsx';
 import { InsightLanding } from './InsightSwitch.jsx';
 import { daysSince, nextMondayLabel } from './repToday.js';
 import { ReportBlock, Row } from './repTodayParts.jsx';
-import { dayMonth, weekRange } from './weeklyReportParts.jsx';
+import { bangkokDay, dayMonth, weekRange } from './weeklyReportParts.jsx';
 
 /**
  * Sales Manager landing: งานวันนี้ (spec 0003 slice 4, boards TD3 / TD4). The team's weekly-report completeness, what
@@ -69,7 +69,7 @@ const sumReps = (reps, key) => reps.reduce((t, r) => t + (r[key] ?? 0), 0);
 function sentLabel(iso, todayIso) {
   if (!iso) return null;
   const days = daysSince(iso, todayIso);
-  return days === 0 ? 'ส่งขออนุมัติวันนี้' : days === 1 ? 'ส่งขออนุมัติเมื่อวาน' : `ส่งขออนุมัติ ${dayMonth(iso.slice(0, 10))}`;
+  return days === 0 ? 'ส่งขออนุมัติวันนี้' : days === 1 ? 'ส่งขออนุมัติเมื่อวาน' : `ส่งขออนุมัติ ${dayMonth(bangkokDay(iso))}`;
 }
 
 /** Nothing logged by this rep this week (every count of the report row is zero). */
@@ -137,7 +137,7 @@ function RepTable({ reps, pendingByRep, hrefFor }) {
 /** Landing page: today's team work, the weekly report (?view=report) or the sales-analytics snapshot (?view=insight). */
 export function ManagerOverview(props) {
   return (
-    <InsightLanding title={MANAGER_TITLE} user={props.user} renderToday={(switcher, panelProps) => <ManagerToday {...props} switcher={switcher} panelProps={panelProps} />} />
+    <InsightLanding title={MANAGER_TITLE} user={props.user} showToast={props.showToast} renderToday={(switcher, panelProps) => <ManagerToday {...props} switcher={switcher} panelProps={panelProps} />} />
   );
 }
 
@@ -219,7 +219,7 @@ function ManagerToday({ user, employee, switcher, panelProps }) {
     })),
     ...quietReps.map((r) => ({
       key: `quiet-${r.ownerId}`, name: r.name, code: null,
-      reason: `ยังไม่มีการบันทึกในสัปดาห์นี้ · ${r.lastEntryAt ? `อัปเดตล่าสุด ${dayMonth(r.lastEntryAt.slice(0, 10))}` : 'ยังไม่เคยบันทึก'}`,
+      reason: `ยังไม่มีการบันทึกในสัปดาห์นี้ · ${r.lastEntryAt ? `อัปเดตล่าสุด ${dayMonth(bangkokDay(r.lastEntryAt))}` : 'ยังไม่เคยบันทึก'}`,
       amount: null, button: 'เปิดรายงาน', to: null, act: { to: hrefFor(r.ownerId) },
     })),
   ];

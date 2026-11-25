@@ -62,8 +62,8 @@ function dealRow(deal, action, todayIso) {
  */
 export function buildTodayRows({ worklist, orders, visits, returning, todayIso, nowHm }) {
   const rows = worklist.filter(({ action }) => groupOfAction(action.key)).map(({ deal, action }) => dealRow(deal, action, todayIso));
-  const inMoney = new Set(rows.filter((r) => r.group === 'money').map((r) => r.key));
-  orders.filter((o) => !o.nextPayment && o.outstanding > 0 && !inMoney.has(`deal-${o.ticketId}`)).forEach((o) => rows.push({
+  const inRows = new Set(rows.map((r) => r.key));
+  orders.filter((o) => !o.nextPayment && o.outstanding > 0 && !inRows.has(`deal-${o.ticketId}`)).forEach((o) => rows.push({
     key: `undated-${o.ticketId}`, group: 'money', name: o.projectName || o.customerName || o.title || o.code, code: o.code,
     to: `/tickets/${o.ticketId}`, reason: 'สั่งซื้อแล้ว ยังไม่ระบุวันคาดว่าจะรับเงิน', amount: formatMoney(o.outstanding),
     button: 'ระบุวันที่', act: { type: 'go', to: `/tickets/${o.ticketId}?tab=money` },
@@ -100,7 +100,7 @@ export function daysSince(iso, todayIso = bangkokTodayIso()) {
 export function buildWaitingRows({ worklist, pricingRequests, activeIds, todayIso }) {
   const rows = worklist.filter(({ action }) => action.key === A.AWAIT_DIRECT_APPROVAL).map(({ deal }) => ({
     key: `approve-${deal.id}`, who: 'ผู้จัดการฝ่ายขาย · อนุมัติใบเสนอราคา', name: dealName(deal), code: deal.code, to: `/tickets/${deal.id}`,
-    days: daysSince(deal.stageUpdatedAt, todayIso),
+    days: null, // the quotation's submission time is not on the deal row
   }));
   pricingRequests.filter((pr) => WAITING_ON[pr.status] && activeIds.has(Number(pr.ticketId))).forEach((pr) => rows.push({
     key: `pr-${pr.id}`, who: WAITING_ON[pr.status], name: pr.projectName || pr.customerName, code: pr.requestCode, to: `/tickets/${pr.ticketId}`,
