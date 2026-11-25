@@ -139,12 +139,12 @@ function Chooser({ id, shortcuts, onPick, onShortcut, showToast }) {
         {typed ? (
           <li className={ITEM}>
             <button type="button" className={OPTION} data-testid={`${id}-new`} onClick={() => setNewName(typed)}>
-              <span className="break-words font-bold text-primary">{`ใช้ชื่อ “${typed}”`}</span>
+              <span className="break-words font-bold text-primary">{`ใช้ชื่อใหม่ “${typed}”`}</span>
               <span className="text-2xs text-text-muted">เพิ่มเป็นรายชื่อใหม่ ใส่อีเมลหรือเบอร์โทรได้ถ้ามี</span>
             </button>
           </li>
         ) : (
-          <li className={`${ITEM} px-3 py-2 text-xs text-text-muted`}>พิมพ์ชื่อเพื่อค้นหา ถ้าไม่พบ ใช้ชื่อที่พิมพ์ได้ทันที</li>
+          <li className={`${ITEM} px-3 py-2 text-xs text-text-muted`}>พิมพ์ชื่อเพื่อค้นหา ถ้าไม่พบ เลือก “ใช้ชื่อใหม่” ได้ทันที</li>
         )}
       </ul>
     </div>
