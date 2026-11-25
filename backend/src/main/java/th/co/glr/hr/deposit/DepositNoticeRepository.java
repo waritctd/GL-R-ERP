@@ -126,7 +126,7 @@ public class DepositNoticeRepository {
                    d.notes, d.pdf_path, d.xlsx_path,
                    d.issued_by_name, d.preparer_name, d.preparer_id,
                    d.created_at, d.updated_at, (qc.name IS NOT NULL) AS customer_from_quotation,
-                   d.addressee_customer_id, d.payer_customer_id, d.payer_name, d.payer_phone, d.payer_email
+                   d.addressee_customer_id
               FROM sales.deposit_notice d
               """ + QUOTATION_CUSTOMER_JOIN + OWN_CUSTOMER_JOIN + """
              WHERE d.deposit_notice_id = :id
@@ -155,7 +155,7 @@ public class DepositNoticeRepository {
                    d.notes, d.pdf_path, d.xlsx_path,
                    d.issued_by_name, d.preparer_name, d.preparer_id,
                    d.created_at, d.updated_at, (qc.name IS NOT NULL) AS customer_from_quotation,
-                   d.addressee_customer_id, d.payer_customer_id, d.payer_name, d.payer_phone, d.payer_email
+                   d.addressee_customer_id
               FROM sales.deposit_notice d
               """ + QUOTATION_CUSTOMER_JOIN + OWN_CUSTOMER_JOIN + """
              WHERE d.ticket_id = :ticketId
@@ -241,7 +241,7 @@ public class DepositNoticeRepository {
         return createDraft(ticketId, req, items, preparerName, IssueNames.NONE);
     }
 
-    /** {@code names}: เรียน and ออกในนาม as DepositNoticeService decided them (feedback #74). */
+    /** {@code names}: เรียน as DepositNoticeService decided it (feedback #74). */
     @Transactional
     public long createDraft(long ticketId, DepositNoticeDraftRequest req, List<DepositNoticeItemRequest> items,
                             String preparerName, IssueNames names) {
@@ -286,7 +286,7 @@ public class DepositNoticeRepository {
                 (ticket_id, version, customer_name, customer_tax_id, customer_address,
                  project_name, reference, deposit_percent, subtotal, deposit_amount,
                  vat_percent, vat_amount, total_payable, notes, preparer_name, preparer_id,
-                 addressee_customer_id, payer_customer_id, payer_name, payer_phone, payer_email)
+                 addressee_customer_id)
             VALUES
                 (:ticketId, :version, :customerName, :customerTaxId, :customerAddress,
                  :projectName, :reference, :depositPercent, :subtotal, :depositAmount,
@@ -302,7 +302,7 @@ public class DepositNoticeRepository {
                             WHERE p.ticket_id = :ticketId
                               AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)),
                           (SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :preparerId),
-                 :addresseeCustomerId, :payerCustomerId, :payerName, :payerPhone, :payerEmail)
+                 :addresseeCustomerId)
             """.replace("{NAME}", PREPARER_NAME_SQL), params, keys, new String[]{"deposit_notice_id"});
 
         long docId = keys.getKey().longValue();
@@ -322,7 +322,7 @@ public class DepositNoticeRepository {
         update(docId, req, storedItems, expectedStatus, IssueNames.NONE);
     }
 
-    /** {@code names}: เรียน and ออกในนาม as DepositNoticeService decided them (feedback #74). */
+    /** {@code names}: เรียน as DepositNoticeService decided it (feedback #74). */
     @Transactional
     public void update(long docId, DepositNoticeDraftRequest req, List<DepositNoticeItemDto> storedItems,
             String expectedStatus, IssueNames names) {
@@ -348,8 +348,7 @@ public class DepositNoticeRepository {
                 customer_name    = :customerName,
                 customer_tax_id  = :customerTaxId,
                 customer_address = :customerAddress,
-                addressee_customer_id = :addresseeCustomerId, payer_customer_id = :payerCustomerId,
-                payer_name = :payerName, payer_phone = :payerPhone, payer_email = :payerEmail,
+                addressee_customer_id = :addresseeCustomerId,
                 project_name     = :projectName,
                 reference        = :reference,
                 deposit_percent  = :depositPercent,
@@ -545,34 +544,19 @@ public class DepositNoticeRepository {
         return th.co.glr.hr.billing.BillingNoteRepository.findLiveClaim(jdbc, sourceType, sourceId);
     }
 
-    /** Binds the เรียน / ออกในนาม columns (feedback #74). Shared with RemainingInvoiceRepository. */
+    /** Binds the เรียน column (feedback #74). Shared with RemainingInvoiceRepository. */
     static MapSqlParameterSource addNames(MapSqlParameterSource p, IssueNames n) {
-        return p.addValue("addresseeCustomerId", n.addresseeCustomerId()).addValue("payerCustomerId", n.payerCustomerId())
-            .addValue("payerName", n.payerName()).addValue("payerPhone", n.payerPhone()).addValue("payerEmail", n.payerEmail());
+        return p.addValue("addresseeCustomerId", n.addresseeCustomerId());
     }
 
-    /** The contact person a new-engine quotation of this deal names (its ผู้ติดต่อ snapshot): ออกในนาม's default. */
-    public Optional<IssueNames.Person> findQuotationContact(long ticketId, String number) {
-        return jdbc.query("""
-            SELECT q.contact_name, q.contact_phone, q.contact_email FROM sales.quotation q
-             WHERE q.ticket_id = :t AND q.number = :n AND q.origin IS NOT NULL
-               AND NULLIF(TRIM(q.contact_name), '') IS NOT NULL
-             ORDER BY CASE WHEN """ + BILLABLE_Q + """
- THEN 0 ELSE 1 END, q.quotation_id DESC LIMIT 1
-            """, Map.of("t", ticketId, "n", number), (rs, i) -> new IssueNames.Person(rs.getString(1), rs.getString(2),
-                rs.getString(3))).stream().findFirst();
-    }
-
-    /** A customer-list row as the ออกในนาม line prints it: name, phone, and the first contact email. */
-    public Optional<IssueNames.Person> findCustomerPerson(long customerId) {
-        return jdbc.query("""
-            SELECT c.name, c.phone,
-                   (SELECT ct.email FROM customers.contact ct
-                     WHERE ct.customer_id = c.customer_id AND NULLIF(TRIM(ct.email), '') IS NOT NULL
-                     ORDER BY ct.contact_id LIMIT 1)
-              FROM customers.customer c WHERE c.customer_id = :id
-            """, Map.of("id", customerId), (rs, i) -> new IssueNames.Person(rs.getString(1), rs.getString(2),
-                rs.getString(3))).stream().findFirst();
+    /** The เรียน chosen on this deal's latest live notice that references quotation {@code number} (feedback #74): what a
+     * new remaining invoice starts from and what the tax-invoice issuer sees. Empty when none picked one. */
+    public Optional<Long> findChosenAddressee(long ticketId, String number) {
+        return jdbc.queryForList("""
+            SELECT addressee_customer_id FROM sales.deposit_notice
+             WHERE ticket_id = :t AND reference = :n AND status <> 'SUPERSEDED'
+             ORDER BY version DESC LIMIT 1
+            """, Map.of("t", ticketId, "n", number), Long.class).stream().filter(java.util.Objects::nonNull).findFirst();
     }
 
     public Optional<Long> findQuotationPartyCustomerId(long ticketId, String number) {
@@ -779,8 +763,7 @@ public class DepositNoticeRepository {
             rs.getObject("updated_at", OffsetDateTime.class),
             List.of(),
             rs.getBoolean("customer_from_quotation"),
-            (Long) rs.getObject("addressee_customer_id"), (Long) rs.getObject("payer_customer_id"),
-            rs.getString("payer_name"), rs.getString("payer_phone"), rs.getString("payer_email")
+            (Long) rs.getObject("addressee_customer_id")
         );
     }
 
@@ -793,8 +776,7 @@ public class DepositNoticeRepository {
             doc.vatPercent(), doc.vatAmount(), doc.totalPayable(),
             doc.notes(), doc.hasPdf(), doc.hasXlsx(),
             doc.issuedByName(), doc.preparerName(), doc.preparerId(),
-            doc.createdAt(), doc.updatedAt(), items, doc.customerFromQuotation(), doc.addresseeCustomerId(), doc.payerCustomerId(),
-            doc.payerName(), doc.payerPhone(), doc.payerEmail()
+            doc.createdAt(), doc.updatedAt(), items, doc.customerFromQuotation(), doc.addresseeCustomerId()
         );
     }
 }

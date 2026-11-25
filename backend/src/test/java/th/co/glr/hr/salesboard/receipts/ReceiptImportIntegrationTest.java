@@ -115,10 +115,9 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         assertThat(paidOn(a)).isEqualByComparingTo("0");
         assertThat(paidOn(b)).isEqualByComparingTo("0");
 
-        // ออกในนาม (feedback #74): a receipt in the name a's notice is issued in matches a alone
-        long n = notice(a, "15000.00", "DN6900074", "ISSUED", "ผู้รับใบเสนอราคา");
-        jdbc.update("UPDATE sales.deposit_notice SET payer_name = 'ผู้จ่ายแทน ทดสอบ' WHERE deposit_notice_id = :n",
-            Map.of("n", n));
+        // เรียน (feedback #74): a receipt in the name a's notice is addressed to (another customer than the quotation's)
+        // matches a alone
+        notice(a, "15000.00", "DN6900074", "ISSUED", "ผู้จ่ายแทน ทดสอบ");
         JsonNode byPayer = upload(account, csv(row("RE-A-2", "2026-11-12", "ผู้จ่ายแทน ทดสอบ", "15000", "")));
         assertThat(byPayer.get("matched").asInt()).isEqualTo(1);
         assertThat(receipt("RE-A-2").get("ticket_id")).isEqualTo(a);

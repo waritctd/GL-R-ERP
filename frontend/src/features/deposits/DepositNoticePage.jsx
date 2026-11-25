@@ -26,7 +26,7 @@ import {
   subtotalsDiffer,
 } from './createDepositNoticeDraft.js';
 import { DocumentPreparerSelect } from './DocumentPreparerSelect.jsx';
-import { AddresseePicker, KEEP_NAMES, PayerPicker } from './IssueInNamePicker.jsx';
+import { AddresseeSection, KEEP_NAMES } from './AddresseePicker.jsx';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 // CustomerPrintRule#addressWithBranch: a branch prints only for a customer with a tax id (feedback #72).
@@ -308,10 +308,9 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
     notes: [],
     items: [],
     preparerId: null,
-    // เรียน / ออกในนาม (feedback #74): the pending choice sent on save, and what the two pickers show meanwhile
+    // เรียน (feedback #74): the pending choice sent on save, and the label shown meanwhile for a reset
     names: KEEP_NAMES,
     addresseeName: null,
-    payerName: null,
   });
 
   // Reads (TanStack Query) --- Mount only LOADS existing documents — it must never create one as a side effect
@@ -410,7 +409,6 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
       preparerId:      d.preparerId    ?? null,
       names:           KEEP_NAMES,
       addresseeName:   null,
-      payerName:       d.payerName ?? null,
       // A qty < 0 line is the quotation's ส่วนลดพิเศษ: its qty is not editable and is allowed past the qty > 0 check.
       items:           (d.items ?? []).map((it) => ({ ...it, discount: Number(it.qty) < 0 })),
     };
@@ -424,7 +422,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
   // or DRAFT -> ISSUED) — not on every background refetch of the same doc (e.g. a save doesn't bump
   // version/status, so no reseed fires and in-flight edits aren't clobbered). The reference is in the key too:
   // re-pointing a draft to another buyer's quotation replaces its customer and items on the server.
-  const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}:${doc.reference ?? ''}:${doc.addresseeCustomerId ?? ''}:${doc.payerName ?? ''}` : null;
+  const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}:${doc.reference ?? ''}:${doc.addresseeCustomerId ?? ''}` : null;
   // The draft's updatedAt as last read from the server (the list, or this page's own save):
   // sent as expectedUpdatedAt, so a save over someone else's newer one is refused (409).
   const stampRef = useRef(null);
@@ -573,8 +571,8 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
     clearFieldError('customerName');
   }
 
-  // ออกในนาม (feedback #74): its own line; เรียน (the header) stays the quotation's customer.
-  // เรียน picked from the customer list: the header shows that customer now (the server prints its list data).
+  // เรียน picked from (or added to) the customer list, feedback #74: the header shows that customer now (the server prints
+  // its list data).
   function pickAddressee(c) {
     setForm((f) => ({
       ...f,
@@ -587,19 +585,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
   }
 
   function resetAddressee() {
-    setForm((f) => ({ ...f, names: { ...f.names, addresseeCustomerId: null, addresseeReset: true }, addresseeName: 'ลูกค้าในใบเสนอราคา' }));
-  }
-
-  function pickPayer(c) {
-    setForm((f) => ({ ...f, names: { ...f.names, payerCustomerId: c.id, payerReset: null }, payerName: c.name }));
-  }
-
-  function resetPayer(key) {
-    setForm((f) => ({
-      ...f,
-      names: { ...f.names, payerCustomerId: null, payerReset: key },
-      payerName: key === 'NONE' ? null : 'ผู้ติดต่อในใบเสนอราคา',
-    }));
+    setForm((f) => ({ ...f, names: { ...f.names, addresseeCustomerId: null, addresseeReset: true }, addresseeName: 'ลูกค้าตามใบเสนอราคา' }));
   }
 
 
@@ -829,26 +815,20 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                   <span className="block text-2xs font-bold uppercase text-text-muted">ที่อยู่</span>
                   <strong className="whitespace-pre-line">{form.customerAddress || '-'}</strong>
                 </div>
-                {doc?.payerName ? (
-                  <div className="col-span-full" data-testid="doc-payer-readonly">
-                    <span className="block text-2xs font-bold uppercase text-text-muted">ออกในนาม</span>
-                    <strong>{[doc.payerName, doc.payerPhone && `โทร ${doc.payerPhone}`, doc.payerEmail].filter(Boolean).join('  ')}</strong>
-                  </div>
-                ) : null}
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
                 {customerFromQuotation ? (
-                  <div className="col-span-full flex flex-col gap-3" data-testid="customer-from-quotation">
-                    <AddresseePicker idPrefix="doc" name={form.addresseeName ?? form.customerName} showToast={showToast}
-                      isDefault={form.names.addresseeReset === true
-                        || (doc?.addresseeCustomerId == null && form.names.addresseeCustomerId == null)}
-                      unsaved={form.names.addresseeCustomerId != null || form.names.addresseeReset != null}
-                      onPick={pickAddressee} onReset={resetAddressee} />
-                    <PayerPicker idPrefix="doc" name={form.payerName} showToast={showToast}
-                      unsaved={form.names.payerCustomerId != null || form.names.payerReset != null}
-                      onPick={pickPayer} onReset={resetPayer} />
-                  </div>
+                  <AddresseeSection idPrefix="doc" showToast={showToast}
+                    addressee={{
+                      name: form.addresseeName ?? form.customerName,
+                      detail: form.addresseeName ? null : [form.customerTaxId && `เลขประจำตัวผู้เสียภาษี ${form.customerTaxId}`,
+                        form.customerAddress].filter(Boolean).join('\n'),
+                      isDefault: form.names.addresseeReset === true
+                        || (doc?.addresseeCustomerId == null && form.names.addresseeCustomerId == null),
+                      pending: form.names.addresseeCustomerId != null || form.names.addresseeReset != null,
+                    }}
+                    onPick={pickAddressee} onReset={resetAddressee} />
                 ) : (
                   <div className="relative col-span-full">
                     <FormField label="ค้นหาลูกค้า (master)" htmlFor="doc-customer-search">
@@ -873,24 +853,26 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                     )}
                   </div>
                 )}
+                {customerFromQuotation ? null : (<>
                 <FormField label="ชื่อบริษัท / หน่วยงาน" htmlFor="doc-customer-name" required error={fieldErrors.customerName}>
                   <input
                     id="doc-customer-name"
                     ref={(el) => { fieldRefs.current.customerName = el; }}
-                    value={form.customerName} readOnly={customerFromQuotation}
+                    value={form.customerName}
                     onChange={(e) => setField('customerName', e.target.value)} placeholder="บริษัท…"
                   />
                 </FormField>
                 <FormField label="เลขประจำตัวผู้เสียภาษี" htmlFor="doc-customer-tax">
-                  <input id="doc-customer-tax" value={form.customerTaxId} readOnly={customerFromQuotation}
+                  <input id="doc-customer-tax" value={form.customerTaxId}
                     onChange={(e) => changeTaxId(e.target.value)} placeholder="0000000000000" />
                 </FormField>
                 <div className="col-span-full">
                   <FormField label="ที่อยู่" htmlFor="doc-customer-address">
-                    <textarea id="doc-customer-address" rows={2} value={form.customerAddress} readOnly={customerFromQuotation}
+                    <textarea id="doc-customer-address" rows={2} value={form.customerAddress}
                       onChange={(e) => setField('customerAddress', e.target.value)} placeholder="ที่อยู่…" className="resize-y" />
                   </FormField>
                 </div>
+                </>)}
                 <FormField label="โครงการ" htmlFor="doc-project">
                   <input id="doc-project" value={form.projectName}
                     onChange={(e) => setField('projectName', e.target.value)} placeholder="โครงการ…" />
@@ -899,9 +881,9 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                   {customerFromQuotation && doc?.status === 'DRAFT' && partyQuotations.length > 0 ? (
                     <select id="doc-reference" value={form.reference}
                       onChange={(e) => {
-                        // a re-point starts from the new quotation's เรียน / ออกในนาม (the server applies its defaults)
+                        // a re-point starts from the new quotation's เรียน (the server applies its default)
                         setForm((f) => ({ ...f, reference: e.target.value, names: KEEP_NAMES,
-                          addresseeName: 'ลูกค้าในใบเสนอราคา', payerName: 'ผู้ติดต่อในใบเสนอราคา' }));
+                          addresseeName: 'ลูกค้าตามใบเสนอราคา' }));
                       }}>
                       {partyQuotations.some((q) => q.number === form.reference) ? null
                         : <option value={form.reference}>{form.reference}</option>}

@@ -437,29 +437,16 @@ let sessionUser = null;
 const passwordResetTokens = new Map();
 
 // ── Mock in-memory document store ─────────────────────────────────────────────
-// เรียน / ออกในนาม (feedback #74), as DepositNoticeService#chooseNames: a picked customer-list row (400 when unknown) or
-// a reset. เรียน picked equal to the deal's customer is no override and replaces the header otherwise; ออกในนาม equal to
-// เรียน is none (the same person). The mock has no quotation contact, so ออกในนาม's DEFAULT is none too.
+// เรียน (feedback #74), as DepositNoticeService#chooseNames: a picked customer-list row (400 when unknown; the deal's own
+// customer is no override) replaces the whole header, or a reset goes back to the deal's customer.
 function mockApplyIssueNames(row, payload, ticket) {
-  const listed = (id) => mockCustomers.find((c) => c.id === Number(id)) ?? fail('ไม่พบลูกค้าที่เลือก', 400);
-  const addressee = payload.addresseeCustomerId != null ? listed(payload.addresseeCustomerId) : null;
-  const payer = payload.payerCustomerId != null ? listed(payload.payerCustomerId) : null;
+  const addressee = payload.addresseeCustomerId != null
+    ? mockCustomers.find((c) => c.id === Number(payload.addresseeCustomerId)) ?? fail('ไม่พบลูกค้าที่เลือก', 400) : null;
+  if (!addressee && !payload.addresseeReset) return;
   const own = mockCustomers.find((c) => c.id === ticket?.customerId) ?? null;
-  if (addressee || payload.addresseeReset) {
-    row.addresseeCustomerId = addressee && addressee.id !== own?.id ? addressee.id : null;
-    const header = addressee ?? own;
-    if (header) Object.assign(row, { customerName: header.name, customerTaxId: header.taxId ?? null, customerAddress: header.address ?? null });
-  }
-  const clearPayer = () => Object.assign(row, { payerCustomerId: null, payerName: null, payerPhone: null, payerEmail: null });
-  if (payer) {
-    if (payer.id === (row.addresseeCustomerId ?? own?.id)) clearPayer();
-    else {
-      const email = mockContacts.find((ct) => ct.customerId === payer.id && ct.email?.trim())?.email ?? null;
-      Object.assign(row, { payerCustomerId: payer.id, payerName: payer.name, payerPhone: payer.phone ?? null, payerEmail: email });
-    }
-  } else if (payload.payerReset) {
-    clearPayer();
-  }
+  row.addresseeCustomerId = addressee && addressee.id !== own?.id ? addressee.id : null;
+  const header = addressee ?? own;
+  if (header) Object.assign(row, { customerName: header.name, customerTaxId: header.taxId ?? null, customerAddress: header.address ?? null });
 }
 
 // CustomerPrintRule#branch: a branch prints only with a company's tax id, never a person's (13 digits starting 1-8).
@@ -2753,7 +2740,7 @@ function mockBillingNoteCandidateRows(customerId) {
   for (const ri of mockRemainingInvoices) {
     if (ri.status !== 'ISSUED') continue;
     const ticket = findTicketRaw(ri.ticketId);
-    if ((ri.payerCustomerId ?? ticket.customerId) !== Number(customerId)) continue; // ออกในนาม (feedback #74)
+    if ((ri.addresseeCustomerId ?? ticket.customerId) !== Number(customerId)) continue; // a picked เรียน (feedback #74)
     // REMAINING_INVOICE_OUTSTANDING_EXPR: ticket-scoped, kind IN ('BALANCE','ADJUSTMENT') only.
     const paid = mockBillingNoteSignedReceiptSum(db.paymentReceipts
       .filter((r) => r.ticketId === ri.ticketId && (r.kind === 'BALANCE' || r.kind === 'ADJUSTMENT')));
@@ -2766,7 +2753,7 @@ function mockBillingNoteCandidateRows(customerId) {
   for (const dn of mockDepositNotices) {
     if (dn.status !== 'ISSUED') continue;
     const ticket = findTicketRaw(dn.ticketId);
-    if ((dn.payerCustomerId ?? ticket.customerId) !== Number(customerId)) continue; // ออกในนาม (feedback #74)
+    if ((dn.addresseeCustomerId ?? ticket.customerId) !== Number(customerId)) continue; // a picked เรียน (feedback #74)
     // DEPOSIT_NOTICE_OUTSTANDING_EXPR: EVERY receipt linked by deposit_notice_id, no kind filter at all (unlike
     // the remaining-invoice half above) — a DEPOSIT-kind receipt from confirmDepositPaid counts here just as a
     // BALANCE one would.
@@ -18377,8 +18364,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         fail('ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง', 409);
       }
       const ticketForName = findTicketRaw(doc.ticketId);
-      const listedId = (id) => id == null || mockCustomers.some((c) => c.id === Number(id));
-      if (!listedId(payload.addresseeCustomerId) || !listedId(payload.payerCustomerId)) fail('ไม่พบลูกค้าที่เลือก', 400);
+      if (payload.addresseeCustomerId != null && !mockCustomers.some((c) => c.id === Number(payload.addresseeCustomerId))) {
+        fail('ไม่พบลูกค้าที่เลือก', 400);
+      }
       applyMockPreparer(doc, findTicketRaw(doc.ticketId), payload.preparerId);
       Object.assign(doc, {
         customerName:    payload.customerName    ?? doc.customerName,
@@ -18599,7 +18587,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         docDate: payload.docDate ?? now.slice(0, 10),
         notes,
         customerName: ticket.customerName ?? null, customerTaxId: null, customerBranch: null,
-        customerAddress: null, projectName: ticket.projectName ?? null, payerCustomerId: null,
+        customerAddress: null, projectName: ticket.projectName ?? null, addresseeCustomerId: null,
         itemsTotal: snap.itemsTotal, depositDeduction: snap.depositDeduction, netAmount: snap.netAmount,
         vatAmount: snap.vatAmount, grandTotal: snap.grandTotal,
         createdById: user.id, createdByName: user.name,

@@ -63,18 +63,6 @@ class DepositNoticePdfRendererTest {
             assertThat(num(sh, DEPOSIT, 8)).isCloseTo(370.40, within(0.0001));     // I45
             assertThat(num(sh, VAT, 8)).isCloseTo(25.93, within(0.0001));          // I46
             assertThat(num(sh, TOTAL, 8)).isCloseTo(396.33, within(0.0001));       // I47
-            assertThat(sh.getRow(8).getCell(1).getStringCellValue()).isBlank();     // no ออกในนาม line without one
-        }
-        // ออกในนาม (feedback #74): its own line under ที่อยู่ (B9); เรียน stays the customer
-        DepositNoticeRenderModel m = model();
-        DepositNoticeRenderModel named = new DepositNoticeRenderModel(m.issueDate(), m.docNumber(), m.customerName(),
-            m.customerBranch(), m.customerTaxId(), m.customerAddress(), m.projectName(), m.reference(), m.items(), m.subtotal(),
-            m.depositPercent(), m.depositAmount(), m.vatAmount(), m.totalPayable(), m.preparerName(), null,
-            "นายตัวอย่าง ทดสอบ  โทร 0800000000");
-        try (Workbook wb = render(named)) {
-            Sheet sh = wb.getSheetAt(0);
-            assertThat(sh.getRow(8).getCell(1).getStringCellValue()).isEqualTo("ออกในนาม : นายตัวอย่าง ทดสอบ  โทร 0800000000");
-            assertThat(sh.getRow(6).getCell(1).getStringCellValue()).startsWith("บริษัท ทดสอบ จำกัด");
         }
     }
 }

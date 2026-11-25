@@ -216,7 +216,8 @@ public class CustomerController {
         @Size(max = 4) String districtCode,
         @Size(max = 6) String subdistrictCode,
         @Size(max = 5) String postalCode,
-        // ออกในนาม's quick add (feedback #74): stored on a contact of the same name, since customers have no email column
+        // the new-customer form on the deposit notice / remaining invoice (feedback #74): stored on a contact of the same
+        // name, since customers have no email column
         @Email(message = "รูปแบบอีเมลไม่ถูกต้อง") @Size(max = 200) String email
     ) {}
 

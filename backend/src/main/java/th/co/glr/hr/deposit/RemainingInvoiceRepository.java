@@ -41,7 +41,7 @@ public class RemainingInvoiceRepository {
                r.items_total, r.deposit_deduction, r.net_amount, r.vat_amount, r.grand_total,
                r.created_by_id, r.created_by_name, r.preparer_id, r.preparer_name, r.created_at, r.updated_at,
                r.issued_by_id, r.issued_by_name, r.issued_at,
-               r.addressee_customer_id, r.payer_customer_id, r.payer_name, r.payer_phone, r.payer_email
+               r.addressee_customer_id
           FROM sales.remaining_invoice r
           LEFT JOIN LATERAL (
               SELECT c.name, c.tax_id, c.address, c.branch
@@ -100,8 +100,7 @@ public class RemainingInvoiceRepository {
             r.customerName(), r.customerTaxId(), r.customerBranch(), r.customerAddress(), r.projectName(),
             r.itemsTotal(), r.depositDeduction(), r.netAmount(), r.vatAmount(), r.grandTotal(),
             r.createdById(), r.createdByName(), r.preparerId(), r.preparerName(), r.createdAt(), r.updatedAt(),
-            r.issuedById(), r.issuedByName(), r.issuedAt(), r.addresseeCustomerId(), r.payerCustomerId(), r.payerName(),
-            r.payerPhone(), r.payerEmail(), items);
+            r.issuedById(), r.issuedByName(), r.issuedAt(), r.addresseeCustomerId(), items);
     }
 
     @SuppressWarnings("unchecked")
@@ -124,9 +123,7 @@ public class RemainingInvoiceRepository {
             (Long) rs.getObject("preparer_id"), rs.getString("preparer_name"),
             offsetDateTime(rs, "created_at"), offsetDateTime(rs, "updated_at"),
             (Long) rs.getObject("issued_by_id"), rs.getString("issued_by_name"), offsetDateTime(rs, "issued_at"),
-            (Long) rs.getObject("addressee_customer_id"), (Long) rs.getObject("payer_customer_id"),
-            rs.getString("payer_name"), rs.getString("payer_phone"), rs.getString("payer_email"),
-            List.of());
+            (Long) rs.getObject("addressee_customer_id"), List.of());
     }
 
     private static LocalDate localDate(java.sql.ResultSet rs, String col) throws java.sql.SQLException {
@@ -153,13 +150,12 @@ public class RemainingInvoiceRepository {
                  reference, deposit_reference, doc_date, notes,
                  customer_name, customer_tax_id, customer_branch, customer_address, project_name,
                  items_total, deposit_deduction, net_amount, vat_amount, grand_total,
-                 created_by_id, created_by_name, addressee_customer_id, payer_customer_id, payer_name, payer_phone,
-                 payer_email, preparer_id, preparer_name)
+                 created_by_id, created_by_name, addressee_customer_id, preparer_id, preparer_name)
             VALUES (:ticketId, :quotationId, :depositNoticeId, 'DRAFT',
                     :reference, :depositReference, :docDate, :notes,
                     :customerName, :customerTaxId, :customerBranch, :customerAddress, :projectName,
                     :itemsTotal, :depositDeduction, :netAmount, :vatAmount, :grandTotal,
-                    :actorId, :actorName, :addresseeCustomerId, :payerCustomerId, :payerName, :payerPhone, :payerEmail,
+                    :actorId, :actorName, :addresseeCustomerId,
                     -- ผู้จัดทำ defaults to the deal's owner (the actor only when the ticket has none)
                     COALESCE((SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :actorId),
                     COALESCE((SELECT {NAME}
@@ -219,8 +215,7 @@ public class RemainingInvoiceRepository {
         return jdbc.update("""
             UPDATE sales.remaining_invoice
                SET reference = :reference, deposit_reference = :depositReference, doc_date = :docDate,
-                   notes = :notes, addressee_customer_id = :addresseeCustomerId, payer_customer_id = :payerCustomerId,
-                   payer_name = :payerName, payer_phone = :payerPhone, payer_email = :payerEmail,
+                   notes = :notes, addressee_customer_id = :addresseeCustomerId,
                    -- a null preparerId keeps the stored preparer
                    preparer_id = COALESCE(CAST(:preparerId AS bigint), preparer_id),
                    preparer_name = CASE WHEN CAST(:preparerId AS bigint) IS NULL THEN preparer_name ELSE
@@ -232,7 +227,6 @@ public class RemainingInvoiceRepository {
                 .addValue("id", id).addValue("expectedStatus", expectedStatus)
                 .addValue("reference", reference).addValue("depositReference", depositReference)
                 .addValue("docDate", docDate).addValue("preparerId", preparerId)
-
                 .addValue("notes", notes == null ? new String[0] : notes.toArray(new String[0])));
     }
 

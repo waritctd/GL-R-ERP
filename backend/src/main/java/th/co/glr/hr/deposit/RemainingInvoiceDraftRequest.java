@@ -15,24 +15,22 @@ public record RemainingInvoiceDraftRequest(
     List<String> notes,
     // ผู้จัดทำ: the deal's owner, keyer or a sales manager; null keeps the stored preparer.
     Long preparerId,
-    // เรียน / ออกในนาม choice (feedback #74), as DepositNoticeDraftRequest's; all null keeps what is stored (create: the
-    // defaults, the quotation's customer and its contact, with the choice applied on top)
+    // เรียน choice (feedback #74), as DepositNoticeDraftRequest's; both null keeps what is stored (create: the default,
+    // the เรียน chosen on the deal's notice for this quotation, else the quotation's customer, with the choice on top)
     Long addresseeCustomerId,
-    Boolean addresseeReset,
-    Long payerCustomerId,
-    @jakarta.validation.constraints.Pattern(regexp = "DEFAULT|NONE") String payerReset
+    Boolean addresseeReset
 ) {
     IssueNames.Choice nameChoice() {
-        return new IssueNames.Choice(addresseeCustomerId, addresseeReset, payerCustomerId, payerReset);
+        return new IssueNames.Choice(addresseeCustomerId, addresseeReset);
     }
 
     public RemainingInvoiceDraftRequest(Long quotationId, String reference, String depositReference,
                                         LocalDate docDate, List<String> notes) {
-        this(quotationId, reference, depositReference, docDate, notes, null, null, null, null, null);
+        this(quotationId, reference, depositReference, docDate, notes, null, null, null);
     }
 
     public RemainingInvoiceDraftRequest(Long quotationId, String reference, String depositReference,
                                         LocalDate docDate, List<String> notes, Long preparerId) {
-        this(quotationId, reference, depositReference, docDate, notes, preparerId, null, null, null, null);
+        this(quotationId, reference, depositReference, docDate, notes, preparerId, null, null);
     }
 }

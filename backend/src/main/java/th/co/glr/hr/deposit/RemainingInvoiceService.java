@@ -266,9 +266,6 @@ public class RemainingInvoiceService {
                     + " · วันที่ " + existing.docDate() + " → " + updated.docDate()
                     + (Objects.equals(existing.customerName(), updated.customerName()) ? ""
                         : " · เรียน \"" + Objects.toString(existing.customerName(), "") + "\" → \"" + Objects.toString(updated.customerName(), "") + "\"")
-                    + (Objects.equals(existing.names().payerLine(), updated.names().payerLine()) ? ""
-                        : " · ออกในนาม \"" + Objects.toString(existing.names().payerLine(), "") + "\" → \""
-                            + Objects.toString(updated.names().payerLine(), "") + "\"")
                     + " · ยอดชำระ " + ThaiText.money(existing.grandTotal()) + " → " + ThaiText.money(updated.grandTotal()));
             if (existing.grandTotal().compareTo(updated.grandTotal()) != 0) {
                 // account collects against this total, same channel as issue()
@@ -480,7 +477,7 @@ public class RemainingInvoiceService {
             doc.reference(), doc.depositReference(), items,
             nz(doc.depositDeduction()), doc.netAmount(), doc.vatAmount(), doc.grandTotal(),
             doc.preparerName() != null ? doc.preparerName() : doc.createdByName(),
-            sig.map(x -> x.image()).orElse(null), doc.names().payerLine());
+            sig.map(x -> x.image()).orElse(null));
     }
 
     private List<String> defaultNotes() {
