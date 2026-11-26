@@ -51,7 +51,7 @@ public class CashRepository {
 
     @Autowired
     CashRepository(NamedParameterJdbcTemplate jdbc, @Value("${app.sales.money-from:}") String moneyFrom) {
-        this(jdbc, moneyFrom == null || moneyFrom.isBlank() ? null : LocalDate.parse(moneyFrom.trim()));
+        this(jdbc, parseMoneyFrom(moneyFrom));
     }
 
     /** The cutoff date, or null when money from every order counts. */
@@ -60,13 +60,23 @@ public class CashRepository {
     }
 
     private String moneyPredicate(MapSqlParameterSource p) {
+        return moneyPredicate(moneyFrom, p, "t");
+    }
+
+    /** {@code " AND <ticket alias> confirmed on/after moneyFrom"}, binding its params into p; "" when moneyFrom is null. */
+    public static String moneyPredicate(LocalDate moneyFrom, MapSqlParameterSource p, String ticketAlias) {
         if (moneyFrom == null) {
             return "";
         }
         p.addValue("moneyFrom", Timestamp.from(moneyFrom.atStartOfDay(BANGKOK).toInstant()))
             .addValue("promoted", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)
             .addValue("confirmed", TicketEventKind.CUSTOMER_CONFIRMED);
-        return " AND " + TicketRepository.orderConfirmedAtExpr("t") + " >= :moneyFrom";
+        return " AND " + TicketRepository.orderConfirmedAtExpr(ticketAlias) + " >= :moneyFrom";
+    }
+
+    /** Parses the {@code app.sales.money-from} value: blank = no cutoff. */
+    public static LocalDate parseMoneyFrom(String value) {
+        return value == null || value.isBlank() ? null : LocalDate.parse(value.trim());
     }
 
     /**
@@ -99,31 +109,6 @@ public class CashRepository {
             p, (rs, n) -> new ExpectedWeekRow(rs.getLong("owner_id"), rs.getObject("expected_week", LocalDate.class),
                 rs.getBigDecimal("forecast"), rs.getBigDecimal("delivered_awaiting"),
                 rs.getBigDecimal("deliveries_scheduled"), rs.getBigDecimal("deposits_expected")));
-    }
-
-    /**
-     * Weekly report only: OPEN rows on ACTIVE deals that no {@link #expectedByWeek} bucket takes (e.g. ON_DELIVERY
-     * still at ORDER_RECEIVED), keyed by kind in the same three fields: BALANCE in deliveredAwaiting, ON_DELIVERY in
-     * deliveriesScheduled. DEPOSIT always has its bucket. {@code forecast} is zero.
-     */
-    public List<ExpectedWeekRow> unbucketedOpenByWeek(Long ownerId, LocalDate from, LocalDate to) {
-        MapSqlParameterSource p = new MapSqlParameterSource().addValue("from", from).addValue("to", to);
-        String owner = ownerPredicate(ownerId, p) + moneyPredicate(p);
-        return jdbc.query("""
-            SELECT t.created_by AS owner_id, ep.expected_week,
-                   COALESCE(SUM(ep.amount - ep.received_amount) FILTER (WHERE ep.kind = 'BALANCE'
-                       AND t.sales_stage <> 'DELIVERED'), 0) AS balance_left,
-                   COALESCE(SUM(ep.amount - ep.received_amount) FILTER (WHERE ep.kind = 'ON_DELIVERY'
-                       AND t.sales_stage NOT IN ('DELIVERED', 'DELIVERY_SCHEDULING', 'PROCUREMENT')), 0)
-                       AS on_delivery_left
-              FROM sales.expected_payment ep
-              JOIN sales.ticket t ON t.ticket_id = ep.ticket_id
-             WHERE ep.status = 'OPEN' AND t.lifecycle = 'ACTIVE' AND ep.amount - ep.received_amount > 0
-               AND ep.expected_week + 3 BETWEEN :from AND :to
-            """ + owner + " GROUP BY t.created_by, ep.expected_week",
-            p, (rs, n) -> new ExpectedWeekRow(rs.getLong("owner_id"), rs.getObject("expected_week", LocalDate.class),
-                BigDecimal.ZERO, rs.getBigDecimal("balance_left"), rs.getBigDecimal("on_delivery_left"),
-                BigDecimal.ZERO));
     }
 
     /**

@@ -5,7 +5,7 @@ package th.co.glr.hr.auth;
 public record AuthResponse(UserPrincipal user, boolean admin, boolean operator, boolean canCreateQuotation, boolean canIssueBillingNote,
                            boolean canIssueTaxInvoice, boolean readAllSales,
                            boolean canManageAllSalesDocuments, boolean canSeeShowroomOrders,
-                           boolean canViewAs, boolean canViewPeopleInsights, ViewAsInfo viewAs) {
+                           boolean canViewAs, boolean canViewPeopleInsights, boolean canPlanDeliveries, ViewAsInfo viewAs) {
     /** Who is really behind a read-only "view as" session; null on the response unless viewing. */
     public record ViewAsInfo(long actorId, String actorName) {}
 }

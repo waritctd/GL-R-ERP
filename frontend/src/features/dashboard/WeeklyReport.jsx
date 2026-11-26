@@ -9,6 +9,7 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { addDaysIso, bangkokTodayIso, formatMoney, formatThaiDate, formatThaiMonthYearFromMonthInputValue } from '../../utils/format.js';
 import { timeLabel, visitIsDue, weekStartIso } from '../salesBoard/visitWeek.js';
+import { addExpectedPaymentPath } from '../salesBoard/cashFormat.js';
 import { isOrderedIn } from '../tickets/movementRange.js';
 import { stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 import { WeeklyLedger } from './WeeklyLedger.jsx';
@@ -124,7 +125,7 @@ export function WeeklyReport({ user, showToast }) {
   const pendingVisits = visits.filter((v) => visitIsDue(v, todayIso));
 
   // รายการที่ควรติดตาม: only what has a button that opens the fix.
-  const undated = orders.filter((o) => !o.nextPayment && o.outstanding > 0);
+  const undated = orders.filter((o) => !o.nextPayment && !o.estimate && o.outstanding > 0);
   const slipped = orders.filter((o) => o.slipped && o.nextPayment);
   const items = [];
   if (undated.length) {
@@ -132,7 +133,7 @@ export function WeeklyReport({ user, showToast }) {
       key: 'undated', count: undated.length, title: 'งานที่ยังไม่ระบุวันคาดว่าจะรับเงิน',
       detail: `สั่งซื้อแล้ว ${undated.length} งาน · ${formatMoney(undated.reduce((t, o) => t + o.outstanding, 0))} ยังไม่รวมในประมาณการ`,
       ...(team ? { to: '/tickets', action: 'ดูรายการ' }
-        : undated.length === 1 ? { to: `/tickets/${undated[0].ticketId}?tab=money`, action: 'ระบุวันที่' }
+        : undated.length === 1 ? { to: addExpectedPaymentPath(undated[0].ticketId), action: 'ระบุวันที่' }
           : { onClick: () => document.getElementById('weekly-orders')?.scrollIntoView({ behavior: 'smooth' }), action: 'ดูรายการ' }),
     });
   }
@@ -189,7 +190,7 @@ export function WeeklyReport({ user, showToast }) {
         <h2 className="m-0 text-xl font-extrabold">{title}</h2>
         <WeekStepper weeks={weeks} weekStart={weekStart} currentWeek={currentWeek} onChange={setWeek} />
         <p className="m-0 text-xs text-text-muted">
-          ระบบจัดทำรายงานนี้จากข้อมูลงาน ใบเสนอราคา นัดเข้าพบ และยอดรับชำระที่ฝ่ายบัญชีบันทึกในพอร์ทัล จึงไม่ต้องจัดทำไฟล์หรือส่งอีเมล
+          ระบบจัดทำรายงานนี้จากข้อมูลงาน ใบเสนอราคา นัดเข้าพบ และยอดรับชำระที่ฝ่ายบัญชีบันทึกในพอร์ทัล
         </p>
       </header>
 

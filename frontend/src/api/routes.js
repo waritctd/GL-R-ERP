@@ -473,6 +473,15 @@ export const API_ROUTES = {
     deal: (id) => `/api/finance/deals/${id}`,
     action: (id, action) => `/api/finance/deals/${id}/${action}`,
   },
+  // Warehouse delivery trips (V248). Mirrors DeliveryTripController; the warehouse manager only.
+  deliveryTrips: {
+    home: '/api/delivery-trips/home',
+    create: '/api/delivery-trips',
+    one: (id) => `/api/delivery-trips/${id}`,
+    delay: (id, rid) => `/api/delivery-trips/${id}/rounds/${rid}/delay`,
+    cancel: (id) => `/api/delivery-trips/${id}/cancel`,
+    deliver: (id) => `/api/delivery-trips/${id}/deliver`,
+  },
   // Delivery rounds (V236): one request per round from sales to the warehouse; files ride on the round.
   deliveryRequests: {
     list: (ticketId) => `/api/tickets/${ticketId}/delivery-requests`,

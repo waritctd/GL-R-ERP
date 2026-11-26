@@ -193,19 +193,26 @@ describe('SalesOverview', () => {
     await screen.findByText('9 จาก 11 รายการ ครบถ้วน');
     expect(screen.getByText('4 จาก 5 งาน')).toBeTruthy();
     expect(screen.getByText('5 จาก 6 นัด')).toBeTruthy();
-    expect(screen.getByText(/ระบบจะสรุปรายงานสัปดาห์นี้ให้แก่ผู้จัดการฝ่ายขาย จันทร์ \d+ \S+ 06:00 น\./)).toBeTruthy();
+    expect(screen.getByText('ระบบสรุปรายงานสัปดาห์นี้ให้แก่ผู้จัดการฝ่ายขายจากข้อมูลที่คุณบันทึก อัปเดตทันทีทุกครั้งที่บันทึก')).toBeTruthy();
     expectFigure('ยังไม่นับในประมาณการ', '฿58,000.00');
     expect(screen.queryByText(/ควรตามต่อ|งานเงียบ|ดีล/)).toBeNull();
   });
 
-  it('an ordered job with no payment date is a money row whose button opens the money tab', async () => {
+  it('an ordered job with no payment date is a money row whose button opens the add-payment form on the money tab', async () => {
     setUp({ orders: [order()] });
     renderOverview();
     const row = await screen.findByTestId('today-row-undated-901');
     expect(screen.getByTestId('today-group-money').contains(row)).toBe(true);
     fireEvent.click(within(row).getByRole('button', { name: 'ระบุวันที่' }));
     await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/tickets/901'));
-    expect(screen.getByTestId('location-search').textContent).toBe('?tab=money');
+    expect(screen.getByTestId('location-search').textContent).toBe('?tab=money&add=expected');
+  });
+
+  it('an order the system estimated is dated: no ระบุวันที่ row for it', async () => {
+    setUp({ orders: [order({ estimate: { kind: 'ON_DELIVERY', amount: 58000, week: '2026-11-23' } })] });
+    renderOverview();
+    await screen.findByTestId('today-group-money').catch(() => null);
+    expect(screen.queryByTestId('today-row-undated-901')).toBeNull();
   });
 
   it('a visit needs a result only after its day, or its time today; a time later today or none is not due yet', async () => {

@@ -17,7 +17,7 @@ import { nextSalesAction, sortWorklist } from '../tickets/salesActions.js';
 import { offRoutePartiesFor, stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 import { Figure, failed } from './dashboardParts.jsx';
 import { InsightLanding } from './InsightSwitch.jsx';
-import { buildTodayRows, buildWaitingRows, nextMondayLabel } from './repToday.js';
+import { buildTodayRows, buildWaitingRows } from './repToday.js';
 import { ReportBlock, SavedToday, TodayVisits, TodayWorklist, WaitingOthers } from './repTodayParts.jsx';
 
 // useQueries' `combine`: each query's rows. Module-level so react-query keeps the combined array
@@ -154,7 +154,7 @@ function SalesToday({ switcher, ctx }) {
 
   const todaysVisits = (work?.visitsThisWeek ?? []).filter((v) => v.plannedDate === todayIso && v.status !== 'CANCELLED');
   const dueVisits = planned.filter((v) => rows.some((r) => r.key === `visit-${v.id}`));
-  const undated = orders.filter((o) => !o.nextPayment && o.outstanding > 0);
+  const undated = orders.filter((o) => !o.nextPayment && !o.estimate && o.outstanding > 0);
   const summary = commissionSummaryQuery.data;
   const dash = (query, value) => (failed(query) ? '—' : value ?? <Skeleton width={96} height={22} className="mobile:ml-auto" />);
   const dealsFailed = failed(ticketsQuery) || failed(pricingRequestsQuery);
@@ -197,7 +197,7 @@ function SalesToday({ switcher, ctx }) {
           <Panel title="รายงานสัปดาห์ของคุณ" className="nav-drawer:order-1" actions={<span className="text-xs text-text-muted">จัดทำจากข้อมูลที่บันทึกในพอร์ทัล</span>}>
             {failed(reportQuery) ? <p className="m-0 text-sm font-bold text-danger">โหลดไม่สำเร็จ</p> : !rep ? <Skeleton height={140} /> : (
               <div className="grid gap-4">
-                <ReportBlock rep={rep} nextMonday={nextMondayLabel(todayIso)} />
+                <ReportBlock rep={rep} />
                 <dl className="m-0 grid grid-cols-3 gap-x-6 border-t border-border-subtle pt-3 mobile:grid-cols-1 mobile:divide-y mobile:divide-border mobile:[&>div]:py-2.5">
                   <Figure
                     label="ยังไม่นับในประมาณการ"

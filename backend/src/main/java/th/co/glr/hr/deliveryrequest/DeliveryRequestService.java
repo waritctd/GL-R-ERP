@@ -188,7 +188,7 @@ public class DeliveryRequestService {
         List<RoundDto> dtos = r.rounds().stream().map(d -> new RoundDto(d.id(), d.roundNo(), d.status(), d.quotationId(),
             d.quotationNumber(), d.note(), d.returnReasonCodes(), d.returnReasonText(), d.requestedByName(), d.sentAt(),
             d.forwardedByName(), d.forwardedAt(), priceFree(d.invoice()), d.lines(), List.of(), d.untickedDocs(), d.viewer(),
-            d.customerName(), d.taxId(), d.branch(), d.customerFromDeal())).toList();
+            d.customerName(), d.taxId(), d.branch(), d.customerFromDeal(), d.trip())).toList();
         return new RoundsResponse(r.order(), dtos, r.approvedQuotations(), r.canStart(), r.startBlockedReason(), null);
     }
 
@@ -936,7 +936,7 @@ public class DeliveryRequestService {
             new ViewerDto(editable, editable, warehouse && DeliveryRequestDtos.SENT.equals(r.status()), canIssue,
                 canRecord, invoiced && vctx.scope() && voidBlock == null, invoiced && vctx.scope() ? voidBlock : null,
                 recordBlock),
-            buyer.name(), warehouse ? null : buyer.taxId(), warehouse ? null : buyer.branch(), buyer.fromDeal());
+            buyer.name(), warehouse ? null : buyer.taxId(), warehouse ? null : buyer.branch(), buyer.fromDeal(), rounds.tripPlan(r.id()));
     }
 
     /**
@@ -991,6 +991,12 @@ public class DeliveryRequestService {
     }
 
     /** The buyer's name for a bell: the quotation's party customer, else the deal's (owner rule #65). */
+    /** The buyer a round is invoiced to (owner rule #65), for the warehouse trip lists and notices. */
+    public String buyerNameOfRound(long rid) {
+        var round = rounds.findById(rid).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรอบส่งที่ขอ"));
+        return buyerName(summary(round.ticketId()), round.quotationNumber());
+    }
+
     private String buyerName(TicketSummaryDto s, String quotationNumber) {
         return depositNotices.quotationBuyer(s, quotationNumber).name();
     }
