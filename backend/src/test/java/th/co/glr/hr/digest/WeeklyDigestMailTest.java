@@ -13,6 +13,7 @@ import org.mockito.Mockito;
 import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.digest.WeeklyDigestMail.SalesWeek;
 import th.co.glr.hr.digest.WeeklyDigestRepository.AccountItem;
+import th.co.glr.hr.digest.WeeklyDigestRepository.PendingNote;
 import th.co.glr.hr.digest.WeeklyDigestRepository.StaleDeal;
 import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.notification.NotificationEmailService;
@@ -36,6 +37,17 @@ class WeeklyDigestMailTest {
     }
 
     @Test
+    void pendingFallsBackToHomeForLinklessNotesAndCapsTheList() {
+        List<PendingNote> notes = new ArrayList<>();
+        for (int i = 1; i <= 11; i++) {
+            notes.add(new PendingNote("รายการ " + i, i == 1 ? null : "/x/" + i, i));
+        }
+        var r = WeeklyDigestMail.pending("สมศรี ตัวอย่าง", notes, LocalDate.of(2026, 11, 30), URL);
+        assertThat(r.html()).contains("จำนวน 11 รายการ", "https://portal.example.test/\"", "และอีก 1 รายการ")
+            .doesNotContain("รายการ 11<");
+    }
+
+    @Test
     void samples() throws Exception {
         String dir = System.getProperty("digest.sample.dir");
         if (dir == null) {
@@ -55,5 +67,9 @@ class WeeklyDigestMailTest {
         Files.createDirectories(Path.of(dir));
         Files.writeString(Path.of(dir, "account.html"), shell.renderShell(account.html()));
         Files.writeString(Path.of(dir, "sales.html"), shell.renderShell(sales.html()));
+        var pending = WeeklyDigestMail.pending("สมศรี ตัวอย่าง", List.of(
+            new PendingNote("มีคำขอจัดส่งสินค้าใหม่รอจัดรอบรถ", "/warehouse/deliveries", 2),
+            new PendingNote("ใบแจ้งหนี้รอออกใบกำกับภาษี", null, 5)), LocalDate.of(2026, 11, 30), shell::portalUrl);
+        Files.writeString(Path.of(dir, "pending.html"), shell.renderShell(pending.html()));
     }
 }

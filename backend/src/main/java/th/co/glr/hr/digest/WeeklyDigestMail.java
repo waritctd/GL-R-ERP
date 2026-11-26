@@ -5,6 +5,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.function.UnaryOperator;
 import th.co.glr.hr.digest.WeeklyDigestRepository.AccountItem;
+import th.co.glr.hr.digest.WeeklyDigestRepository.PendingNote;
 import th.co.glr.hr.digest.WeeklyDigestRepository.StaleDeal;
 
 /** Pure rendering of the two Monday digests: formal, system-voiced (never in a person's voice), no ranking. Links are portal paths run through
@@ -91,6 +92,32 @@ final class WeeklyDigestMail {
         h.append("<p style=\"margin:16px 0 0 0;\">").append(CLOSING).append("</p>");
         t.append("\n").append(CLOSING);
         return new Rendered("[GL&R Portal] สรุปงานประจำสัปดาห์ " + range, h.toString(), t.toString());
+    }
+
+    /** Everyone outside sales, HR and housekeeping: what the portal is waiting on them for (unread notifications). */
+    static Rendered pending(String personName, List<PendingNote> notes, LocalDate today, UnaryOperator<String> url) {
+        String intro = "ระบบ GL&R Portal ขอแจ้งรายการที่รอท่านดำเนินการในระบบ จำนวน " + notes.size()
+            + " รายการ (การแจ้งเตือนที่ยังไม่ได้เปิดอ่านในช่วง 30 วันที่ผ่านมา) สามารถตรวจสอบได้จากลิงก์ด้านล่าง";
+        StringBuilder h = new StringBuilder("<p style=\"margin:0 0 8px 0;\">เรียน คุณ" + esc(personName) + "</p>")
+            .append("<p style=\"margin:0 0 16px 0;\">").append(esc(intro)).append("</p>");
+        StringBuilder t = new StringBuilder("เรียน คุณ" + personName + "\n\n" + intro + "\n\n");
+        for (PendingNote note : notes.stream().limit(MAX_STALE_LISTED).toList()) {
+            String link = url.apply(note.link() == null || note.link().isBlank() ? "/" : note.link());
+            String meta = note.daysAgo() == 0 ? "แจ้งวันนี้" : "แจ้งเมื่อ " + note.daysAgo() + " วันที่แล้ว";
+            h.append(row(note.title(), meta, "เปิดดู", link));
+            t.append("- ").append(note.title()).append(" (").append(meta).append(")\n  ").append(link).append('\n');
+        }
+        int more = notes.size() - MAX_STALE_LISTED;
+        if (more > 0) {
+            String link = url.apply("/");
+            h.append("<p style=\"margin:12px 0 0 0;\"><a href=\"").append(esc(link)).append("\" style=\"color:")
+                .append(BRAND).append(";\">และอีก ").append(more).append(" รายการ ดูทั้งหมดในระบบ</a></p>");
+            t.append("และอีก ").append(more).append(" รายการ ดูทั้งหมดในระบบ: ").append(link).append('\n');
+        }
+        h.append("<p style=\"margin:16px 0 0 0;\">").append(CLOSING).append("</p>");
+        t.append("\n").append(CLOSING);
+        return new Rendered("[GL&R Portal] สรุปรายการที่รอดำเนินการ ประจำวันที่ " + thaiDate(today), h.toString(),
+            t.toString());
     }
 
     private static String name(String title, String customer) {

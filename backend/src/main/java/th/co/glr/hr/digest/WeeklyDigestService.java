@@ -31,6 +31,8 @@ public class WeeklyDigestService {
     private static final Logger log = LoggerFactory.getLogger(WeeklyDigestService.class);
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
     private static final java.util.Set<String> SALES_ROLES = java.util.Set.of("sales", "sales_manager");
+    /** Divisions that get no digest at all (Ploy 11-26): HR and housekeeping. */
+    private static final java.util.Set<String> EXCLUDED_DIVISIONS = java.util.Set.of("hr", "hk");
 
     private final WeeklyDigestRepository repo;
     private final WeeklyReportRepository weekly;
@@ -94,6 +96,19 @@ public class WeeklyDigestService {
             }
         }
         log.info("Weekly sales recaps sent: {}", sent);
+        int pendingSent = 0;
+        for (EmployeeLoginRecord person : otherStaff()) {
+            try {
+                Optional<Rendered> r = renderPending(person);
+                if (r.isPresent()) {
+                    mail.sendDigest(person.email(), List.of(), r.get().subject(), r.get().html(), r.get().text());
+                    pendingSent++;
+                }
+            } catch (Exception e) {
+                log.error("Weekly pending digest failed for employee {}", person.employeeId(), e);
+            }
+        }
+        log.info("Weekly pending digests sent: {}", pendingSent);
     }
 
     /** Admin test: sends one digest to {@code to} regardless of the enabled flag. Returns the subject, or empty when
@@ -102,6 +117,9 @@ public class WeeklyDigestService {
         Optional<Rendered> r;
         if ("account".equals(kind)) {
             r = renderAccount();
+        } else if ("pending".equals(kind)) {
+            r = otherStaff().stream().filter(e -> employeeId == null || e.employeeId() == employeeId)
+                .map(this::renderPending).flatMap(Optional::stream).findFirst();
         } else {
             LocalDate monday = weekStart == null ? lastWeekMonday()
                 : weekStart.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
@@ -137,6 +155,24 @@ public class WeeklyDigestService {
         return Optional.of(WeeklyDigestMail.sales(
             new SalesWeek(rep.name(), monday, stage, quotes, received, stale, quietRule.quietDays()),
             mail::portalUrl));
+    }
+
+    Optional<Rendered> renderPending(EmployeeLoginRecord person) {
+        var notes = repo.unreadNotifications(person.employeeId());
+        return notes.isEmpty() ? Optional.empty()
+            : Optional.of(WeeklyDigestMail.pending(person.name(), notes, LocalDate.now(clock), mail::portalUrl));
+    }
+
+    /** Active staff with an email who are not on the sales recap list, outside HR and housekeeping. A quotation
+     * grant makes QC/warehouse staff "sales" by role; without open deals they land here, not nowhere. */
+    private List<EmployeeLoginRecord> otherStaff() {
+        java.util.Set<Long> recapped = salesReps().stream().map(EmployeeLoginRecord::employeeId)
+            .collect(java.util.stream.Collectors.toSet());
+        return employees.findAllActive().stream()
+            .filter(e -> hasEmail(e) && !recapped.contains(e.employeeId())
+                && !"hr".equals(DivisionAccessPolicy.roleFor(e))
+                && !EXCLUDED_DIVISIONS.contains(DivisionAccessPolicy.divisionCode(e)))
+            .toList();
     }
 
     private LocalDate lastWeekMonday() {

@@ -25,6 +25,8 @@ public class WeeklyDigestRepository {
 
     public record StaleDeal(long ticketId, String title, String customer, int quietDays) {}
 
+    public record PendingNote(String title, String link, int daysAgo) {}
+
     private static final String TITLE = "COALESCE(NULLIF(TRIM(t.title), ''), t.customer_name, t.code)";
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -85,6 +87,22 @@ public class WeeklyDigestRepository {
                 out.put(rs.getLong("created_by"), rs.getBigDecimal("amount"));
             });
         return out;
+    }
+
+    /** The employee's unread bell notifications from the last 30 days, newest first: the portal's own to-do inbox
+     * for every role (warehouse, import, tax-invoice and approval flows all notify the person who must act). */
+    public List<PendingNote> unreadNotifications(long employeeId) {
+        return jdbc.query("""
+            SELECT COALESCE(NULLIF(TRIM(n.title), ''), n.message) AS title, n.link,
+                   GREATEST((now() AT TIME ZONE 'Asia/Bangkok')::date
+                            - (n.created_at AT TIME ZONE 'Asia/Bangkok')::date, 0) AS days_ago
+              FROM hr.notification n
+             WHERE n.employee_id = :employeeId AND n.is_read = FALSE
+               AND n.created_at > now() - interval '30 days'
+             ORDER BY n.created_at DESC
+             LIMIT 200
+            """, new MapSqlParameterSource("employeeId", employeeId),
+            (rs, n) -> new PendingNote(rs.getString("title"), rs.getString("link"), rs.getInt("days_ago")));
     }
 
     /** The owner's quiet deals (14+ days by default), quietest first. */
