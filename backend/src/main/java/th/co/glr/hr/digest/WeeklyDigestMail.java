@@ -7,13 +7,14 @@ import java.util.function.UnaryOperator;
 import th.co.glr.hr.digest.WeeklyDigestRepository.AccountItem;
 import th.co.glr.hr.digest.WeeklyDigestRepository.StaleDeal;
 
-/** Pure rendering of the two Monday digests: warm, short, no ranking. Links are portal paths run through
+/** Pure rendering of the two Monday digests: formal, system-voiced (never in a person's voice), no ranking. Links are portal paths run through
  * {@code url}. The returned HTML is the content block only; the branded shell is added when it is sent. */
 final class WeeklyDigestMail {
     static final int MAX_STALE_LISTED = 10;
     private static final String[] MONTHS = {"ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.",
         "ต.ค.", "พ.ย.", "ธ.ค."};
     private static final String BRAND = "#4f46e5";
+    private static final String CLOSING = "จึงเรียนมาเพื่อโปรดทราบ";
 
     record Rendered(String subject, String html, String text) {}
 
@@ -32,8 +33,8 @@ final class WeeklyDigestMail {
 
     static Rendered account(List<AccountItem> items, LocalDate today, UnaryOperator<String> url) {
         BigDecimal total = items.stream().map(AccountItem::amount).reduce(BigDecimal.ZERO, BigDecimal::add);
-        String intro = "มีงานที่รอฝ่ายบัญชียืนยันเรื่องเงิน " + items.size() + " รายการ ยอดรวม " + money(total)
-            + " รบกวนตรวจสอบเมื่อสะดวกนะคะ";
+        String intro = "ระบบ GL&R Portal ขอแจ้งรายการงานที่รอฝ่ายบัญชียืนยันการรับชำระเงิน จำนวน " + items.size()
+            + " รายการ ยอดคงค้างรวม " + money(total) + " สามารถตรวจสอบและดำเนินการได้จากลิงก์ด้านล่าง";
         StringBuilder h = new StringBuilder("<p style=\"margin:0 0 8px 0;\">เรียน ฝ่ายบัญชี</p>")
             .append("<p style=\"margin:0 0 16px 0;\">").append(esc(intro)).append("</p>");
         StringBuilder t = new StringBuilder("เรียน ฝ่ายบัญชี\n\n").append(intro).append("\n\n");
@@ -45,34 +46,36 @@ final class WeeklyDigestMail {
             h.append(row(name, meta, "เปิดดู", link));
             t.append("- ").append(name).append(" (").append(meta).append(")\n  ").append(link).append('\n');
         }
-        h.append("<p style=\"margin:16px 0 0 0;\">ขอบคุณค่ะ</p>");
-        t.append("\nขอบคุณค่ะ");
-        return new Rendered("งานที่รอฝ่ายบัญชียืนยัน ประจำวันที่ " + thaiDate(today), h.toString(), t.toString());
+        h.append("<p style=\"margin:16px 0 0 0;\">").append(CLOSING).append("</p>");
+        t.append("\n").append(CLOSING);
+        return new Rendered("[GL&R Portal] สรุปงานที่รอฝ่ายบัญชียืนยันการรับชำระเงิน ประจำวันที่ " + thaiDate(today),
+            h.toString(), t.toString());
     }
 
     static Rendered sales(SalesWeek w, UnaryOperator<String> url) {
         LocalDate sunday = w.monday().plusDays(6);
         String range = w.monday().getDayOfMonth() + "–" + thaiDate(sunday);
         List<String> done = new java.util.ArrayList<>();
-        if (w.stageMoves() > 0) done.add("ขยับงานไปข้างหน้า " + w.stageMoves() + " งาน");
+        if (w.stageMoves() > 0) done.add("อัปเดตขั้นงาน " + w.stageMoves() + " ครั้ง");
         if (w.quotations() > 0) done.add("ส่งใบเสนอราคา " + w.quotations() + " ฉบับ");
-        if (w.received().signum() > 0) done.add("รับเงินแล้ว " + money(w.received()));
+        if (w.received().signum() > 0) done.add("รับชำระเงิน " + money(w.received()));
         String lead = done.isEmpty()
-            ? "ขอบคุณที่ดูแลงานของลูกค้าอยู่เสมอนะคะ"
-            : "สัปดาห์ที่ผ่านมา (" + range + ") คุณ" + String.join(" · ", done) + " ขอบคุณมากค่ะ";
+            ? "ระบบ GL&R Portal ขอสรุปงานของท่านประจำสัปดาห์ (" + range + ")"
+            : "ระบบ GL&R Portal ขอสรุปความคืบหน้างานของท่านในสัปดาห์ที่ผ่านมา (" + range + "): "
+                + String.join(" · ", done);
         StringBuilder h = new StringBuilder("<p style=\"margin:0 0 8px 0;\">เรียน คุณ" + esc(w.repName()) + "</p>")
             .append("<p style=\"margin:0 0 16px 0;\">").append(esc(lead)).append("</p>");
         StringBuilder t = new StringBuilder("เรียน คุณ" + w.repName() + "\n\n" + lead + "\n");
         if (!w.stale().isEmpty()) {
-            String head = "งานที่ยังไม่ได้อัปเดตเกิน " + w.quietDays() + " วัน";
-            String hint = "ช่วยอัปเดตสักนิดเพื่อให้ทีมเห็นความคืบหน้า";
+            String head = "งานที่ไม่มีการอัปเดตเกิน " + w.quietDays() + " วัน";
+            String hint = "โปรดอัปเดตสถานะในระบบ เพื่อให้ทีมเห็นความคืบหน้าล่าสุด";
             h.append("<p style=\"margin:8px 0 4px 0;font-weight:600;\">").append(esc(head)).append("</p>")
                 .append("<p style=\"margin:0 0 8px 0;color:#6b7280;\">").append(esc(hint)).append("</p>");
             t.append("\n").append(head).append(" — ").append(hint).append("\n");
             for (StaleDeal s : w.stale().stream().limit(MAX_STALE_LISTED).toList()) {
                 String name = name(s.title(), s.customer());
                 String link = url.apply("/tickets/" + s.ticketId());
-                String meta = "ยังไม่มีความเคลื่อนไหว " + s.quietDays() + " วัน";
+                String meta = "ไม่มีการอัปเดต " + s.quietDays() + " วัน";
                 h.append(row(name, meta, "อัปเดต", link));
                 t.append("- ").append(name).append(" (").append(meta).append(")\n  ").append(link).append('\n');
             }
@@ -85,9 +88,9 @@ final class WeeklyDigestMail {
                 t.append("และอีก ").append(more).append(" งาน ดูทั้งหมด: ").append(link).append('\n');
             }
         }
-        h.append("<p style=\"margin:16px 0 0 0;\">ขอให้สัปดาห์นี้เป็นสัปดาห์ที่ดีนะคะ</p>");
-        t.append("\nขอให้สัปดาห์นี้เป็นสัปดาห์ที่ดีนะคะ");
-        return new Rendered("สัปดาห์ของคุณ " + range, h.toString(), t.toString());
+        h.append("<p style=\"margin:16px 0 0 0;\">").append(CLOSING).append("</p>");
+        t.append("\n").append(CLOSING);
+        return new Rendered("[GL&R Portal] สรุปงานประจำสัปดาห์ " + range, h.toString(), t.toString());
     }
 
     private static String name(String title, String customer) {

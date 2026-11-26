@@ -30,6 +30,7 @@ import th.co.glr.hr.ticket.QuietRule;
 public class WeeklyDigestService {
     private static final Logger log = LoggerFactory.getLogger(WeeklyDigestService.class);
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
+    private static final java.util.Set<String> SALES_ROLES = java.util.Set.of("sales", "sales_manager");
 
     private final WeeklyDigestRepository repo;
     private final WeeklyReportRepository weekly;
@@ -76,18 +77,20 @@ public class WeeklyDigestService {
                     account.get().html(), account.get().text());
             }
         } catch (Exception e) {
-            log.error("Weekly account digest failed: {}", e.getMessage());
+            log.error("Weekly account digest failed", e);
         }
         int sent = 0;
+        LocalDate monday = lastWeekMonday();
+        Map<Long, BigDecimal> received = receivedFor(monday);
         for (EmployeeLoginRecord rep : salesReps()) {
             try {
-                Optional<Rendered> r = renderSales(rep, lastWeekMonday());
+                Optional<Rendered> r = renderSales(rep, monday, received);
                 if (r.isPresent()) {
                     mail.sendDigest(rep.email(), List.of(), r.get().subject(), r.get().html(), r.get().text());
                     sent++;
                 }
             } catch (Exception e) {
-                log.error("Weekly sales recap failed for employee {}: {}", rep.employeeId(), e.getMessage());
+                log.error("Weekly sales recap failed for employee {}", rep.employeeId(), e);
             }
         }
         log.info("Weekly sales recaps sent: {}", sent);
@@ -103,7 +106,7 @@ public class WeeklyDigestService {
             LocalDate monday = weekStart == null ? lastWeekMonday()
                 : weekStart.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
             r = salesReps().stream().filter(e -> employeeId == null || e.employeeId() == employeeId)
-                .map(e -> renderSales(e, monday)).flatMap(Optional::stream).findFirst();
+                .map(e -> renderSales(e, monday, receivedFor(monday))).flatMap(Optional::stream).findFirst();
         }
         r.ifPresent(x -> mail.sendDigest(to, List.of(), "[ทดสอบ] " + x.subject(), x.html(), x.text()));
         return r.map(Rendered::subject);
@@ -115,13 +118,18 @@ public class WeeklyDigestService {
             : Optional.of(WeeklyDigestMail.account(items, LocalDate.now(clock), mail::portalUrl));
     }
 
-    Optional<Rendered> renderSales(EmployeeLoginRecord rep, LocalDate monday) {
+    private Map<Long, BigDecimal> receivedFor(LocalDate monday) {
+        return repo.receivedByOwner(monday.atStartOfDay(BANGKOK).toInstant(),
+            monday.plusWeeks(1).atStartOfDay(BANGKOK).toInstant());
+    }
+
+    Optional<Rendered> renderSales(EmployeeLoginRecord rep, LocalDate monday, Map<Long, BigDecimal> receivedByOwner) {
         Instant from = monday.atStartOfDay(BANGKOK).toInstant();
         Instant to = monday.plusWeeks(1).atStartOfDay(BANGKOK).toInstant();
         Map<String, Map<Long, Integer>> counts = weekly.weekCounts(rep.employeeId(), from, to);
         int stage = counts.get("stage").getOrDefault(rep.employeeId(), 0);
         int quotes = counts.get("quotations").getOrDefault(rep.employeeId(), 0);
-        BigDecimal received = repo.receivedByOwner(from, to).getOrDefault(rep.employeeId(), BigDecimal.ZERO);
+        BigDecimal received = receivedByOwner.getOrDefault(rep.employeeId(), BigDecimal.ZERO);
         var stale = repo.staleDeals(rep.employeeId());
         if (stage == 0 && quotes == 0 && received.signum() <= 0 && stale.isEmpty()) {
             return Optional.empty();
@@ -141,11 +149,11 @@ public class WeeklyDigestService {
             .map(EmployeeLoginRecord::email).toList();
     }
 
-    /** Active sales-role employees with an email who own at least one open deal. */
+    /** Active sales and sales-manager employees with an email who own at least one open deal. */
     private List<EmployeeLoginRecord> salesReps() {
         Map<Long, Integer> open = repo.openDealCounts();
         return employees.findAllActive().stream()
-            .filter(e -> "sales".equals(DivisionAccessPolicy.roleFor(e)) && hasEmail(e)
+            .filter(e -> SALES_ROLES.contains(DivisionAccessPolicy.roleFor(e)) && hasEmail(e)
                 && open.containsKey(e.employeeId()))
             .toList();
     }

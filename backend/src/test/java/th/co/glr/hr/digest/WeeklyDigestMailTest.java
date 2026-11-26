@@ -29,8 +29,8 @@ class WeeklyDigestMailTest {
         }
         var r = WeeklyDigestMail.sales(new SalesWeek("สมหญิง ตัวอย่าง", LocalDate.of(2026, 11, 23), 3, 2,
             new BigDecimal("125000.5"), stale, 14), URL);
-        assertThat(r.subject()).isEqualTo("สัปดาห์ของคุณ 23–29 พ.ย. 2569");
-        assertThat(r.html()).contains("ขยับงานไปข้างหน้า 3 งาน", "฿125,000.50", "และอีก 2 งาน", "งาน &lt;b&gt;A&lt;/b&gt;")
+        assertThat(r.subject()).isEqualTo("[GL&R Portal] สรุปงานประจำสัปดาห์ 23–29 พ.ย. 2569");
+        assertThat(r.html()).contains("อัปเดตขั้นงาน 3 ครั้ง", "฿125,000.50", "และอีก 2 งาน", "งาน &lt;b&gt;A&lt;/b&gt;")
             .doesNotContain("<b>A</b>").doesNotContain("งานตัวอย่าง 12");
         assertThat(r.html()).doesNotContain("ดีล");
     }
