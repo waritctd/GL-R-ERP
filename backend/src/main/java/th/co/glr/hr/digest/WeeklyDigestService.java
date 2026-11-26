@@ -31,8 +31,8 @@ public class WeeklyDigestService {
     private static final Logger log = LoggerFactory.getLogger(WeeklyDigestService.class);
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
     private static final java.util.Set<String> SALES_ROLES = java.util.Set.of("sales", "sales_manager");
-    /** Divisions that get no digest at all (Ploy 11-26): HR and housekeeping. */
-    private static final java.util.Set<String> EXCLUDED_DIVISIONS = java.util.Set.of("hr", "hk");
+    /** Divisions that get no digest at all (Ploy 11-26): HR, housekeeping and MD (executives). */
+    private static final java.util.Set<String> EXCLUDED_DIVISIONS = java.util.Set.of("hr", "hk", "md");
 
     private final WeeklyDigestRepository repo;
     private final WeeklyReportRepository weekly;
