@@ -218,8 +218,9 @@ app:
   sales:
     # A deal untouched this many days is "quiet" (QuietRule, spec 2026-11-15 §7.5).
     quiet-days: ${APP_SALES_QUIET_DAYS:14}
-    # Money counts only for orders confirmed in the portal on or after this date (Bangkok midnight); empty = no cutoff.
-    money-from: ${APP_SALES_MONEY_FROM:2026-11-16}
+    # Optional: count money only for orders confirmed in the portal on or after this date (Bangkok midnight).
+    # Empty (the default, Ploy 2026-11-26 "u have to include it") = every order's money counts.
+    money-from: ${APP_SALES_MONEY_FROM:}
   quotation-expiry:
     # Step 5 (V75): flips ISSUED customer quotations whose validity_date has passed to EXPIRED.
     # A single guarded UPDATE per tick -- no outbox/claim/retry machinery.
