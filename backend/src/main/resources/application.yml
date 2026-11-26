@@ -68,6 +68,11 @@ spring:
       max-file-size: ${APP_MAX_FILE_SIZE:10MB}
       max-request-size: ${APP_MAX_REQUEST_SIZE:12MB}
 app:
+  digest:
+    weekly:
+      # Monday 08:30 account digest + per-rep recap. Off until the deployer turns it on.
+      enabled: ${APP_DIGEST_WEEKLY_ENABLED:false}
+      account-to: ${APP_DIGEST_WEEKLY_ACCOUNT_TO:account@glr.co.th}
   feedback:
     # Comma-separated addresses BCC'd on ONE "new feedback submitted" email (the first admin's). Empty = none.
     submitted-bcc: ${APP_FEEDBACK_SUBMITTED_BCC:}

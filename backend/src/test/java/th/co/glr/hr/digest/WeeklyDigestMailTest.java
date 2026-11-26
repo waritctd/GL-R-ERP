@@ -1,0 +1,59 @@
+package th.co.glr.hr.digest;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
+import th.co.glr.hr.brand.BrandAssets;
+import th.co.glr.hr.digest.WeeklyDigestMail.SalesWeek;
+import th.co.glr.hr.digest.WeeklyDigestRepository.AccountItem;
+import th.co.glr.hr.digest.WeeklyDigestRepository.StaleDeal;
+import th.co.glr.hr.mail.Mailer;
+import th.co.glr.hr.notification.NotificationEmailService;
+
+/** Rendering with made-up data. With -Ddigest.sample.dir=... it also writes both mails, in the branded shell. */
+class WeeklyDigestMailTest {
+    private static final java.util.function.UnaryOperator<String> URL = p -> "https://portal.example.test" + p;
+
+    @Test
+    void salesListsTenStaleDealsThenAMoreLinkAndEscapesNames() {
+        List<StaleDeal> stale = new ArrayList<>();
+        for (int i = 1; i <= 12; i++) {
+            stale.add(new StaleDeal(i, i == 1 ? "งาน <b>A</b>" : "งานตัวอย่าง " + i, "บริษัท ตัวอย่าง จำกัด", 14 + i));
+        }
+        var r = WeeklyDigestMail.sales(new SalesWeek("สมหญิง ตัวอย่าง", LocalDate.of(2026, 11, 23), 3, 2,
+            new BigDecimal("125000.5"), stale, 14), URL);
+        assertThat(r.subject()).isEqualTo("สัปดาห์ของคุณ 23–29 พ.ย. 2569");
+        assertThat(r.html()).contains("ขยับงานไปข้างหน้า 3 งาน", "฿125,000.50", "และอีก 2 งาน", "งาน &lt;b&gt;A&lt;/b&gt;")
+            .doesNotContain("<b>A</b>").doesNotContain("งานตัวอย่าง 12");
+        assertThat(r.html()).doesNotContain("ดีล");
+    }
+
+    @Test
+    void samples() throws Exception {
+        String dir = System.getProperty("digest.sample.dir");
+        if (dir == null) {
+            return;
+        }
+        BrandAssets brand = new BrandAssets();
+        NotificationEmailService shell = new NotificationEmailService(Mockito.mock(Mailer.class), brand, "", "",
+            "https://portal.example.test");
+        var account = WeeklyDigestMail.account(List.of(
+            new AccountItem(101, "โครงการบ้านตัวอย่าง A", "บริษัท ตัวอย่าง จำกัด", "สมหญิง ตัวอย่าง",
+                new BigDecimal("48500"), 9),
+            new AccountItem(102, "โชว์รูมตัวอย่าง B", "ห้างหุ้นส่วนตัวอย่าง", "สมชาย ตัวอย่าง",
+                new BigDecimal("212000.75"), 3)), LocalDate.of(2026, 11, 30), shell::portalUrl);
+        var sales = WeeklyDigestMail.sales(new SalesWeek("สมหญิง ตัวอย่าง", LocalDate.of(2026, 11, 23), 3, 2,
+            new BigDecimal("125000"), List.of(new StaleDeal(201, "โครงการบ้านตัวอย่าง C", "คุณตัวอย่าง", 21),
+                new StaleDeal(202, "คอนโดตัวอย่าง D", "บริษัท ตัวอย่าง จำกัด", 15)), 14), shell::portalUrl);
+        Files.createDirectories(Path.of(dir));
+        Files.writeString(Path.of(dir, "account.html"), shell.renderShell(account.html()));
+        Files.writeString(Path.of(dir, "sales.html"), shell.renderShell(sales.html()));
+    }
+}

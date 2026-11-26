@@ -453,6 +453,8 @@ describe('controller surface / hrApi.js contract', () => {
  * retiring the endpoint) is the direction of travel and the stale-entry test deletes the entry.
  */
 const UNREACHABLE_FROM_UI = new Set([
+  // Admin test send of one weekly digest: called from the console or an API client, no screen.
+  'POST /api/admin/weekly-digest/test',
   // The IR-level step advance and its undo moved to the shipment round (POST /api/shipment-rounds/{id}/advance): /fulfilment
   // advances rounds now. The routes stay: an IR that rides alone on one round is still advanced through them (and API
   // clients and e2e use them); retire them when the round endpoints are the only path.
