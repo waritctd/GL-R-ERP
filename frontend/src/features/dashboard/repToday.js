@@ -1,4 +1,4 @@
-import { addDaysIso, bangkokTodayIso, formatMoney, formatThaiDate } from '../../utils/format.js';
+import { bangkokTodayIso, formatMoney, formatThaiDate } from '../../utils/format.js';
 import { dayLineLabel, timeLabel, visitIsDue } from '../salesBoard/visitWeek.js';
 import { dealAmountLabel } from '../tickets/movementRange.js';
 import { followUpStatus, SALES_ACTION as A } from '../tickets/salesActions.js';
@@ -108,9 +108,3 @@ export function buildWaitingRows({ worklist, pricingRequests, activeIds, todayIs
   }));
   return rows;
 }
-
-/** The Monday after `todayIso`, as the board prints it: "จันทร์ 30 พ.ย.". */
-export const nextMondayLabel = (todayIso) => {
-  const d = new Date(`${todayIso}T00:00:00Z`).getUTCDay(); // 0 = Sunday
-  return dayLineLabel(addDaysIso(todayIso, ((8 - d) % 7) || 7));
-};
