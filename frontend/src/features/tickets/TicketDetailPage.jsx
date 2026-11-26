@@ -46,6 +46,7 @@ import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
 import { DealPaymentSection } from './DealPaymentSection.jsx';
 import { ExpectedPaymentsPanel } from '../salesBoard/ExpectedPaymentsPanel.jsx';
+import { ADD_EXPECTED_PARAM } from '../salesBoard/cashFormat.js';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import {
   canReviseDealQuotation, orderConfirmationOf, canViewDealQuotation, newestQuotationByRequest,
@@ -210,6 +211,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       return next;
     }, { replace: true });
   }
+  // ?add=expected opened the เงินที่คาดว่าจะเข้า form once; drop it so a reload or a tab switch does not reopen it.
+  const clearAddParam = useCallback(() => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    next.delete('add');
+    return next;
+  }, { replace: true }), [setSearchParams]);
   // A cross-tab trigger queues its real action here and switches tabs; the effect below runs it once the
   // destination tab's TabPanel has actually mounted — see JUMP_TARGET_TAB's own doc comment for why this can't
   // just scroll/call-ref immediately.
@@ -2125,6 +2132,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               dealTitle={summary.title || summary.customerName || ''}
               canWrite={role === 'ceo' || role === 'sales_manager' || isSalesOwner(summary, user)}
               showToast={showToast}
+              startAdding={searchParams.get('add') === ADD_EXPECTED_PARAM}
+              onStartedAdding={clearAddParam}
             />
           ) : null}
           // A close-lifecycle action, so it belongs with เงิน (gate: `can.revokeCloseConfirm`, the server's

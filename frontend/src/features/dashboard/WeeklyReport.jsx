@@ -9,6 +9,7 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { addDaysIso, bangkokTodayIso, formatMoney, formatThaiDate, formatThaiMonthYearFromMonthInputValue } from '../../utils/format.js';
 import { timeLabel, visitIsDue, weekStartIso } from '../salesBoard/visitWeek.js';
+import { addExpectedPaymentPath } from '../salesBoard/cashFormat.js';
 import { isOrderedIn } from '../tickets/movementRange.js';
 import { stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 import { WeeklyLedger } from './WeeklyLedger.jsx';
@@ -132,7 +133,7 @@ export function WeeklyReport({ user, showToast }) {
       key: 'undated', count: undated.length, title: 'งานที่ยังไม่ระบุวันคาดว่าจะรับเงิน',
       detail: `สั่งซื้อแล้ว ${undated.length} งาน · ${formatMoney(undated.reduce((t, o) => t + o.outstanding, 0))} ยังไม่รวมในประมาณการ`,
       ...(team ? { to: '/tickets', action: 'ดูรายการ' }
-        : undated.length === 1 ? { to: `/tickets/${undated[0].ticketId}?tab=money`, action: 'ระบุวันที่' }
+        : undated.length === 1 ? { to: addExpectedPaymentPath(undated[0].ticketId), action: 'ระบุวันที่' }
           : { onClick: () => document.getElementById('weekly-orders')?.scrollIntoView({ behavior: 'smooth' }), action: 'ดูรายการ' }),
     });
   }
