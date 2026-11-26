@@ -154,7 +154,7 @@ function SalesToday({ switcher, ctx }) {
 
   const todaysVisits = (work?.visitsThisWeek ?? []).filter((v) => v.plannedDate === todayIso && v.status !== 'CANCELLED');
   const dueVisits = planned.filter((v) => rows.some((r) => r.key === `visit-${v.id}`));
-  const undated = orders.filter((o) => !o.nextPayment && o.outstanding > 0);
+  const undated = orders.filter((o) => !o.nextPayment && !o.estimate && o.outstanding > 0);
   const summary = commissionSummaryQuery.data;
   const dash = (query, value) => (failed(query) ? '—' : value ?? <Skeleton width={96} height={22} className="mobile:ml-auto" />);
   const dealsFailed = failed(ticketsQuery) || failed(pricingRequestsQuery);

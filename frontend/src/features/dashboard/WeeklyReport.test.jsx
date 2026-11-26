@@ -25,7 +25,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 const monday = weekStartIso(bangkokTodayIso());
 const month = monday.slice(0, 7);
 const week = (over = {}) => ({
-  weekStart: monday, received: 0, deliveredAwaiting: 0, deliveriesScheduled: 0, depositsExpected: 0, slipped: 0, isCurrent: true, isPast: false, ...over,
+  weekStart: monday, received: 0, deliveredAwaiting: 0, deliveriesScheduled: 0, depositsExpected: 0, slipped: 0, estimated: 0, isCurrent: true, isPast: false, ...over,
 });
 const order = (over = {}) => ({
   ticketId: 1, code: 'PR-0001', title: 'โครงการตัวอย่าง', customerName: 'ลูกค้าตัวอย่าง', projectName: 'โครงการตัวอย่าง', ownerId: 6, ownerName: 'เซลส์ เอ',
@@ -40,7 +40,7 @@ const report = (over = {}) => ({
   weekStart: monday, weekEnd: monday, moneyFrom: null, scope: 'OWN',
   ledger: {
     month, weeks: [week({ received: 50000, deliveredAwaiting: 10000, deliveriesScheduled: 20000, depositsExpected: 30000, slipped: 30000 })],
-    received: 50000, deliveredAwaiting: 10000, deliveriesScheduled: 20000, depositsExpected: 30000, total: 110000,
+    received: 50000, deliveredAwaiting: 10000, deliveriesScheduled: 20000, depositsExpected: 30000, total: 110000, estimated: 0,
   },
   orders: [order({ slipped: true, nextPayment: { id: 1, kind: 'DEPOSIT', amount: 30000, week: '2020-01-06' } })],
   reps: [rep(6, 'เซลส์ เอ')], today: [], ...over,
@@ -78,6 +78,20 @@ describe('WeeklyReport', () => {
     expect(api.salesBoard.weeklyReport).toHaveBeenCalledWith({ week: monday, ownerId: undefined });
     expect(screen.getAllByText(/^ยังไม่มียอด/).length).toBeGreaterThan(0);
     expect(screen.queryByText('รับชำระครบ')).toBeNull();
+  });
+
+  it('tags an estimated job and the ledger, offers แก้ไข, and counts it as dated', async () => {
+    const guess = order({ ticketId: 3, code: 'PR-0003', nextPayment: null, estimate: { kind: 'ON_DELIVERY', amount: 70000, week: monday } });
+    const base = report();
+    api.salesBoard.weeklyReport.mockResolvedValue({
+      ...base, orders: [guess],
+      ledger: { ...base.ledger, estimated: 70000, weeks: [week({ deliveriesScheduled: 70000, estimated: 70000 })] },
+    });
+    renderReport({ role: 'sales', id: 6 });
+    expect((await screen.findAllByText('ระบบประมาณให้')).length).toBeGreaterThan(1);
+    expect(screen.getByText(/ยังไม่หักเงินที่รับแล้วแต่ยังไม่ได้บันทึกในพอร์ทัล/)).toBeTruthy();
+    expect(screen.getAllByRole('link', { name: 'แก้ไข' })[0].getAttribute('href')).toContain('/tickets/3');
+    expect(screen.queryByRole('link', { name: 'ระบุวันที่' })).toBeNull();
   });
 
   it('lists each rep of the team as a link to that rep’s report', async () => {

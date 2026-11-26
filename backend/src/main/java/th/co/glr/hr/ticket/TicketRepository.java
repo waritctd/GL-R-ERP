@@ -2360,7 +2360,7 @@ public class TicketRepository {
     }
 
     /** The derived due DATE as a scalar subquery (NULL when there is none) -- the list-scope predicate's twin. */
-    private static String paymentDueDateScalarSql(String ticketIdRef) {
+    public static String paymentDueDateScalarSql(String ticketIdRef) {
         return "(SELECT x.delivered_on + x.days FROM (" + paymentTermsRowSql(ticketIdRef) + ") x)";
     }
 

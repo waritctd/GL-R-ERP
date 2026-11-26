@@ -115,8 +115,29 @@ export function WeekCounts({ reps, orders, weekStart, weekEnd }) {
   );
 }
 
+const dueWeek = (week) => weekRange(week).replace(/ \d{4}$/, '');
+
+/** The system's guess, tagged, with a way to correct it (opens the same form as ระบุวันที่). */
+function EstimateTag({ order }) {
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      <StatusBadge tone="info">ระบบประมาณให้</StatusBadge>
+      <Link to={addExpectedPaymentPath(order.ticketId)} className="inline-flex min-h-11 items-center text-xs font-bold text-link no-underline hover:underline">แก้ไข</Link>
+    </span>
+  );
+}
+
 function DueCell({ order }) {
   const next = order.nextPayment;
+  if (!next && order.estimate) {
+    return (
+      <span className="grid gap-0.5">
+        <span>{dueWeek(order.estimate.week)}</span>
+        {order.slipped ? <StatusBadge tone="warning">เลื่อนกำหนด</StatusBadge> : null}
+        <EstimateTag order={order} />
+      </span>
+    );
+  }
   if (next) {
     return (
       <span className="grid gap-0.5">
@@ -147,7 +168,10 @@ export function OrdersTable({ orders, catalog, showOwner = false }) {
     { key: 'received', header: 'รับชำระแล้ว', align: 'right', render: (o) => (o.received > 0 ? formatMoney(o.received) : '–') },
     {
       key: 'next', header: 'ยอดรับงวดถัดไป', align: 'right',
-      render: (o) => (o.nextPayment ? <span>{formatMoney(o.nextPayment.amount)}<Sub>{PAYMENT_KIND[o.nextPayment.kind]}</Sub></span> : '–'),
+      render: (o) => {
+        const p = o.nextPayment ?? o.estimate;
+        return p ? <span>{formatMoney(p.amount)}<Sub>{PAYMENT_KIND[p.kind]}</Sub></span> : '–';
+      },
     },
     { key: 'due', header: 'กำหนดรับเงิน', render: (o) => <DueCell order={o} /> },
   ];
@@ -163,9 +187,9 @@ export function OrdersTable({ orders, catalog, showOwner = false }) {
           id={o.ticketId}
           title={nameOf(o)}
           sub={[o.code, showOwner ? o.ownerName : null].filter(Boolean).join(' · ')}
-          lines={[stageText(catalog, o.salesStage), o.nextPayment ? `${PAYMENT_KIND[o.nextPayment.kind]} ${formatMoney(o.nextPayment.amount)} · กำหนดรับ ${weekRange(o.nextPayment.week).replace(/ \d{4}$/, '')}` : o.outstanding > 0 ? `${formatMoney(o.outstanding)} ยังไม่ระบุวันรับเงิน` : o.value > 0 ? 'รับชำระครบ' : 'ยังไม่มียอดสั่งซื้อ']}
+          lines={[stageText(catalog, o.salesStage), o.nextPayment || o.estimate ? `${PAYMENT_KIND[(o.nextPayment ?? o.estimate).kind]} ${formatMoney((o.nextPayment ?? o.estimate).amount)} · กำหนดรับ ${dueWeek((o.nextPayment ?? o.estimate).week)}` : o.outstanding > 0 ? `${formatMoney(o.outstanding)} ยังไม่ระบุวันรับเงิน` : o.value > 0 ? 'รับชำระครบ' : 'ยังไม่มียอดสั่งซื้อ']}
           right={formatMoney(o.value)}
-          rightSub={o.slipped ? <StatusBadge tone="warning">เลื่อนกำหนด</StatusBadge> : null}
+          rightSub={<>{o.slipped ? <StatusBadge tone="warning">เลื่อนกำหนด</StatusBadge> : null}{!o.nextPayment && o.estimate ? <StatusBadge tone="info">ระบบประมาณให้</StatusBadge> : null}</>}
         />
       )}
       emptyState={{ title: 'ยังไม่มีงานที่สั่งซื้อ', description: 'เมื่อยืนยันคำสั่งซื้อในพอร์ทัล งานจะปรากฏที่นี่' }}

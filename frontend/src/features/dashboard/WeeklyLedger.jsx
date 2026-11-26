@@ -91,6 +91,7 @@ function DesktopTable({ ledger }) {
                 {weekShort(w.weekStart, month)}
                 {w.isCurrent ? <span className="block text-primary">สัปดาห์นี้</span> : null}
                 {w.slipped > 0 ? <StatusBadge tone="warning">เลื่อนกำหนด</StatusBadge> : null}
+                {w.estimated > 0 ? <StatusBadge tone="info">ระบบประมาณให้</StatusBadge> : null}
               </th>
             ))}
             <th scope="col" className={th}>รวมเดือน</th>
@@ -155,6 +156,12 @@ function PhoneWeeks({ ledger }) {
             <dd className="m-0 text-sm tabular-nums text-text-muted">ในจำนวนนี้ {formatMoney(chosen.slipped)}</dd>
           </div>
         ) : null}
+        {chosen.estimated > 0 ? (
+          <div className="flex items-center justify-between gap-3 py-2.5">
+            <dt><StatusBadge tone="info">ระบบประมาณให้</StatusBadge></dt>
+            <dd className="m-0 text-sm tabular-nums text-text-muted">ในจำนวนนี้ {formatMoney(chosen.estimated)}</dd>
+          </div>
+        ) : null}
         <div className="flex items-baseline justify-between gap-3 py-2.5">
           <dt className="text-sm font-extrabold">รวม {label}</dt>
           <dd className="m-0 text-base font-extrabold tabular-nums">{formatMoney(weekTotal(chosen))}</dd>
@@ -171,6 +178,11 @@ export function WeeklyLedger({ ledger, moneyFrom, formatDate }) {
       <Hero ledger={ledger} />
       <DesktopTable ledger={ledger} />
       <PhoneWeeks ledger={ledger} />
+      {ledger.estimated > 0 ? (
+        <p className="m-0 text-xs text-text-muted">
+          ยอดที่มีป้าย ระบบประมาณให้ คำนวณจากขั้นงานและเอกสาร ยังไม่หักเงินที่รับแล้วแต่ยังไม่ได้บันทึกในพอร์ทัล แก้ได้โดยกด ระบุวันที่ หรือ แก้ไข ที่งานนั้น
+        </p>
+      ) : null}
       <p className="m-0 text-xs text-text-muted">
         สัปดาห์ที่ผ่านมาแสดงเฉพาะยอดที่รับชำระจริง ยอดที่คาดไว้แต่ยังไม่ได้รับจะยกมาแสดงในสัปดาห์ปัจจุบันพร้อมป้าย “เลื่อนกำหนด”
         {moneyFrom ? ` · นับเฉพาะงานที่ยืนยันคำสั่งซื้อในพอร์ทัลตั้งแต่ ${formatDate(moneyFrom)}` : ''}

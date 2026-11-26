@@ -194,7 +194,7 @@ function ManagerToday({ user, employee, switcher, panelProps }) {
 
   const week = report?.ledger.weeks.find((w) => w.isCurrent);
   const weekOpen = week ? week.deliveredAwaiting + week.deliveriesScheduled + week.depositsExpected : 0;
-  const undated = orders.filter((o) => !o.nextPayment && o.outstanding > 0);
+  const undated = orders.filter((o) => !o.nextPayment && !o.estimate && o.outstanding > 0);
   const slipped = orders.filter((o) => o.slipped && o.nextPayment);
   const quietReps = reps.filter(hasNoEntries);
   const commissionBase = pendingCommissions ? moneySum(pendingCommissions, (e) => e.commission.commissionableBase) : 0;

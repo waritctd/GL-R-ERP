@@ -22,6 +22,7 @@ import th.co.glr.hr.auth.DivisionAccessPolicy;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.salesboard.WeeklyReportDtos.WeeklyEstimate;
 import th.co.glr.hr.salesboard.WeeklyReportDtos.WeeklyLedger;
 import th.co.glr.hr.salesboard.WeeklyReportDtos.WeeklyLedgerWeek;
 import th.co.glr.hr.salesboard.WeeklyReportDtos.WeeklyNextPayment;
@@ -30,6 +31,7 @@ import th.co.glr.hr.salesboard.WeeklyReportDtos.WeeklyRepRow;
 import th.co.glr.hr.salesboard.WeeklyReportDtos.WeeklyTodayEntry;
 import th.co.glr.hr.salesboard.WeeklyReportDtos.WeeklyReport;
 import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.DepositPolicy;
 
 /**
  * The weekly report (spec 0003). A sales rep reads only their own; a sales_manager or ceo reads the team, or one rep
@@ -43,7 +45,7 @@ public class WeeklyReportService {
     private static final LocalDate EPOCH = LocalDate.of(2000, 1, 1);
 
     /** The order rows, and which of them are ACTIVE (the open-order counts skip COMPLETED ones). */
-    private record Orders(List<WeeklyOrderRow> rows, Set<Long> active) {}
+    private record Orders(List<WeeklyOrderRow> rows, Set<Long> active, Map<Long, WeeklyEstimate> estimates) {}
 
     private final WeeklyReportRepository repository;
     private final CashRepository cash;
@@ -84,17 +86,18 @@ public class WeeklyReportService {
         LocalDate currentMonday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         YearMonth month = YearMonth.from(monday.plusDays(3));
 
-        Orders orders = orders(subject, monday, month);
+        Orders orders = orders(subject, monday, month, currentMonday);
         List<WeeklyTodayEntry> todayEntries = subject != null && subject == actor.id() ? todayEntries(subject, today)
             : List.of();
         return new WeeklyReport(monday, monday.plusDays(6), cash.moneyFrom(), subject == null ? "TEAM" : "OWN",
-            ledger(subject, month, currentMonday, today), orders.rows(),
+            ledger(subject, month, currentMonday, today, orders.estimates()), orders.rows(),
             reps(subject, monday, LocalDateTime.now(clock.withZone(CashRepository.BANGKOK)), orders), todayEntries);
     }
 
     // ── ledger (D5) ──────────────────────────────────────────────────────────────
 
-    private WeeklyLedger ledger(Long owner, YearMonth month, LocalDate currentMonday, LocalDate today) {
+    private WeeklyLedger ledger(Long owner, YearMonth month, LocalDate currentMonday, LocalDate today,
+                                Map<Long, WeeklyEstimate> estimates) {
         LocalDate first = month.atDay(1);
         LocalDate last = month.atEndOfMonth();
         List<LocalDate> mondays = new ArrayList<>();
@@ -140,17 +143,28 @@ public class WeeklyReportService {
                 slipped = slipped.add(slip[k]);
             }
         }
+        // The system's estimates join the same three lines. One dated before this week lands in this week but is not a
+        // slip: the rep never gave that date, and the slip list holds only the rep's own rows.
+        BigDecimal[] est = zeros(n);
+        for (WeeklyEstimate e : estimates.values()) {
+            int i = mondays.indexOf(e.week().isBefore(currentMonday) ? currentMonday : e.week());
+            if (i >= 0) {
+                int line = switch (e.kind()) { case "BALANCE" -> 0; case "ON_DELIVERY" -> 1; default -> 2; };
+                open[line][i] = open[line][i].add(e.amount());
+                est[i] = est[i].add(e.amount());
+            }
+        }
         List<WeeklyLedgerWeek> weeks = new ArrayList<>();
         for (int i = 0; i < n; i++) {
             LocalDate m = mondays.get(i);
             weeks.add(new WeeklyLedgerWeek(m, got[i], open[0][i], open[1][i], open[2][i], i == cur ? slipped : BigDecimal.ZERO,
-                i == cur, m.plusDays(6).isBefore(today)));
+                est[i], i == cur, m.plusDays(6).isBefore(today)));
         }
         BigDecimal received = sum(got);
         BigDecimal a = sum(open[0]);
         BigDecimal b = sum(open[1]);
         BigDecimal c = sum(open[2]);
-        return new WeeklyLedger(month.toString(), weeks, received, a, b, c, received.add(a).add(b).add(c));
+        return new WeeklyLedger(month.toString(), weeks, received, a, b, c, received.add(a).add(b).add(c), sum(est));
     }
 
     private static BigDecimal[] zeros(int n) {
@@ -165,7 +179,7 @@ public class WeeklyReportService {
 
     // ── orders (D12) ─────────────────────────────────────────────────────────────
 
-    private Orders orders(Long owner, LocalDate monday, YearMonth month) {
+    private Orders orders(Long owner, LocalDate monday, YearMonth month, LocalDate currentMonday) {
         Instant moneyFrom = cash.moneyFrom() == null ? null
             : cash.moneyFrom().atStartOfDay(CashRepository.BANGKOK).toInstant();
         List<WeeklyReportRepository.OrderTicket> tickets = repository.orders(owner, moneyFrom,
@@ -175,6 +189,7 @@ public class WeeklyReportService {
         tickets.stream().filter(t -> "ACTIVE".equals(t.lifecycle())).forEach(t -> active.add(t.ticketId()));
         Map<Long, WeeklyReportRepository.OpenPayment> next = new LinkedHashMap<>();
         repository.openPayments(active).forEach(p -> next.putIfAbsent(p.ticketId(), p));
+        Map<Long, WeeklyEstimate> estimates = estimates(tickets, active, currentMonday);
         Map<Long, String> names = names(tickets.stream().map(WeeklyReportRepository.OrderTicket::ownerId).toList());
         List<WeeklyOrderRow> rows = new ArrayList<>();
         for (WeeklyReportRepository.OrderTicket t : tickets) {
@@ -182,9 +197,47 @@ public class WeeklyReportService {
             WeeklyNextPayment np = p == null ? null : new WeeklyNextPayment(p.id(), p.kind(), p.remaining(), p.week());
             rows.add(new WeeklyOrderRow(t.ticketId(), t.code(), t.title(), t.customerName(), t.projectName(), t.ownerId(),
                 names.get(t.ownerId()), t.salesStage(), t.confirmedAt(), t.value(), t.received(),
-                t.value().subtract(t.received()).max(BigDecimal.ZERO), np, np != null && np.week().isBefore(monday)));
+                t.value().subtract(t.received()).max(BigDecimal.ZERO), np, estimates.get(t.ticketId()),
+                np != null && np.week().isBefore(monday)));
         }
-        return new Orders(rows, active);
+        return new Orders(rows, active, estimates);
+    }
+
+    /**
+     * Spec D13: lines 3-5 for an ACTIVE order with no expected payment of the rep's own. Deposit: a notice is issued
+     * and the order awaits the deposit. On delivery: the goods are bought or being scheduled, payable minus the deposit.
+     * Balance: delivered, payable minus receipts, due delivery + credit days. Amounts at or below zero count nothing.
+     */
+    private Map<Long, WeeklyEstimate> estimates(List<WeeklyReportRepository.OrderTicket> tickets, Set<Long> active,
+                                                LocalDate currentMonday) {
+        Map<Long, WeeklyReportRepository.OrderTicket> byId = new LinkedHashMap<>();
+        tickets.forEach(t -> byId.put(t.ticketId(), t));
+        Map<Long, WeeklyEstimate> out = new LinkedHashMap<>();
+        for (WeeklyReportRepository.EstimateFacts f : repository.estimateFacts(active)) {
+            WeeklyReportRepository.OrderTicket t = byId.get(f.ticketId());
+            boolean deposit = !DepositPolicy.NON_REQUIRED.contains(f.depositPolicy());
+            BigDecimal share = deposit && f.noticeTotal() != null ? f.noticeTotal() : BigDecimal.ZERO;
+            WeeklyEstimate e = switch (t.salesStage()) {
+                case DealStage.ORDER_RECEIVED -> !deposit || f.noticeTotal() == null || f.noticeDate() == null ? null
+                    : new WeeklyEstimate("DEPOSIT", f.noticeTotal().subtract(t.received()), monday(f.noticeDate().plusDays(7)));
+                case DealStage.PROCUREMENT, DealStage.DELIVERY_SCHEDULING -> {
+                    boolean now = f.arrived() || DealStage.DELIVERY_SCHEDULING.equals(t.salesStage());
+                    yield !now && f.eta() == null ? null : new WeeklyEstimate("ON_DELIVERY",
+                        t.value().subtract(share.max(t.received())), now ? currentMonday : monday(f.eta().plusDays(7)));
+                }
+                case DealStage.DELIVERED -> f.due() == null ? null
+                    : new WeeklyEstimate("BALANCE", t.value().subtract(t.received()), monday(f.due()));
+                default -> null;
+            };
+            if (e != null && e.amount().signum() > 0) {
+                out.put(t.ticketId(), e);
+            }
+        }
+        return out;
+    }
+
+    private static LocalDate monday(LocalDate d) {
+        return d.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
     }
 
     private Map<Long, String> names(java.util.Collection<Long> ids) {
@@ -256,7 +309,7 @@ public class WeeklyReportService {
             for (WeeklyOrderRow o : orders.rows()) {
                 if (o.ownerId() == id && orders.active().contains(o.ticketId()) && o.outstanding().signum() > 0) {
                     open++;
-                    dated += o.nextPayment() != null ? 1 : 0;
+                    dated += o.nextPayment() != null || o.estimate() != null ? 1 : 0;
                 }
             }
             rows.add(new WeeklyRepRow(id, names.get(id), count(counts, "new", id), count(counts, "stage", id),

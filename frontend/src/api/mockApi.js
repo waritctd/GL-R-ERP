@@ -10691,7 +10691,9 @@ function mockCashForMonth(ownerId, yearMonth) {
 
 /**
  * Mirrors WeeklyReportService (salesboard/): the month's ledger by week (CashRepository's received money plus the OPEN
- * expected payments, a slip carried into the current week), one row per order ticket, and the per-rep counts. SHAPE
+ * expected payments, a slip carried into the current week), one row per order ticket, and the per-rep counts. The estimate
+ * (D13) is a simplified twin: no notice or shipment dates here, so an undated job at DELIVERED / PROCUREMENT /
+ * DELIVERY_SCHEDULING is estimated into the current week and ORDER_RECEIVED gets none. SHAPE
  * and the scope rules only: the mock has no money cutoff (moneyFrom null) and no stage-move or quotation events, so
  * stageMoves and quotationsIssued read 0; WeeklyReportIntegrationTest is the evidence for the numbers.
  */
@@ -10720,7 +10722,7 @@ function mockWeeklyReport(user, { week, ownerId }) {
   const cash = mockCashForMonth(scopeOwner, month);
   const weeks = cash.weeks.map((w) => ({
     weekStart: w.weekStart, received: w.received, deliveredAwaiting: 0, deliveriesScheduled: 0, depositsExpected: 0,
-    slipped: 0, isCurrent: w.weekStart === currentWeek, isPast: w.weekStart < currentWeek,
+    slipped: 0, estimated: 0, isCurrent: w.weekStart === currentWeek, isPast: w.weekStart < currentWeek,
   }));
   for (const p of mockExpectedPayments) {
     const t = ticketOf(p.ticketId);
@@ -10735,13 +10737,6 @@ function mockWeeklyReport(user, { week, ownerId }) {
     w[key] = round2(w[key] + amount);
     if (slip) w.slipped = round2(w.slipped + amount);
   }
-  const sum = (key) => round2(weeks.reduce((x, w) => x + w[key], 0));
-  const ledger = {
-    month, weeks, received: cash.received, deliveredAwaiting: sum('deliveredAwaiting'),
-    deliveriesScheduled: sum('deliveriesScheduled'), depositsExpected: sum('depositsExpected'),
-  };
-  ledger.total = round2(ledger.received + ledger.deliveredAwaiting + ledger.deliveriesScheduled + ledger.depositsExpected);
-
   // Orders: every ticket past ORDER_RECEIVED that is open, or closed with money in this month.
   const orderFrom = dealStageIndex('ORDER_RECEIVED');
   const allOrders = db.tickets
@@ -10752,15 +10747,31 @@ function mockWeeklyReport(user, { week, ownerId }) {
       const received = sumPaid(t.id);
       const next = mockExpectedPaymentsOf(t.id).find((p) => p.status === 'OPEN');
       const nextPayment = next ? { id: next.id, kind: next.kind, amount: round2(next.amount - (next.receivedAmount ?? 0)), week: next.expectedWeek } : null;
+      const kind = { DELIVERED: 'BALANCE', PROCUREMENT: 'ON_DELIVERY', DELIVERY_SCHEDULING: 'ON_DELIVERY' }[t.salesStage];
+      const left = round2(value - received);
+      const estimate = !mockExpectedPayments.some((p) => p.ticketId === t.id && ['OPEN', 'RECEIVED'].includes(p.status)) && kind && left > 0
+        ? { kind, amount: left, week: currentWeek } : null;
+      const weekOf = estimate && weeks.find((x) => x.weekStart === currentWeek);
+      if (weekOf && inScope(t)) {
+        const key = kind === 'BALANCE' ? 'deliveredAwaiting' : 'deliveriesScheduled';
+        weekOf[key] = round2(weekOf[key] + left);
+        weekOf.estimated = round2(weekOf.estimated + left);
+      }
       return {
         ticketId: t.id, code: t.code, title: t.title, customerName: t.customerName ?? null,
         projectName: t.projectId ? (mockProjects.find((p) => p.id === t.projectId)?.name ?? null) : null,
         ownerId: t.createdById, ownerName: t.createdByName ?? null, salesStage: t.salesStage,
         orderConfirmedAt: t.orderConfirmedAt ?? t.updatedAt ?? t.createdAt ?? null,
         value, received, outstanding: moneyValue(Math.max(0, value - received)),
-        nextPayment, slipped: nextPayment != null && nextPayment.week < weekStart,
+        nextPayment, estimate, slipped: nextPayment != null && nextPayment.week < weekStart,
       };
     });
+  const sum = (key) => round2(weeks.reduce((x, w) => x + w[key], 0));
+  const ledger = {
+    month, weeks, received: cash.received, deliveredAwaiting: sum('deliveredAwaiting'),
+    deliveriesScheduled: sum('deliveriesScheduled'), depositsExpected: sum('depositsExpected'), estimated: sum('estimated'),
+  };
+  ledger.total = round2(ledger.received + ledger.deliveredAwaiting + ledger.deliveriesScheduled + ledger.depositsExpected);
 
   const reps = (scopeOwner != null ? db.users.filter((u) => u.id === scopeOwner) : db.users.filter((u) => u.role === 'sales'))
     .map((u) => {
@@ -10776,7 +10787,7 @@ function mockWeeklyReport(user, { week, ownerId }) {
         ordersConfirmed: orders.filter((o) => inWeek(o.orderConfirmedAt)).length, lost: mine.filter((t) => inWeek(t.lostAt)).length,
         visitsDone: visits.filter((v) => v.status === 'DONE').length, visitsPlanned: visits.filter((v) => v.status !== 'CANCELLED').length,
         visitsDue: due.length, visitsDueWithResult: due.filter((v) => v.status !== 'PLANNED').length,
-        ordersOpen: orders.length, ordersWithDate: orders.filter((o) => o.nextPayment).length,
+        ordersOpen: orders.length, ordersWithDate: orders.filter((o) => o.nextPayment || o.estimate).length,
         entriesToday: entries.filter((a) => a.activityDate === today).length,
         lastEntryAt: entries.map((a) => a.createdAt).sort().at(-1) ?? null,
       };
