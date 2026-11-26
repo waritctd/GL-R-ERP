@@ -35,6 +35,7 @@ export function WarehouseHome() {
   const [picked, setPicked] = useState([]);
   const [form, setForm] = useState(null); // { trip } to edit, { trip: null } to create
   const [openId, setOpenId] = useState(null);
+  const [justDone, setJustDone] = useState(null); // an old trip leaves the list once done; its result must stay on screen
   const query = useQuery({ queryKey: queryKeys.deliveryTripsHome(), queryFn: () => api.deliveryTrips.home() });
   const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.deliveryTripsHome() });
   const save = useMutation({
@@ -49,7 +50,7 @@ export function WarehouseHome() {
   }
   const { today, toCheck, toInvoice, waiting, trips, routes } = query.data;
   const selected = picked.filter((id) => waiting.some((r) => r.roundId === id));
-  const openTrip = trips.find((t) => t.id === openId) ?? null;
+  const openTrip = trips.find((t) => t.id === openId) ?? (justDone?.id === openId ? justDone : null);
   const toggle = (id) => setPicked((now) => (now.includes(id) ? now.filter((x) => x !== id) : [...now, id]));
   const openForm = (trip) => { save.reset(); setForm({ trip }); };
   const openOrder = (round) => navigate(`/tickets/${round.ticketId}?tab=ship`);
@@ -139,7 +140,7 @@ export function WarehouseHome() {
       </div>
 
       {openTrip && !form ? (
-        <TripSheet trip={openTrip} today={today} onClose={() => setOpenId(null)} onEdit={() => openForm(openTrip)} onChanged={refresh} onOpenOrder={openOrder} />
+        <TripSheet trip={openTrip} today={today} onClose={() => setOpenId(null)} onEdit={() => openForm(openTrip)} onChanged={refresh} onDelivered={setJustDone} onOpenOrder={openOrder} />
       ) : null}
       {form ? (
         <TripFormSheet

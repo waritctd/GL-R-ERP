@@ -8,9 +8,12 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.auth.WarehouseStaff;
@@ -41,25 +44,28 @@ public class DeliveryTripService {
     private final DeliveryRequestService deliveryRequests;
     private final EmployeeAuthRepository employees;
     private final NotificationRepository notifications;
+    private final TransactionTemplate tx;
 
     public DeliveryTripService(DeliveryTripRepository trips, DeliveryRequestService deliveryRequests,
-                               EmployeeAuthRepository employees, NotificationRepository notifications) {
+                               EmployeeAuthRepository employees, NotificationRepository notifications,
+                               PlatformTransactionManager transactionManager) {
         this.trips = trips;
         this.deliveryRequests = deliveryRequests;
         this.employees = employees;
         this.notifications = notifications;
+        this.tx = new TransactionTemplate(transactionManager);
     }
 
     public Home home(UserPrincipal actor) {
         requirePlanner(actor);
         LocalDate today = LocalDate.now(BANGKOK);
         LocalDate monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        List<RoundItem> open = trips.unplanned();
+        List<RoundItem> open = trips.unplanned().stream().map(this::withBuyer).toList();
         return new Home(today,
             open.stream().filter(r -> DeliveryRequestDtos.SENT.equals(r.status())).toList(),
             open.stream().filter(r -> DeliveryRequestDtos.FORWARDED.equals(r.status())).toList(),
             open.stream().filter(r -> DeliveryRequestDtos.INVOICED.equals(r.status()) && r.remaining().signum() > 0).toList(),
-            trips.trips(monday, monday.plusDays(6)), trips.recentRoutes());
+            trips.trips(monday, monday.plusDays(6)).stream().map(this::withBuyers).toList(), trips.recentRoutes());
     }
 
     @Transactional
@@ -83,8 +89,8 @@ public class DeliveryTripService {
         requirePlanner(actor);
         Trip before = requireOpen(id);
         Fields f = fields(request, before.deliveryDate());
-        List<Long> ids = roundIds(request);
         List<Long> planned = planned(before);
+        List<Long> ids = request.roundIds() == null ? planned : roundIds(request);
         trips.updateTrip(id, f.date(), f.route(), f.slot(), f.vehicle(), f.note());
         List<Long> added = ids.stream().filter(rid -> !planned.contains(rid)).toList();
         List<Long> removed = planned.stream().filter(rid -> !ids.contains(rid)).toList();
@@ -130,43 +136,64 @@ public class DeliveryTripService {
         return require(id);
     }
 
-    /** ส่งของแล้ว. Deliberately NOT one transaction: each round commits or fails on its own. Safe to press again: a round
-     * with nothing left is only marked delivered. */
+    /** ส่งของแล้ว. Deliberately NOT one transaction: each round commits or fails on its own, under the trip's lock and a
+     * fresh read, so a concurrent delay, removal or cancel is never overwritten. Safe to press again. */
     public DeliverResponse deliver(long id, UserPrincipal actor) {
         requirePlanner(actor);
-        Trip trip = requireOpen(id);
-        LocalDate today = LocalDate.now(BANGKOK);
-        LocalDate deliveredOn = trip.deliveryDate().isBefore(today) ? trip.deliveryDate() : today;
+        Trip trip = tx.execute(s -> requireOpen(id));
         List<DeliverResult> results = new ArrayList<>();
-        for (RoundItem r : trip.rounds()) {
-            if (!"PLANNED".equals(r.state())) {
-                continue;
-            }
-            results.add(deliverOne(r, deliveredOn, actor));
-            if (results.getLast().delivered()) {
-                trips.setState(id, r.roundId(), "DELIVERED");
+        for (Long roundId : planned(trip)) {
+            try {
+                DeliverResult result = tx.execute(s -> deliverOne(id, roundId, actor));
+                if (result != null) {
+                    results.add(result);
+                }
+            } catch (ApiException refused) {
+                results.add(new DeliverResult(roundId, false, refused.getMessage()));
             }
         }
-        if (planned(require(id)).isEmpty() && require(id).rounds().stream().anyMatch(r -> "DELIVERED".equals(r.state()))) {
-            trips.setStatus(id, "DONE");
-        }
-        return new DeliverResponse(require(id), results);
+        tx.executeWithoutResult(s -> {
+            trips.lockTrip(id);
+            Trip now = require(id);
+            if (OPEN.equals(now.status()) && planned(now).isEmpty()
+                && now.rounds().stream().anyMatch(r -> "DELIVERED".equals(r.state()))) {
+                trips.setStatus(id, "DONE");
+            }
+        });
+        return new DeliverResponse(withBuyers(require(id)), results);
     }
 
-    private DeliverResult deliverOne(RoundItem r, LocalDate deliveredOn, UserPrincipal actor) {
+    /** Null when the round is no longer planned on this open trip (someone else changed it since the press). */
+    private DeliverResult deliverOne(long tripId, long roundId, UserPrincipal actor) {
+        trips.lockTrip(tripId);
+        Trip trip = require(tripId);
+        RoundItem r = trip.rounds().stream().filter(x -> x.roundId() == roundId).findFirst().orElse(null);
+        if (!OPEN.equals(trip.status()) || r == null || !"PLANNED".equals(r.state())) {
+            return null;
+        }
         if (!DeliveryRequestDtos.INVOICED.equals(r.status())) {
-            return new DeliverResult(r.roundId(), false, "ใบกำกับภาษีของรอบนี้ถูกยกเลิก");
+            return new DeliverResult(roundId, false, "ใบกำกับภาษีของรอบนี้ถูกยกเลิก");
         }
-        if (r.remaining().signum() == 0) {
-            return new DeliverResult(r.roundId(), true, null);
-        }
-        try {
-            deliveryRequests.recordDelivery(r.roundId(),
+        if (r.remaining().signum() > 0) {
+            LocalDate today = LocalDate.now(BANGKOK);
+            LocalDate deliveredOn = trip.deliveryDate().isBefore(today) ? trip.deliveryDate() : today;
+            deliveryRequests.recordDelivery(roundId,
                 new RoundDeliveryRequest(null, true, deliveredOn, null, null, null), actor);
-            return new DeliverResult(r.roundId(), true, null);
-        } catch (ApiException refused) {
-            return new DeliverResult(r.roundId(), false, refused.getMessage());
         }
+        trips.setState(tripId, roundId, "DELIVERED");
+        return new DeliverResult(roundId, true, null);
+    }
+
+    // ponytail: one buyer lookup per listed round; batch it if the open-round list ever grows past a few dozen.
+    private RoundItem withBuyer(RoundItem r) {
+        return new RoundItem(r.roundId(), r.ticketId(), r.roundNo(), r.status(), r.displayCode(),
+            deliveryRequests.buyerNameOfRound(r.roundId()), r.projectName(), r.ownerName(), r.note(), r.sentAt(),
+            r.forwardedAt(), r.remaining(), r.delayed(), r.state());
+    }
+
+    private Trip withBuyers(Trip t) {
+        return new Trip(t.id(), t.deliveryDate(), t.route(), t.timeSlot(), t.vehicle(), t.note(), t.status(),
+            t.rounds().stream().map(this::withBuyer).toList());
     }
 
     private void add(long tripId, long roundId) {
@@ -176,7 +203,14 @@ public class DeliveryTripService {
         if (trips.plannedElsewhere(tripId, roundId)) {
             throw new ApiException(HttpStatus.CONFLICT, "มีออเดอร์ที่อยู่ในรอบส่งอื่นแล้ว กรุณาโหลดหน้าใหม่");
         }
-        trips.plan(tripId, roundId);
+        if (require(tripId).deliveryDate().isBefore(LocalDate.now(BANGKOK))) {
+            throw new ApiException(HttpStatus.CONFLICT, "รอบส่งนี้เลยวันส่งแล้ว กรุณาแก้วันที่ส่งก่อนเพิ่มออเดอร์");
+        }
+        try {
+            trips.plan(tripId, roundId);
+        } catch (DuplicateKeyException raced) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีออเดอร์ที่อยู่ในรอบส่งอื่นแล้ว กรุณาโหลดหน้าใหม่");
+        }
     }
 
     private void tell(long roundId, Trip trip, String title, String detail, UserPrincipal actor) {
@@ -187,7 +221,7 @@ public class DeliveryTripService {
                 ids.add(id);
             }
         }
-        String message = to.displayCode() + " · " + to.customerName() + " · " + detail;
+        String message = to.displayCode() + " · " + deliveryRequests.buyerNameOfRound(roundId) + " · " + detail;
         long ticketId = trip.rounds().stream().filter(r -> r.roundId() == roundId).map(RoundItem::ticketId).findFirst()
             .orElseGet(() -> trips.ticketIdOf(roundId));
         ids.forEach(id -> notifications.notifyEmployeeAtLinkTitled(id, "DELIVERY_TRIP", title, message,

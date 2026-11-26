@@ -8,7 +8,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import { RoundText, tripDayLabel } from './tripText.jsx';
 
-export function TripSheet({ trip, today, onClose, onEdit, onChanged, onOpenOrder }) {
+export function TripSheet({ trip, today, onClose, onEdit, onChanged, onDelivered, onOpenOrder }) {
   const [confirm, setConfirm] = useState(null); // 'deliver' | 'cancel'
   const [results, setResults] = useState([]);
   const delay = useMutation({
@@ -17,7 +17,7 @@ export function TripSheet({ trip, today, onClose, onEdit, onChanged, onOpenOrder
   });
   const deliver = useMutation({
     mutationFn: () => api.deliveryTrips.deliver(trip.id),
-    onSuccess: (res) => setResults(res.results),
+    onSuccess: (res) => { setResults(res.results); onDelivered(res.trip); },
     onSettled: () => { setConfirm(null); return onChanged(); },
   });
   const cancel = useMutation({

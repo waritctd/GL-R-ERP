@@ -991,6 +991,12 @@ public class DeliveryRequestService {
     }
 
     /** The buyer's name for a bell: the quotation's party customer, else the deal's (owner rule #65). */
+    /** The buyer a round is invoiced to (owner rule #65), for the warehouse trip lists and notices. */
+    public String buyerNameOfRound(long rid) {
+        var round = rounds.findById(rid).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรอบส่งที่ขอ"));
+        return buyerName(summary(round.ticketId()), round.quotationNumber());
+    }
+
     private String buyerName(TicketSummaryDto s, String quotationNumber) {
         return depositNotices.quotationBuyer(s, quotationNumber).name();
     }

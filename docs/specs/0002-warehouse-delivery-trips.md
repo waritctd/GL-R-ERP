@@ -1,6 +1,6 @@
 # 0002 Warehouse delivery trips (รอบส่งของ) and the warehouse home
 
-Status: draft, from a brainstorm with Ploy on 2026-11-26. Not approved yet.
+Status: approved by Ploy on 2026-11-26 (canvas WH1-WH6) and built. Rounds store no requested date or place, so the queue shows the sales note and send date instead; a trip pressed early records today as the delivery date.
 
 ## Why
 

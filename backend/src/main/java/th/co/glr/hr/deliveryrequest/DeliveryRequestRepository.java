@@ -153,7 +153,8 @@ public class DeliveryRequestRepository {
         return jdbc.query("""
             SELECT x.state, d.delivery_date, d.route, d.time_slot, d.vehicle, d.note
               FROM sales.delivery_trip_round x JOIN sales.delivery_trip d ON d.delivery_trip_id = x.delivery_trip_id
-             WHERE x.delivery_request_id = :id
+              JOIN sales.delivery_request r ON r.delivery_request_id = x.delivery_request_id
+             WHERE x.delivery_request_id = :id AND (x.state <> 'PLANNED' OR r.status = 'INVOICED')
              ORDER BY (x.state = 'PLANNED') DESC, x.updated_at DESC LIMIT 1
             """, Map.of("id", roundId), (rs, n) -> new DeliveryRequestDtos.TripPlanDto(rs.getString("state"),
                 rs.getObject("delivery_date", java.time.LocalDate.class), rs.getString("route"), rs.getString("time_slot"),

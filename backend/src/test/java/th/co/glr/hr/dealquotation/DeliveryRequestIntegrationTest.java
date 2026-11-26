@@ -656,7 +656,7 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         UserPrincipal manager = actor(createEmployee(employees, "หัวหน้าคลัง รอบส่ง", "wh-mgr-trip@glr.co.th", "WH", "คลังสินค้า", "ผู้จัดการ"), "warehouse");
         UserPrincipal issuer = issuer("issuer-trip@glr.co.th");
         var trips = transactional(new th.co.glr.hr.deliverytrip.DeliveryTripService(new th.co.glr.hr.deliverytrip.DeliveryTripRepository(jdbc),
-            rounds, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP)));
+            rounds, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP), transactionManager));
         long[] rid = new long[3];
         long[] ticket = new long[3];
         for (int i = 0; i < 3; i++) {
@@ -686,6 +686,9 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         });
         assertThat(notices(salesActor.id(), "DELIVERY_TRIP")).hasSize(3);
 
+        // An update without roundIds changes the fields only.
+        trips.update(trip.id(), new th.co.glr.hr.deliverytrip.DeliveryTripDtos.TripRequest(TODAY.plusDays(1), "สายบางนา", "บ่าย", null, null, null), manager);
+        assertThat(trips.home(manager).trips().get(0).rounds()).hasSize(3);
         trips.delay(trip.id(), rid[2], true, manager);
         var pressed = trips.deliver(trip.id(), manager);
         assertThat(pressed.results()).extracting(r -> r.roundId(), r -> r.delivered())

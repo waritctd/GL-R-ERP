@@ -59,7 +59,8 @@ public class DeliveryTripRepository {
             """ + ITEM_FROM + """
              WHERE r.status IN ('SENT','FORWARDED','INVOICED') AND t.lifecycle = 'ACTIVE'
                AND NOT EXISTS (SELECT 1 FROM sales.delivery_trip_round x
-                                WHERE x.delivery_request_id = r.delivery_request_id AND x.state = 'PLANNED')
+                                WHERE x.delivery_request_id = r.delivery_request_id AND x.state = 'PLANNED'
+                                  AND r.status = 'INVOICED')
              ORDER BY r.sent_at NULLS LAST, r.delivery_request_id
             """, Map.of(), (rs, n) -> item(rs));
     }
