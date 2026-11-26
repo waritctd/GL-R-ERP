@@ -70,7 +70,8 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
   const [round, setRound] = useState(null);
   const [error, setError] = useState(null);
   const [note, setNote] = useState(null);
-  const [requestedDate, setRequestedDate] = useState(null);
+  // null until the rep edits the date here: an untouched date is never sent, so an old screen cannot overwrite it.
+  const [dateEdit, setDateEdit] = useState(null);
   const [uploading, setUploading] = useState([]);
   const [fileErrors, setFileErrors] = useState([]);
   const [preDeposit, setPreDeposit] = useState('');
@@ -83,9 +84,6 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
   const adopt = (res) => {
     setRound(res.round);
     setNote((current) => current ?? res.round.note ?? '');
-    // A date already past (a round sent back and reopened later) starts empty, so a resend does not repeat it.
-    const wanted = res.round.requestedDate ?? '';
-    setRequestedDate((current) => current ?? (wanted < bangkokTodayIso() ? '' : wanted));
     setUnticked((current) => current ?? new Set(res.round.untickedDocs ?? []));
   };
 
@@ -103,10 +101,22 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on open
   }, []);
 
-  // The update replaces these fields, so every save sends all of them.
-  const draftFields = () => ({ quotationId: round.quotationId, note: note ?? '', requestedDate: requestedDate || null });
+  // A date already past (a round sent back and reopened later) shows empty and is removed on the next save.
+  const storedDate = round?.requestedDate ?? '';
+  const pastDate = storedDate !== '' && storedDate < bangkokTodayIso();
+  const shownDate = dateEdit ?? (pastDate ? '' : storedDate);
+  const datePatch = (value) => (value ? { requestedDate: value } : { clearRequestedDate: true });
+  // The update replaces the note, so every save sends it; the date goes only when it changes.
+  const draftFields = () => ({
+    quotationId: round.quotationId, note: note ?? '',
+    ...(dateEdit !== null ? datePatch(dateEdit) : pastDate ? { clearRequestedDate: true } : {}),
+  });
   const savePatch = useMutation({
-    mutationFn: (patch) => api.deliveryRequests.update(round.id, { ...draftFields(), ...patch }),
+    mutationFn: (patch) => {
+      const base = draftFields();
+      if ('requestedDate' in patch || 'clearRequestedDate' in patch) { delete base.requestedDate; delete base.clearRequestedDate; }
+      return api.deliveryRequests.update(round.id, { ...base, ...patch });
+    },
     onSuccess: (res) => { setRound(res.round); refresh(); },
     onError: (e) => setError(e?.message || 'บันทึกไม่สำเร็จ'),
   });
@@ -378,8 +388,8 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
           <ThaiDateInput
             id="round-requested-date"
             min={bangkokTodayIso()}
-            value={requestedDate ?? ''}
-            onChange={(e) => { const value = e.target.value; setRequestedDate(value); if (round) savePatch.mutate({ requestedDate: value || null }); }}
+            value={shownDate}
+            onChange={(e) => { const value = e.target.value; setDateEdit(value); if (round) savePatch.mutate(datePatch(value)); }}
           />
         </label>
         <label className="flex flex-col gap-1.5">

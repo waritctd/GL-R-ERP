@@ -958,6 +958,7 @@ export const api = {
     deliver: (id) => apiRequest(API_ROUTES.deliveryTrips.deliver(id), { method: 'POST' }),
   },
   deliveryRequests: {
+    awaitingInvoice: () => apiRequest(API_ROUTES.deliveryRequests.awaitingInvoice),
     list: (ticketId) => apiRequest(API_ROUTES.deliveryRequests.list(ticketId)),
     createDraft: (ticketId, payload = {}) =>
       apiRequest(API_ROUTES.deliveryRequests.list(ticketId), { method: 'POST', body: payload }),

@@ -33,6 +33,11 @@ public class DeliveryRequestController {
         this.sessions = sessions;
     }
 
+    @GetMapping("/delivery-requests/awaiting-invoice")
+    DeliveryRequestDtos.InvoiceQueueResponse awaitingInvoice(HttpSession session) {
+        return new DeliveryRequestDtos.InvoiceQueueResponse(service.invoiceQueue(sessions.requireUser(session)));
+    }
+
     @GetMapping("/tickets/{ticketId}/delivery-requests")
     RoundsResponse list(@PathVariable long ticketId, HttpSession session) {
         return service.list(ticketId, sessions.requireUser(session));

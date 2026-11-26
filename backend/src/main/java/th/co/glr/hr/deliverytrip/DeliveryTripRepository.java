@@ -61,6 +61,9 @@ public class DeliveryTripRepository {
                AND NOT EXISTS (SELECT 1 FROM sales.delivery_trip_round x
                                 WHERE x.delivery_request_id = r.delivery_request_id AND x.state = 'PLANNED'
                                   AND r.status = 'INVOICED')
+               AND (r.status <> 'INVOICED' OR
+            """ + REMAINING + """
+             > 0)
              ORDER BY r.requested_date NULLS LAST, r.sent_at NULLS LAST, r.delivery_request_id
             """, Map.of(), (rs, n) -> item(rs));
     }
