@@ -34,6 +34,10 @@ class WeeklyDigestMailTest {
         assertThat(r.html()).contains("อัปเดตขั้นงาน 3 ครั้ง", "฿125,000.50", "และอีก 2 งาน", "งาน &lt;b&gt;A&lt;/b&gt;")
             .doesNotContain("<b>A</b>").doesNotContain("งานตัวอย่าง 12");
         assertThat(r.html()).doesNotContain("ดีล");
+        assertThat(WeeklyDigestMail.weekRange(LocalDate.of(2026, 11, 30), LocalDate.of(2026, 12, 6)))
+            .isEqualTo("30 พ.ย. 2569 – 6 ธ.ค. 2569");
+        assertThat(WeeklyDigestMail.weekRange(LocalDate.of(2026, 12, 28), LocalDate.of(2027, 1, 3)))
+            .isEqualTo("28 ธ.ค. 2569 – 3 ม.ค. 2570");
     }
 
     @Test

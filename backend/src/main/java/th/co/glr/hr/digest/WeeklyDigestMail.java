@@ -28,6 +28,12 @@ final class WeeklyDigestMail {
         return d.getDayOfMonth() + " " + MONTHS[d.getMonthValue() - 1] + " " + (d.getYear() + 543);
     }
 
+    /** "23–29 พ.ย. 2569", or both full dates when the week crosses a month or year. */
+    static String weekRange(LocalDate from, LocalDate to) {
+        boolean sameMonth = from.getYear() == to.getYear() && from.getMonthValue() == to.getMonthValue();
+        return (sameMonth ? from.getDayOfMonth() + "–" : thaiDate(from) + " – ") + thaiDate(to);
+    }
+
     static String money(BigDecimal v) {
         return "฿" + String.format(java.util.Locale.US, "%,.2f", v.setScale(2, java.math.RoundingMode.HALF_UP));
     }
@@ -55,7 +61,7 @@ final class WeeklyDigestMail {
 
     static Rendered sales(SalesWeek w, UnaryOperator<String> url) {
         LocalDate sunday = w.monday().plusDays(6);
-        String range = w.monday().getDayOfMonth() + "–" + thaiDate(sunday);
+        String range = weekRange(w.monday(), sunday);
         List<String> done = new java.util.ArrayList<>();
         if (w.stageMoves() > 0) done.add("อัปเดตขั้นงาน " + w.stageMoves() + " ครั้ง");
         if (w.quotations() > 0) done.add("ส่งใบเสนอราคา " + w.quotations() + " ฉบับ");
