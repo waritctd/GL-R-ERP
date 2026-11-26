@@ -1,4 +1,4 @@
--- V249: งานนำเข้า that import creates themselves, and the one time backfill of the import team's sheet (spec 0001).
+-- V250: งานนำเข้า that import creates themselves, and the one time backfill of the import team's sheet (spec 0001).
 --
 -- An import job is the existing no-project import request (V239) with a new source mark and a new purpose:
 --   source   PORTAL (raised by sales, every row until now), IMPORT (import created it), BACKFILL (loaded from the sheet)
@@ -7,7 +7,7 @@
 -- A shipment round gains the two dates the sheet tracks and the portal did not, and backfill_key, which lets a later run
 -- find the same block of the sheet again.
 --
--- Deploy order: V241, V242, V244, V245, V246, V247 and V248 must be applied before or with this migration (V243 was never used), because production does not validate on
+-- Deploy order: V241, V242, V244, V245, V246, V247, V248 and V249 must be applied before or with this migration (V243 was never used), because production does not validate on
 -- migrate and would skip a lower version without an error.
 --
 -- Rollback, in this order, and only after every IMPORT and BACKFILL row is gone:
@@ -16,7 +16,7 @@
 --      ALTER TABLE sales.shipment_round DROP COLUMN backfill_key, DROP COLUMN insured_on, DROP COLUMN transship_eta_on;
 --   3. ALTER TABLE sales.import_request DROP CONSTRAINT chk_import_request_project_or_order, DROP COLUMN source;
 --   4. Re-add the check exactly as V239 declared it.
---   Flyway history keeps version 249: a rollback is a new migration that does steps 1 to 4, or a restore from the backup.
+--   Flyway history keeps version 250: a rollback is a new migration that does steps 1 to 4, or a restore from the backup.
 
 ALTER TABLE sales.import_request
     ADD COLUMN source VARCHAR(10) NOT NULL DEFAULT 'PORTAL'

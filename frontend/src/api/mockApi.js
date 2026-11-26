@@ -4380,7 +4380,7 @@ function mockPlanner() {
 function mockTripRoundItem(round, state = null) {
   const ticket = findTicketRaw(round.ticketId);
   return {
-    roundId: round.id, ticketId: round.ticketId, roundNo: round.roundNo, status: round.status,
+    roundId: round.id, ticketId: round.ticketId, roundNo: round.roundNo, status: round.status, requestedDate: round.requestedDate ?? null,
     displayCode: mockRoundOrderRef(ticket).displayCode, customerName: ticket.customerName ?? null,
     projectName: mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null, ownerName: ticket.createdByName ?? null,
     note: round.note ?? null, sentAt: round.sentAt ?? null, forwardedAt: round.forwardedAt ?? null,
@@ -4591,7 +4591,7 @@ function mockRoundDto(round, ticket, user) {
       recordedAmount: user.role === 'warehouse' ? null : round.invoice.recordedAmount,
       receiptId: user.role === 'warehouse' ? null : round.invoice.receiptId,
     } : null,
-    lines, untickedDocs: round.untickedDocs ?? [],
+    lines, untickedDocs: round.untickedDocs ?? [], requestedDate: round.requestedDate ?? null,
     files: mockAttachments.filter((a) => a.deliveryRequestId === round.id).map((a) => ({
       attachmentId: a.id, fileName: a.fileName, mimeType: a.mimeType, fileSize: a.fileSize, kind: a.attachType,
       uploaderSide: a.uploaderSide ?? 'SYSTEM', uploadedById: a.uploadedBy, uploadedByName: db.users.find((u) => u.id === a.uploadedBy)?.name ?? null,
@@ -17927,7 +17927,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const today = bangkokTodayIso();
       const planned = new Set(mockTrips.flatMap((t) => t.rows.filter((r) => r.state === 'PLANNED').map((r) => r.roundId)));
       mockTrips.forEach((t) => t.rows.filter((r) => r.state === 'DELIVERED').forEach((r) => planned.add(r.roundId)));
-      const free = mockDeliveryRequests.filter((r) => !planned.has(r.id)).map((r) => mockTripRoundItem(r));
+      const free = mockDeliveryRequests.filter((r) => !planned.has(r.id)).map((r) => mockTripRoundItem(r))
+        .sort((a, b) => (a.requestedDate ?? '9999').localeCompare(b.requestedDate ?? '9999'));
       return delay({
         today,
         toCheck: free.filter((r) => r.status === 'SENT'),
@@ -18027,6 +18028,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (!MOCK_ROUND_EDITABLE.includes(round.status)) fail('เรื่องนี้ส่งไปแล้ว', 409);
       if (payload?.quotationId != null) round.quotationId = mockRoundResolveQuotation(ticket.id, payload.quotationId);
       round.note = payload?.note && String(payload.note).trim() ? String(payload.note).trim() : null;
+      const wanted = payload?.requestedDate || null;
+      if (wanted && wanted !== round.requestedDate && wanted < bangkokTodayIso()) fail('วันที่ต้องการให้ส่งต้องไม่เป็นวันย้อนหลัง');
+      round.requestedDate = wanted;
       if (Array.isArray(payload?.untickedDocs)) round.untickedDocs = mockRoundValidUnticked(ticket.id, payload.untickedDocs);
       return delay({ round: mockRoundDto(round, ticket, user) });
     },

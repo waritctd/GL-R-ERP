@@ -662,6 +662,9 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         for (int i = 0; i < 3; i++) {
             ticket[i] = confirmedDeal();
             rid[i] = rounds.createDraft(ticket[i], null, salesActor).id();
+            long draft = rid[i];
+            if (i == 2) refusal(() -> rounds.update(draft, new UpdateRequest(null, null, null, TODAY.minusDays(1)), salesActor), HttpStatus.BAD_REQUEST);
+            if (i == 2) rounds.update(rid[i], new UpdateRequest(null, null, null, TODAY.plusDays(3)), salesActor);
             rounds.send(rid[i], null, salesActor);
             rounds.forward(rid[i], warehouse);
             invoice(rid[i], "IV2611-9" + i, "1000", issuer);
@@ -671,6 +674,7 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         new TicketRepository(jdbc).addEvent(ticket[0], salesActor.id(), "เจ้าของ", "GOODS_RECEIVED", null, null, null);
 
         assertThat(trips.home(manager).waiting()).extracting(r -> r.roundId()).contains(rid[0], rid[1], rid[2]);
+        assertThat(trips.home(manager).waiting().get(0).requestedDate()).as("requested dates sort first").isEqualTo(TODAY.plusDays(3));
         refusal(() -> trips.home(warehouse), HttpStatus.FORBIDDEN);
         refusal(() -> trips.home(salesActor), HttpStatus.FORBIDDEN);
         var all = List.of(rid[0], rid[1], rid[2]);

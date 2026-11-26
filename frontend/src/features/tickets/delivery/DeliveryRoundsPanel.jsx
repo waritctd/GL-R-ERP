@@ -203,6 +203,7 @@ function OpenRound({ round, orderLabel, warehouse = null, onVoid = null, onRecor
         {qty ? <span className="font-normal text-text-muted">{qty}</span> : null}
       </h3>
       <TripPlan trip={round.trip} />
+      {round.requestedDate && round.trip?.state !== 'PLANNED' ? <p className="m-0 text-sm text-text-muted">ต้องการให้ส่ง {formatThaiDate(round.requestedDate)}</p> : null}
       {round.status === 'INVOICED' ? (
         <div role="status" className="rounded-md border border-success bg-success-bg px-3 py-2 text-sm text-text" data-testid="invoiced-callout">
           <b className="block text-base">ออกใบกำกับแล้ว ส่งของได้</b>

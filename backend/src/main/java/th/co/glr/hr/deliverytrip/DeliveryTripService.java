@@ -188,7 +188,7 @@ public class DeliveryTripService {
     private RoundItem withBuyer(RoundItem r) {
         return new RoundItem(r.roundId(), r.ticketId(), r.roundNo(), r.status(), r.displayCode(),
             deliveryRequests.buyerNameOfRound(r.roundId()), r.projectName(), r.ownerName(), r.note(), r.sentAt(),
-            r.forwardedAt(), r.remaining(), r.delayed(), r.state());
+            r.forwardedAt(), r.remaining(), r.delayed(), r.state(), r.requestedDate());
     }
 
     private Trip withBuyers(Trip t) {

@@ -12,8 +12,9 @@ import { queryKeys } from '../../../api/queryKeys.js';
 import { Button } from '../../../components/common/Button.jsx';
 import { Icon } from '../../../components/common/Icon.jsx';
 import { Modal } from '../../../components/common/Modal.jsx';
+import { ThaiDateInput } from '../../../components/common/ThaiDateInput.jsx';
 import { cn } from '../../../utils/cn.js';
-import { formatMoney } from '../../../utils/format.js';
+import { bangkokTodayIso, formatMoney } from '../../../utils/format.js';
 import { RemainingInvoiceDialog } from '../RemainingInvoiceDialog.jsx';
 import { fileSizeText, MAX_FILES_PER_ROUND, MAX_UPLOAD_BYTES, returnReasonText, useFileOpener } from './deliveryRound.js';
 import { PreDepositField, parsePreDeposit, preDepositDateError } from './PreDepositField.jsx';
@@ -69,6 +70,7 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
   const [round, setRound] = useState(null);
   const [error, setError] = useState(null);
   const [note, setNote] = useState(null);
+  const [requestedDate, setRequestedDate] = useState(null);
   const [uploading, setUploading] = useState([]);
   const [fileErrors, setFileErrors] = useState([]);
   const [preDeposit, setPreDeposit] = useState('');
@@ -81,6 +83,9 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
   const adopt = (res) => {
     setRound(res.round);
     setNote((current) => current ?? res.round.note ?? '');
+    // A date already past (a round sent back and reopened later) starts empty, so a resend does not repeat it.
+    const wanted = res.round.requestedDate ?? '';
+    setRequestedDate((current) => current ?? (wanted < bangkokTodayIso() ? '' : wanted));
     setUnticked((current) => current ?? new Set(res.round.untickedDocs ?? []));
   };
 
@@ -98,8 +103,10 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on open
   }, []);
 
+  // The update replaces these fields, so every save sends all of them.
+  const draftFields = () => ({ quotationId: round.quotationId, note: note ?? '', requestedDate: requestedDate || null });
   const savePatch = useMutation({
-    mutationFn: (patch) => api.deliveryRequests.update(round.id, { quotationId: round.quotationId, note: note ?? '', ...patch }),
+    mutationFn: (patch) => api.deliveryRequests.update(round.id, { ...draftFields(), ...patch }),
     onSuccess: (res) => { setRound(res.round); refresh(); },
     onError: (e) => setError(e?.message || 'บันทึกไม่สำเร็จ'),
   });
@@ -119,7 +126,7 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
   const depositDateError = asksDeposit ? preDepositDateError(depositValue, preDepositDate) : '';
   const send = useMutation({
     mutationFn: async () => {
-      await api.deliveryRequests.update(round.id, { quotationId: round.quotationId, note: note ?? '' });
+      await api.deliveryRequests.update(round.id, draftFields());
       const systemDocs = docs.rows.filter((r) => selected.has(r.key)).map((r) => ({ kind: r.kind, id: r.id }));
       return api.deliveryRequests.send(round.id, { systemDocs, ...(asksDeposit ? { preDeposit: parsePreDeposit(preDeposit), ...(preDepositDate ? { preDepositDate } : {}) } : {}) });
     },
@@ -166,7 +173,7 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
   const createDocument = async (row) => {
     setError(null);
     try {
-      await api.deliveryRequests.update(round.id, { quotationId: round.quotationId, note: note ?? '' });
+      await api.deliveryRequests.update(round.id, draftFields());
     } catch (e) {
       setError(e?.message || 'บันทึกไม่สำเร็จ');
       return;
@@ -366,6 +373,15 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
           />
         </section>
 
+        <label htmlFor="round-requested-date" className="grid gap-1.5">
+          <span className={SECTION_LABEL}>วันที่ต้องการให้ส่ง <span className="font-normal text-text-muted">ไม่บังคับ</span></span>
+          <ThaiDateInput
+            id="round-requested-date"
+            min={bangkokTodayIso()}
+            value={requestedDate ?? ''}
+            onChange={(e) => { const value = e.target.value; setRequestedDate(value); if (round) savePatch.mutate({ requestedDate: value || null }); }}
+          />
+        </label>
         <label className="flex flex-col gap-1.5">
           <span className={SECTION_LABEL}>หมายเหตุถึงคลัง <span className="font-normal text-text-muted">ไม่บังคับ</span></span>
           <textarea

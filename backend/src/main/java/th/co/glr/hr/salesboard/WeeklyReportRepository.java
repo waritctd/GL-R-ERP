@@ -188,7 +188,7 @@ public class WeeklyReportRepository {
      * Facts for the "system estimate" of lines 3-5, for tickets with NO OPEN or RECEIVED expected payment of their own,
      * nor (for an add-on) on their root, whose row may already cover it: a rep's row is their word. THB orders only (an
      * accepted quotation in another currency is skipped). The latest ISSUED deposit notice; the goods, over the lines of
-     * the ticket's ISSUED import requests: arrived = there is at least one line and every line's qty sits in arrived
+     * the ticket's ISSUED import requests: arrived = there is at least one line and every line's still-wanted qty sits in arrived
      * rounds; eta = the latest ETA of the rounds still to come, or none when a line is not fully placed in a round or a
      * round still to come has no ETA (no date, no estimate); and the payment due date (delivery + credit days, else the
      * delivery date itself).
@@ -199,7 +199,10 @@ public class WeeklyReportRepository {
         }
         String notice = "(SELECT %s FROM sales.deposit_notice d WHERE d.ticket_id = t.ticket_id AND d.status = 'ISSUED'"
             + " ORDER BY d.version DESC, d.deposit_notice_id DESC LIMIT 1)";
+        // A line's goal is what is still wanted (sales.import_item_wanted: less what is marked not delivered or closed out),
+        // as on the shipment screens (ShipmentRoundRepository).
         String lines = " FROM sales.import_request ir JOIN sales.import_request_item ii ON ii.import_request_id = ir.import_request_id"
+            + " LEFT JOIN sales.import_item_wanted w ON w.import_request_item_id = ii.import_request_item_id"
             + " WHERE ir.ticket_id = t.ticket_id AND ir.status = 'ISSUED'";
         String placed = "COALESCE((SELECT SUM(l.qty) FROM sales.shipment_lot l JOIN sales.shipment_round sr"
             + " ON sr.shipment_round_id = l.shipment_round_id WHERE l.import_request_item_id = ii.import_request_item_id%s), 0)";
@@ -209,9 +212,9 @@ public class WeeklyReportRepository {
             + " AND ir.status = 'ISSUED' AND sr.arrived_on IS NULL AND sr.received_on IS NULL";
         return jdbc.query("SELECT t.ticket_id, t.deposit_policy, " + notice.formatted("d.total_payable")
                 + " AS notice_total, " + notice.formatted("d.issue_date") + " AS notice_date, CASE WHEN EXISTS (SELECT 1" + lines
-                + " AND ii.qty > " + placed.formatted("") + ") OR EXISTS (SELECT 1" + toCome + " AND sr.eta_on IS NULL)"
+                + " AND COALESCE(w.wanted_qty, ii.qty) > " + placed.formatted("") + ") OR EXISTS (SELECT 1" + toCome + " AND sr.eta_on IS NULL)"
                 + " THEN NULL ELSE (SELECT MAX(sr.eta_on)" + toCome + ") END AS eta, (EXISTS (SELECT 1" + lines
-                + ") AND NOT EXISTS (SELECT 1" + lines + " AND ii.qty > " + placed.formatted(arrivedRound) + ")) AS arrived,"
+                + ") AND NOT EXISTS (SELECT 1" + lines + " AND COALESCE(w.wanted_qty, ii.qty) > " + placed.formatted(arrivedRound) + ")) AS arrived,"
                 + " COALESCE(" + TicketRepository.paymentDueDateScalarSql("t.ticket_id")
                 + ", (SELECT (MAX(dr.delivered_at) AT TIME ZONE 'Asia/Bangkok')::date FROM sales.delivery_record dr"
                 + " WHERE dr.ticket_id = t.ticket_id)) AS due"

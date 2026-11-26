@@ -188,7 +188,7 @@ public class DeliveryRequestService {
         List<RoundDto> dtos = r.rounds().stream().map(d -> new RoundDto(d.id(), d.roundNo(), d.status(), d.quotationId(),
             d.quotationNumber(), d.note(), d.returnReasonCodes(), d.returnReasonText(), d.requestedByName(), d.sentAt(),
             d.forwardedByName(), d.forwardedAt(), priceFree(d.invoice()), d.lines(), List.of(), d.untickedDocs(), d.viewer(),
-            d.customerName(), d.taxId(), d.branch(), d.customerFromDeal(), d.trip())).toList();
+            d.customerName(), d.taxId(), d.branch(), d.customerFromDeal(), d.trip(), d.requestedDate())).toList();
         return new RoundsResponse(r.order(), dtos, r.approvedQuotations(), r.canStart(), r.startBlockedReason(), null);
     }
 
@@ -275,7 +275,13 @@ public class DeliveryRequestService {
         Long quotationId = request.quotationId() != null ? validQuotation(round.ticketId(), request.quotationId())
             : round.quotationId();
         String note = request.note() == null || request.note().isBlank() ? null : request.note().trim();
+        java.time.LocalDate wanted = request.requestedDate();
+        if (wanted != null && !wanted.equals(round.requestedDate())
+                && wanted.isBefore(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ต้องการให้ส่งต้องไม่เป็นวันย้อนหลัง");
+        }
         rounds.updateDraft(rid, quotationId, note, validUnticked(round.ticketId(), request.untickedDocs()));
+        rounds.setRequestedDate(rid, request.requestedDate());
         return toDto(rounds.findById(rid).orElseThrow(), s, true, false, false, VoidCtx.NONE);
     }
 
@@ -936,7 +942,8 @@ public class DeliveryRequestService {
             new ViewerDto(editable, editable, warehouse && DeliveryRequestDtos.SENT.equals(r.status()), canIssue,
                 canRecord, invoiced && vctx.scope() && voidBlock == null, invoiced && vctx.scope() ? voidBlock : null,
                 recordBlock),
-            buyer.name(), warehouse ? null : buyer.taxId(), warehouse ? null : buyer.branch(), buyer.fromDeal(), rounds.tripPlan(r.id()));
+            buyer.name(), warehouse ? null : buyer.taxId(), warehouse ? null : buyer.branch(), buyer.fromDeal(), rounds.tripPlan(r.id()),
+            r.requestedDate());
     }
 
     /**
