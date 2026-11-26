@@ -140,9 +140,9 @@ test.describe.serial('cash + ops screens — real pricing-chain deals @cash-ops'
     await disposeSessions(sessions);
   });
 
-  // ── expected payments → the rep's เงินที่จะเข้า card ───────────────────────────────────────────
+  // ── expected payments → the rep's weekly report ledger ───────────────────────────────────────────
 
-  test('rep adds an expected DEPOSIT for this week on the money tab; it shows in the เงินที่จะเข้า card', async ({ page }) => {
+  test('rep adds an expected DEPOSIT for this week on the money tab; it shows in the weekly report ledger', async ({ page }) => {
     const amount = Math.round(payable * 0.2 * 100) / 100;
     const before = await (await sessions.sales.get('/api/sales/my-work')).json();
     const depositsBefore = Number(before.cash?.depositsExpected ?? 0);
@@ -170,13 +170,11 @@ test.describe.serial('cash + ops screens — real pricing-chain deals @cash-ops'
     expect(row, 'the expected row is on the server').toBeTruthy();
     expect(row).toMatchObject({ kind: 'DEPOSIT', status: 'OPEN', expectedWeek: thisMonday() });
 
-    // The rep's own card (งานของฉัน) now carries it.
-    await page.goto('/');
-    await expect(page.getByRole('heading', { name: /เงินที่จะเข้า/ })).toBeVisible();
+    // The rep's weekly report ledger (หน้าแรก ?view=report) now carries it.
+    await page.goto('/?view=report');
+    await expect(page.getByText('เงินมัดจำที่คาดว่าจะได้รับ').first()).toBeVisible();
     const after = await (await sessions.sales.get('/api/sales/my-work')).json();
     expect(Number(after.cash.depositsExpected)).toBeCloseTo(depositsBefore + amount, 2);
-    await page.getByText('ดูเป็นตาราง').click();
-    await expect(page.getByRole('table', { name: 'เงินที่จะเข้า รายสัปดาห์' })).toBeVisible();
     await shot(page, 'cash-03-rep-card');
   });
 

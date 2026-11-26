@@ -1,11 +1,10 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ManagerOverview } from './ManagerOverview.jsx';
 import { api } from '../../api/index.js';
-import { CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, SERVER_TOTALS } from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
 
@@ -14,9 +13,12 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   return {
     ...actual,
     api: {
+      commissions: { pendingApproval: vi.fn() },
+      dealQuotations: { list: vi.fn() },
+      pricingRequests: { queue: vi.fn() },
       tickets: { list: vi.fn() },
-      commissions: { list: vi.fn(), pendingApproval: vi.fn() },
-      salesBoard: { teamOverview: vi.fn() },
+      salesBoard: { weeklyReport: vi.fn() },
+      salesVisits: { team: vi.fn() },
       salesAnalytics: { snapshot: vi.fn() },
     },
   };
@@ -25,40 +27,34 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 const managerUser = { role: 'sales_manager', name: 'ผู้จัดการ ทดสอบ', employeeId: 9 };
 const employee = { nickName: 'บอส', nameTh: 'ผู้จัดการ ทดสอบ' };
 
-const summary = { cashReceivedThisMonth: CASH_RECEIVED_THIS_MONTH, cashReceivedByRep: CASH_BY_REP, ...SERVER_TOTALS };
-
-const now = new Date();
-const thisMonthIso = new Date(now.getFullYear(), now.getMonth(), 5).toISOString();
-
-function deal(id, rep, extra = {}) {
-  return {
-    id, code: `DL-${id}`, title: `โครงการ ${id}`, customerName: `ลูกค้า ${id}`,
-    createdById: rep === 'เซลส์ เอ' ? 11 : 12, createdByName: rep,
-    status: 'quotation_issued', lifecycle: 'ACTIVE', salesStage: 'NEGOTIATION',
-    stageUpdatedAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z',
-    amountPayable: 80000, amountOutstanding: 0, overdue: false, stale: false, nextFollowUpAt: null,
-    ...extra,
-  };
-}
-
-// Won and lost deals feed อัตราปิดงาน (1 won / 1 lost = 50%); the healthy one must never be flagged.
-const wonTicket = deal(201, 'เซลส์ เอ', { status: 'closed', salesStage: 'CLOSED_PAID', stageUpdatedAt: thisMonthIso });
-const lostTicket = deal(209, 'เซลส์ บี', { lifecycle: 'CLOSED_LOST' });
-const healthyTicket = deal(203, 'เซลส์ เอ', { salesStage: 'ORDER_RECEIVED', stageUpdatedAt: thisMonthIso });
-// Needing attention, deliberately listed stale-first so the test proves the sort, not the input order.
-const staleB1 = deal(202, 'เซลส์ บี', { stale: true });
-const staleB2 = deal(204, 'เซลส์ บี', { stale: true });
-const staleA1 = deal(205, 'เซลส์ เอ', { stale: true });
-const staleA2 = deal(206, 'เซลส์ เอ', { stale: true });
-const followUp = deal(207, 'เซลส์ เอ', { nextFollowUpAt: '2026-01-01T00:00:00.000Z' });
-const overdue = deal(208, 'เซลส์ เอ', { overdue: true, amountOutstanding: 15000 });
-const TICKETS = [wonTicket, lostTicket, healthyTicket, staleB1, staleB2, staleA1, staleA2, followUp, overdue];
-
-const TEAM = {
-  quietDays: 14,
-  reps: [{ employeeId: 11, name: 'เซลส์ เอ', openDeals: 2, openValue: 160000, quietDeals: 1, lastUpdateAt: '2026-11-14T00:00:00Z' }],
-  stale: [],
+const rep = (ownerId, name, extra = {}) => ({
+  ownerId, name, newDeals: 0, stageMoves: 2, quotationsIssued: 1, ordersConfirmed: 0, lost: 0, visitsDone: 1, visitsPlanned: 2,
+  visitsDue: 2, visitsDueWithResult: 1, ordersOpen: 3, ordersWithDate: 2, entriesToday: 1, lastEntryAt: '2026-11-25T03:00:00Z', ...extra,
+});
+const REPORT = {
+  scope: 'TEAM',
+  ledger: { month: '2026-11', weeks: [{ weekStart: '2026-11-23', received: 270000, deliveredAwaiting: 100000, deliveriesScheduled: 0, depositsExpected: 50000, isCurrent: true }] },
+  orders: [
+    { ticketId: 70, code: 'PR-1', projectName: 'โครงการ เลื่อน', ownerName: 'เซลส์ เอ', outstanding: 244000, nextPayment: { kind: 'BALANCE', amount: 244000, week: '2026-11-16' }, slipped: true },
+    { ticketId: 71, code: 'PR-2', projectName: 'โครงการ ไม่ระบุวัน', ownerName: 'เซลส์ เอ', outstanding: 5000, nextPayment: null, slipped: false },
+  ],
+  reps: [
+    rep(11, 'เซลส์ เอ'),
+    rep(12, 'เซลส์ บี', { stageMoves: 0, quotationsIssued: 0, visitsDone: 0, entriesToday: 0, lastEntryAt: '2026-11-12T03:00:00Z' }),
+  ],
 };
+const QUOTATIONS = [
+  { id: 501, number: 'QT-2026-0501-1', projectName: 'โครงการ รออนุมัติ', salesRepId: 11, salesRepName: 'เซลส์ เอ', grandTotal: 412000, submittedAt: new Date().toISOString() },
+];
+const VISITS = [
+  { id: 1, ownerName: 'เซลส์ เอ', contactName: 'คุณตัวอย่าง', ticketTitle: 'โครงการ ก', plannedTime: '10:00', status: 'DONE' },
+  { id: 2, ownerName: 'เซลส์ บี', contactName: 'คุณทดสอบ', plannedTime: '13:00', status: 'PLANNED' },
+];
+const PRICING = [
+  { id: 1, status: 'READY_FOR_CEO_REVIEW', projectName: 'โครงการ ซี', updatedAt: new Date().toISOString() },
+  { id: 2, status: 'IMPORT_REVIEWING', projectName: 'โครงการ ดี', updatedAt: new Date().toISOString() },
+  { id: 3, status: 'DRAFT', projectName: 'ไม่แสดง' },
+];
 
 function commission(id, base, extra = {}) {
   return {
@@ -77,18 +73,15 @@ function LocationProbe() {
   return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
 }
 
-function renderOverview(dashboardSummary = summary, entry = '/') {
+function renderOverview() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[entry]}>
+      <MemoryRouter initialEntries={['/']}>
         <Routes>
-          <Route
-            path="/"
-            element={<ManagerOverview user={managerUser} employee={employee} dashboardSummary={dashboardSummary} showToast={vi.fn()} />}
-          />
+          <Route path="/" element={<ManagerOverview user={managerUser} employee={employee} showToast={vi.fn()} />} />
           <Route path="*" element={<LocationProbe />} />
         </Routes>
       </MemoryRouter>
@@ -99,31 +92,80 @@ function renderOverview(dashboardSummary = summary, entry = '/') {
 describe('ManagerOverview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.tickets.list.mockResolvedValue({ tickets: TICKETS });
     api.commissions.pendingApproval.mockResolvedValue(pendingOf(SUBMITTED));
-    api.salesBoard.teamOverview.mockResolvedValue(TEAM);
+    api.dealQuotations.list.mockResolvedValue({ items: QUOTATIONS });
+    api.pricingRequests.queue.mockResolvedValue({ items: PRICING });
+    api.salesBoard.weeklyReport.mockResolvedValue(REPORT);
+    api.salesVisits.team.mockResolvedValue({ visits: VISITS });
+    api.tickets.list.mockResolvedValue({ tickets: [{ id: 1, salesStage: 'CLOSED_PAID' }, { id: 2, lifecycle: 'CLOSED_LOST' }, { id: 3, salesStage: 'NEGOTIATION' }] });
   });
 
-  describe('ค่าคอมรอคุณตรวจ', () => {
+  it('shows อัตราปิดงาน as one line from won vs lost deals', async () => {
+    renderOverview();
+    const panel = (await screen.findByRole('heading', { name: 'อัตราปิดงาน' })).closest('section');
+    await waitFor(() => expect(panel.textContent).toContain('50%'));
+    expect(panel.textContent).toContain('ปิดสำเร็จ 1 · เสีย 1');
+  });
+
+  describe('ค่าคอมรอตรวจ', () => {
     it('lists the queue, at most five, with the deal code and the total base of all of them', async () => {
       renderOverview();
       const panel = (await screen.findByTestId('commission-row-301')).closest('section');
 
       expect(panel.querySelectorAll('[data-testid^="commission-row-"]')).toHaveLength(5);
       expect(within(panel).getByTestId('commission-row-301').textContent).toContain('INV-301 · DL-301');
-      expect(screen.getByText('6 รายการ').className).toContain('sr-only');
+      expect(within(panel).getByText('6 รายการ').className).toContain('sr-only');
       expect(within(panel).getByTestId('commission-row-301').textContent).toContain('฿1,000.00');
       expect(panel.textContent).toContain('อีก 1 รายการ');
       // 1,000 + … + 6,000: every SUBMITTED record, not just the five shown.
       expect(panel.textContent).toContain('฿21,000.00');
     });
+
+    it('opens the commission approval page from a row', async () => {
+      renderOverview();
+      const row = await screen.findByTestId('commission-row-301');
+      fireEvent.click(within(row).getByRole('button', { name: 'ตรวจค่าคอม' }));
+      expect((await screen.findByTestId('location-probe')).textContent).toBe('/commissions?view=pending');
+    });
   });
 
-  it('shows อัตราปิดงาน as one line from won vs lost deals', async () => {
+  it('opens a pending quotation for approval and shows the header shortcut', async () => {
     renderOverview();
-    const heading = await screen.findByRole('heading', { name: 'อัตราปิดงาน' });
-    const panel = heading.closest('section');
-    await waitFor(() => expect(panel.textContent).toContain('50%'));
-    expect(panel.textContent).toContain('ปิดสำเร็จ 1 · เสีย 1');
+    const row = await screen.findByTestId('today-row-qt-501');
+    expect(row.textContent).toContain('QT-2026-0501-1');
+    expect(row.textContent).toContain('ส่งขออนุมัติวันนี้');
+    expect(await screen.findByRole('button', { name: 'อนุมัติใบเสนอราคา 1 รายการ' })).toBeTruthy();
+    fireEvent.click(within(row).getByRole('button', { name: 'ตรวจและอนุมัติ' }));
+    expect((await screen.findByTestId('location-probe')).textContent).toBe('/quotations/501');
+  });
+
+  it('flags a slipped payment and a rep with no entries this week, never a quiet-job count', async () => {
+    renderOverview();
+    expect(await screen.findByTestId('today-row-slip-70')).toBeTruthy();
+    const quiet = screen.getByTestId('today-row-quiet-12');
+    expect(quiet.textContent).toContain('ยังไม่มีการบันทึกในสัปดาห์นี้');
+    expect(screen.queryByTestId('today-row-quiet-11')).toBeNull();
+    expect(document.body.textContent).not.toContain('งานเงียบ');
+  });
+
+  it('sums the weekly report for the team and groups pricing requests by who they wait on', async () => {
+    renderOverview();
+    expect(await screen.findByText('สัปดาห์นี้ทีมบันทึกแล้ว')).toBeTruthy();
+    // 270,000 received + 150,000 still due this week.
+    expect(screen.getByText('฿270,000.00')).toBeTruthy();
+    expect(screen.getByText('จากประมาณการสัปดาห์ ฿420,000.00')).toBeTruthy();
+    expect(screen.getByText('1 งานยังไม่ระบุวันรับเงิน')).toBeTruthy();
+    const waiting = screen.getByRole('heading', { name: 'งานของทีมที่รอฝ่ายอื่น' }).closest('section');
+    expect(within(waiting).getByText('CEO · พิจารณาราคา')).toBeTruthy();
+    expect(within(waiting).getByText('ฝ่ายนำเข้า · ตอบราคา')).toBeTruthy();
+    expect(waiting.textContent).not.toContain('ไม่แสดง');
+  });
+
+  it('lists the team visits today and one row per rep that opens the rep report', async () => {
+    renderOverview();
+    expect(await screen.findByTestId('team-visit-2')).toBeTruthy();
+    expect(screen.getByTestId('team-visit-1').textContent).toContain('เข้าพบแล้ว');
+    const link = (await screen.findAllByRole('link', { name: 'เซลส์ บี' }))[0];
+    expect(link.getAttribute('href')).toContain('?view=report&rep=12');
   });
 });

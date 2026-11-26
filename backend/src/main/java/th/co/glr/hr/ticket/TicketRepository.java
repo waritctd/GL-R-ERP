@@ -2487,12 +2487,26 @@ public class TicketRepository {
      * (DocumentChainRepository#findOrderConfirmedAt) and the delivery-date floor (TicketService, slice 6d) both run
      * this statement. Binds {@code :id}, {@code :promoted}, {@code :confirmed} — see {@link #orderConfirmedAtParams}.
      */
-    public static final String ORDER_CONFIRMED_AT_SQL = """
-        SELECT created_at FROM sales.ticket_event
-         WHERE ticket_id = :id AND kind IN (:promoted, :confirmed)
-         ORDER BY (kind = :promoted) DESC, created_at DESC, event_id DESC
-         LIMIT 1
-        """;
+    public static final String ORDER_CONFIRMED_AT_SQL = orderConfirmedAtSelect(":id");
+
+    /** {@link #ORDER_CONFIRMED_AT_SQL} for any ticket reference: {@code :id}, or a column of an outer query
+     * ({@code t.ticket_id}) to use it as a correlated scalar subquery. Binds {@code :promoted} and {@code :confirmed}. */
+    public static String orderConfirmedAtSelect(String ticketIdRef) {
+        return """
+            SELECT created_at FROM sales.ticket_event
+             WHERE ticket_id = %s AND kind IN (:promoted, :confirmed)
+             ORDER BY (kind = :promoted) DESC, created_at DESC, event_id DESC
+             LIMIT 1
+            """.formatted(ticketIdRef);
+    }
+
+    /** The order's confirmation time as an expression on ticket alias {@code t}: its own, else (an add-on that never
+     * wrote one) its root deal's. Null when neither exists. Binds {@code :promoted} and {@code :confirmed}. */
+    public static String orderConfirmedAtExpr(String t) {
+        return "COALESCE((" + orderConfirmedAtSelect(t + ".ticket_id") + "), ("
+            + orderConfirmedAtSelect("CASE WHEN " + t + ".child_kind = 'ADD_ON' THEN " + t + ".parent_ticket_id END")
+            + "))";
+    }
 
     public static MapSqlParameterSource orderConfirmedAtParams(long ticketId) {
         return new MapSqlParameterSource().addValue("id", ticketId)

@@ -5,19 +5,35 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.employee.ManagerApproverRepository;
+import th.co.glr.hr.salesboard.CashRepository;
 import th.co.glr.hr.ticket.TicketRepository;
 
 @Repository
 public class DashboardRepository {
     private final NamedParameterJdbcTemplate jdbc;
+    /** {@code app.sales.money-from}: the cash-received figures follow the same cutoff as CashRepository (spec 0003 D2). */
+    private final LocalDate moneyFrom;
 
+    /** No cutoff: hand-wired tests. */
     public DashboardRepository(NamedParameterJdbcTemplate jdbc) {
+        this(jdbc, (LocalDate) null);
+    }
+
+    public DashboardRepository(NamedParameterJdbcTemplate jdbc, LocalDate moneyFrom) {
         this.jdbc = jdbc;
+        this.moneyFrom = moneyFrom;
+    }
+
+    @Autowired
+    DashboardRepository(NamedParameterJdbcTemplate jdbc, @Value("${app.sales.money-from:}") String moneyFrom) {
+        this(jdbc, CashRepository.parseMoneyFrom(moneyFrom));
     }
 
     public HeadcountSummaryDto headcount(DashboardQueryScope scope) {
@@ -203,6 +219,8 @@ public class DashboardRepository {
      * labelled with the creator's name ({@code ไม่ระบุผู้ขาย} when blank), so two reps with the same name stay separate.
      */
     public java.util.List<CashByRepDto> cashReceivedByRep(LocalDate monthStart) {
+        MapSqlParameterSource p = monthWindow(monthStart);
+        String cutoff = CashRepository.moneyPredicate(moneyFrom, p, "t");
         return jdbc.query(
             "SELECT COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), 'ไม่ระบุผู้ขาย') AS rep_name, "
                 + "SUM(x.amount) AS amount "
@@ -210,8 +228,9 @@ public class DashboardRepository {
                 + "FROM sales.payment_receipt WHERE " + RECEIVED_IN_MONTH + " GROUP BY ticket_id) x "
                 + "JOIN sales.ticket t ON t.ticket_id = x.ticket_id "
                 + "LEFT JOIN hr.employee e ON e.employee_id = t.created_by "
+                + "WHERE TRUE" + cutoff + " "
                 + "GROUP BY t.created_by, e.first_name_th, e.last_name_th",
-            monthWindow(monthStart),
+            p,
             (rs, n) -> new CashByRepDto(rs.getString("rep_name"), rs.getBigDecimal("amount")));
     }
 

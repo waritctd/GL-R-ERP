@@ -68,7 +68,7 @@ const CEO_TITLE = 'ภาพรวมผู้บริหาร';
 /** Landing page: today's worklist, or (?view=insight) the sales-analytics snapshot. */
 export function CeoOverview(props) {
   return (
-    <InsightLanding title={CEO_TITLE} user={props.user} renderToday={(switcher, panelProps) => <CeoToday {...props} switcher={switcher} panelProps={panelProps} />} />
+    <InsightLanding title={CEO_TITLE} user={props.user} showToast={props.showToast} renderToday={(switcher, panelProps) => <CeoToday {...props} switcher={switcher} panelProps={panelProps} />} />
   );
 }
 

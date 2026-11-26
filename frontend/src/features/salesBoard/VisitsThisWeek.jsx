@@ -1,7 +1,7 @@
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
-import { isOverdue, shortWeekday, timeLabel, visitCounts, weekRangeLabel } from './visitWeek.js';
+import { isOverdue, shortWeekday, timeLabel } from './visitWeek.js';
 
 function DayBadge({ iso, isToday }) {
   return (
@@ -107,66 +107,6 @@ export function WeekNav({ weekOffset, onWeek }) {
         ›
       </Button>
     </span>
-  );
-}
-
-/**
- * นัดเข้าพบ (spec 2026-11-15 §7.3 item 2) — the rep's visits for one ISO week as served (VisitRepository's date,
- * time, id order). This week comes embedded in my-work; ‹ › page other weeks through GET /api/sales/visits. Tick a
- * planned one to mark it done (only once its day has come); + นัดเข้าพบ plans one, with or without a deal.
- * `landed` (after a save into another week) offers a jump there.
- */
-export function VisitsThisWeek({
-  visits, todayIso, mondayIso, weekOffset, onWeek, loading, failed, landed, onPlan, onDone, onCancel,
-}) {
-  const { done, planned } = visitCounts(visits);
-  const label = weekOffset === 0 ? `สัปดาห์นี้ · ${weekRangeLabel(mondayIso)}` : weekRangeLabel(mondayIso, todayIso);
-  return (
-    <Panel
-      flush
-      data-testid="visits-this-week"
-      title={(
-        <span className="grid gap-0.5">
-          <span>{weekOffset === 0 ? 'นัดเข้าพบสัปดาห์นี้' : 'นัดเข้าพบ'}</span>
-          <small className="text-xs font-normal text-text-muted">{label}</small>
-          {visits ? <small className="text-xs font-normal text-text-muted">{`${done} จาก ${planned} ไปแล้ว`}</small> : null}
-        </span>
-      )}
-      actions={(
-        <span className="flex flex-wrap items-center justify-end gap-1.5">
-          <WeekNav weekOffset={weekOffset} onWeek={onWeek} />
-          <Button type="button" size="sm" variant="secondary" onClick={onPlan}>
-            <Icon name="plus" size={14} />
-            นัดเข้าพบ
-          </Button>
-        </span>
-      )}
-    >
-      {landed ? (
-        <p className="m-0 border-b border-border-subtle px-5 py-2.5 mobile:px-3.5">
-          <button
-            type="button"
-            className="text-left text-sm font-bold text-primary underline-offset-2 hover:underline"
-            onClick={() => onWeek(landed.weekOffset)}
-          >
-            {`นัดใหม่อยู่ในสัปดาห์ ${landed.label} — ไปที่สัปดาห์นั้น`}
-          </button>
-        </p>
-      ) : null}
-      {failed ? <p className="m-0 px-5 py-4 text-sm font-bold text-danger mobile:px-3.5">โหลดไม่สำเร็จ</p>
-        : loading || !visits ? null
-          : visits.length === 0 ? (
-            <p className="m-0 px-5 py-4 text-sm text-text-muted mobile:px-3.5">
-              {weekOffset === 0 ? 'ยังไม่มีนัดเข้าพบสัปดาห์นี้' : 'ไม่มีนัดเข้าพบในสัปดาห์นี้'}
-            </p>
-          ) : (
-            <ul className="m-0 list-none p-0">
-              {visits.map((visit) => (
-                <VisitRow key={visit.id} visit={visit} todayIso={todayIso} onDone={onDone} onCancel={onCancel} />
-              ))}
-            </ul>
-          )}
-    </Panel>
   );
 }
 

@@ -14,8 +14,8 @@ import { cancelDeal, createDeal } from './helpers/sales.js';
 //   POST /api/sales/visits/{id}/done      the visit's owner, or sales_manager / ceo; never ahead of the planned day
 //   POST /api/sales/visits/{id}/cancel    same
 //
-// UI: นัดเข้าพบสัปดาห์นี้ card on งานของฉัน (plan dialog, เข้าพบแล้ว tick, week ‹ ›, บันทึกเข้าพบ) and the team
-// ตารางเข้าพบ grid on ภาพรวมทีมขาย.
+// UI: the rep's นัดเข้าพบ page, /visits (plan dialog, เข้าพบแล้ว tick, week ‹ ›, บันทึกเข้าพบ) and the team's visits
+// today list on the sales manager's งานวันนี้.
 //
 // "Today" is the Asia/Bangkok date, as on the server. Every visit/deal a test creates carries the run id and is
 // cancelled in afterAll (a DONE visit cannot be cancelled — that is a 409 — so those stay; the deal is cancelled).
@@ -71,10 +71,11 @@ test.describe('visits — happy paths @visits', () => {
   test('plan a visit for this week on a deal, tick เข้าพบแล้ว: it writes a SITE_VISIT on the deal, and the manager sees it in the team grid', async ({ page, browser }) => {
     const contact = `${RUN} คุณอรุณ`;
     await loginAs(page, 'sales');
-    const card = page.getByTestId('visits-this-week');
-    await expect(card).toBeVisible();
+    await page.goto('/visits');
+    // Not the นัดไว้ column: the page draws it only once the week holds a visit, and a fresh database has none.
+    await expect(page.getByText(/^สัปดาห์นี้ · /)).toBeVisible();
 
-    await card.getByRole('button', { name: 'นัดเข้าพบ', exact: true }).click();
+    await page.getByRole('button', { name: 'นัดเข้าพบ', exact: true }).click();
     const plan = page.getByRole('dialog', { name: 'นัดเข้าพบ' });
     await expect(plan).toBeVisible();
     await shot(page, 'visits-01-plan-dialog');
@@ -83,7 +84,7 @@ test.describe('visits — happy paths @visits', () => {
     await plan.getByRole('button', { name: 'บันทึกนัด' }).click();
     await expect(plan).toHaveCount(0);
 
-    const row = card.locator('li', { hasText: contact });
+    const row = page.getByTestId('visits-planned').locator('li', { hasText: contact });
     await expect(row).toBeVisible();
     const own = await listOwn(sessions.sales, isoIn(-7), isoIn(14));
     const visit = own.find((v) => v.contactName === contact);
@@ -93,15 +94,14 @@ test.describe('visits — happy paths @visits', () => {
     planned.push(visit.id);
     await shot(page, 'visits-02-planned-in-card');
 
-    // The manager's team week grid shows the rep's visit (separate browser context = separate session).
+    // The manager's งานวันนี้ lists the team's visits of today (separate browser context = separate session).
     const mgrContext = await browser.newContext();
     const mgrPage = await mgrContext.newPage();
     try {
       await mgrPage.goto('/');
       await loginAs(mgrPage, 'sales_manager');
-      await expect(mgrPage.getByTestId('visit-week')).toBeVisible();
-      await expect(mgrPage.getByTestId(`visit-chip-${visit.id}`)).toBeVisible();
-      await shot(mgrPage, 'visits-03-manager-team-grid');
+      if (visit.plannedDate === isoIn(0)) await expect(mgrPage.getByTestId(`team-visit-${visit.id}`)).toBeVisible();
+      await shot(mgrPage, 'visits-03-manager-team-visits');
     } finally {
       await mgrContext.close();
     }
@@ -113,7 +113,7 @@ test.describe('visits — happy paths @visits', () => {
     await done.getByRole('radio', { name: 'ส่งตัวอย่าง' }).click();
     await done.getByRole('button', { name: 'บันทึก', exact: true }).click();
     await expect(done).toHaveCount(0);
-    await expect(row.getByText('ไปแล้ว')).toBeVisible();
+    await expect(page.getByTestId('visits-done').locator('li', { hasText: contact })).toBeVisible();
     await shot(page, 'visits-04-ticked-done');
     planned.splice(planned.indexOf(visit.id), 1);
 
@@ -155,12 +155,12 @@ test.describe('visits — failure paths @visits', () => {
 
     // UI: tomorrow's visit renders, but its tick button does not exist (the page cannot send what the service refuses).
     await loginAs(page, 'sales');
+    await page.goto('/visits');
     // Tomorrow may fall in next week (Sunday): page there if it is not in the current one.
-    const card = page.getByTestId('visits-this-week');
-    await expect(card).toBeVisible();
+    await expect(page.getByText(/^สัปดาห์นี้ · /)).toBeVisible();
     const dow = (iso) => (new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7; // Monday = 0
-    if (dow(isoIn(0)) === 6) await card.getByRole('button', { name: 'สัปดาห์หน้า' }).click();
-    const row = card.locator('li', { hasText: contact });
+    if (dow(isoIn(0)) === 6) await page.getByRole('button', { name: 'สัปดาห์หน้า' }).click();
+    const row = page.getByTestId('visits-planned').locator('li', { hasText: contact });
     await expect(row).toBeVisible();
     await expect(row.getByRole('button', { name: `ยกเลิกนัด: ${contact}` })).toBeVisible();
     await expect(row.getByRole('button', { name: `เข้าพบแล้ว: ${contact}` })).toHaveCount(0);
