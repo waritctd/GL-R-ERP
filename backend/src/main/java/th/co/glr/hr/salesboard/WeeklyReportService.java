@@ -143,11 +143,11 @@ public class WeeklyReportService {
                 slipped = slipped.add(slip[k]);
             }
         }
-        // The system's estimates join the same three lines. One dated before this week lands in this week but is not a
-        // slip: the rep never gave that date, and the slip list holds only the rep's own rows.
+        // The system's estimates join the same three lines (never before this week: estimates() moves a past date to
+        // it, and it is no slip, since the rep never gave that date).
         BigDecimal[] est = zeros(n);
         for (WeeklyEstimate e : estimates.values()) {
-            int i = mondays.indexOf(e.week().isBefore(currentMonday) ? currentMonday : e.week());
+            int i = mondays.indexOf(e.week());
             if (i >= 0) {
                 int line = switch (e.kind()) { case "BALANCE" -> 0; case "ON_DELIVERY" -> 1; default -> 2; };
                 open[line][i] = open[line][i].add(e.amount());
@@ -230,7 +230,9 @@ public class WeeklyReportService {
                 default -> null;
             };
             if (e != null && e.amount().signum() > 0) {
-                out.put(t.ticketId(), e);
+                // A date already past is due now: the row shows the same week the ledger counts it in.
+                out.put(t.ticketId(), e.week().isBefore(currentMonday)
+                    ? new WeeklyEstimate(e.kind(), e.amount(), currentMonday) : e);
             }
         }
         return out;

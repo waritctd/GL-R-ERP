@@ -104,6 +104,14 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
         item(ownRow, "1000");
         round(ownRow, "2026-11-26");
         expected(ownRow, "ON_DELIVERY", "50", "2026-11-23");
+        long addOn = deliveredDeal();
+        jdbc.update("UPDATE sales.ticket SET parent_ticket_id = :p, child_kind = 'ADD_ON' WHERE ticket_id = :t",
+            Map.of("p", ownRow, "t", addOn)); // the root's own row may already cover it
+        long usd = deliveredDeal();
+        jdbc.update("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, total_amount, recipient_type, currency, issued_at, accepted_at)
+            VALUES (:t, 'QT-USD-' || :t, :by, 'ACCEPTED', 1000, 'BUYER', 'USD', now(), now())
+            """, Map.of("t", usd, "by", salesActor.id()));
 
         WeeklyReport r = service.report(salesActor, WEEK, null);
 
@@ -111,7 +119,9 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
         r.orders().forEach(o -> byId.put(o.ticketId(), o));
         assertThat(byId.get(deposit).estimate().kind()).isEqualTo("DEPOSIT");
         assertThat(byId.get(deposit).estimate().amount()).isEqualByComparingTo("107");
-        assertThat(byId.get(onDelivery).estimate().week()).isEqualTo(LocalDate.of(2026, 11, 16));
+        assertThat(byId.get(onDelivery).estimate().week()).as("a past date is due this week").isEqualTo(WEEK);
+        assertThat(byId.get(addOn).estimate()).isNull();
+        assertThat(byId.get(usd).estimate()).as("THB only").isNull();
         assertThat(byId.get(onDelivery).slipped()).as("the rep never gave that date").isFalse();
         assertThat(byId.get(delivered).estimate().amount()).as("payable 1070 less 70 received").isEqualByComparingTo("1000");
         assertThat(byId.get(ownRow).estimate()).isNull();
@@ -151,6 +161,14 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
 
         assertThat(rep.visitsDue()).isEqualTo(1);
         assertThat(rep.visitsDueWithResult()).isEqualTo(1);
+    }
+
+    private long deliveredDeal() {
+        long id = stagedDeal("DELIVERED");
+        item(id, "1000");
+        jdbc.update("INSERT INTO sales.delivery_record (ticket_id, source, delivered_at, delivered_by) VALUES (:t, 'WAREHOUSE',"
+            + " '2026-11-24T05:00:00Z', :by)", Map.of("t", id, "by", salesActor.id()));
+        return id;
     }
 
     private long stagedDeal(String stage) {
