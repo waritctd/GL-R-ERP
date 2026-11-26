@@ -1,6 +1,6 @@
 import { lazy } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission, isOversightReader } from '../../app/permissions.js';
@@ -23,6 +23,9 @@ export function TicketDetailRoute({ user, showToast }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const [search] = useSearchParams();
+  // The invoice queue and its bell open the round alone, even for a holder who also reads the whole deal.
+  const issueView = Boolean(user?.canIssueTaxInvoice) && search.get('view') === 'issue';
   // A grant holder whose role has the deal page but who may not open THIS deal (403) falls back to the round work view
   // instead of a dead end. Same key as the page's own read, so the page does not read the deal twice.
   const holderOfDealRole = Boolean(user?.canIssueTaxInvoice) && hasPermission(user.role, 'canViewWholeDeal') && user.role !== 'account';
@@ -40,7 +43,7 @@ export function TicketDetailRoute({ user, showToast }) {
   // any role): each works one delivery round (RoundWorkView), the bell notice's target. A rep or manager who also holds
   // the grant keeps the deal page (its ship tab does the same work); account lands on the finance page above.
   // An oversight reader (sales manager or read-all grant holder) reads the whole page, even as warehouse or issuer.
-  if (!isOversightReader(user) && (user?.role === 'warehouse' || dealRefused || (user?.canIssueTaxInvoice && !hasPermission(user.role, 'canViewWholeDeal')))) {
+  if (issueView || (!isOversightReader(user) && (user?.role === 'warehouse' || dealRefused || (user?.canIssueTaxInvoice && !hasPermission(user.role, 'canViewWholeDeal'))))) {
     return <RoundWorkView user={user} ticketId={id} onBack={() => (location.key === 'default' ? navigate('/', { replace: true }) : navigate(-1))} />;
   }
   return (

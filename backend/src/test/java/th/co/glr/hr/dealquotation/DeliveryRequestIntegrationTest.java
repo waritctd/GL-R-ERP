@@ -230,7 +230,13 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         assertThat(rounds.list(ticketId, issuer).rounds()).singleElement().satisfies(r -> assertThat(r.status()).isEqualTo("SENT"));
         jdbc.update("UPDATE hr.employee SET can_read_all_sales = FALSE WHERE employee_id = :id", Map.of("id", issuerId));
         refusal(() -> rounds.list(ticketId, issuer), HttpStatus.FORBIDDEN);
+        assertThat(rounds.invoiceQueue(issuer)).as("not queued until the warehouse forwards it").isEmpty();
         rounds.forward(rid, warehouse);
+        assertThat(rounds.invoiceQueue(issuer)).singleElement().satisfies(q -> assertThat(q.roundId()).isEqualTo(rid));
+        refusal(() -> rounds.invoiceQueue(warehouse), HttpStatus.FORBIDDEN);
+        refusal(() -> rounds.invoiceQueue(salesActor), HttpStatus.FORBIDDEN);
+        assertThat(jdbc.queryForObject("SELECT link FROM hr.notification WHERE employee_id = :e AND type = 'DELIVERY_REQUEST_FORWARDED'",
+            Map.of("e", issuerId), String.class)).isEqualTo("/tickets/" + ticketId + "?view=issue");
 
         // Only the holder, only the forwarded round of this order; a rep or the warehouse is refused.
         var pdf = new MockMultipartFile("file", "iv.pdf", "application/pdf", TaxInvoicePdfReaderTest.pdf(

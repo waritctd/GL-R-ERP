@@ -340,7 +340,7 @@ public class DeliveryRequestService {
         notifications.notifyTaxInvoiceIssuers(issuers, TicketEventKind.DELIVERY_REQUEST_FORWARDED,
             displayCode(s) + " รอบส่งที่ " + round.roundNo() + " · " + buyerName(s, round.quotationNumber())
                 + " · คลังตรวจเอกสารแล้ว รอออกใบกำกับภาษี",
-            "/tickets/" + s.id() + "?tab=ship");
+            "/tickets/" + s.id() + "?view=issue");
         return toDto(rounds.findById(rid).orElseThrow(), s, false, true, false, VoidCtx.NONE);
     }
 
@@ -582,6 +582,17 @@ public class DeliveryRequestService {
         for (String role : List.of("account", "sales_manager")) {
             notifications.notifyByRoleAtLink(role, type, message, link, skip);
         }
+    }
+
+    /** The invoice issuer's queue (a per-person grant). */
+    public List<DeliveryRequestDtos.InvoiceQueueItem> invoiceQueue(UserPrincipal actor) {
+        requireIssuer(actor);
+        // ponytail: one deal lookup per queued round; join it if the queue ever grows past a few dozen.
+        return rounds.awaitingInvoice().stream().map(r -> {
+            TicketSummaryDto s = summary(r.ticketId());
+            return new DeliveryRequestDtos.InvoiceQueueItem(r.id(), r.ticketId(), r.roundNo(), displayCode(s),
+                buyerName(s, r.quotationNumber()), s.projectName(), s.createdByName(), r.forwardedAt(), r.requestedDate());
+        }).toList();
     }
 
     private void requireIssuer(UserPrincipal actor) {

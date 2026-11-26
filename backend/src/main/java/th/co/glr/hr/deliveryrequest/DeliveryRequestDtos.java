@@ -76,6 +76,13 @@ public final class DeliveryRequestDtos {
 
     public record RoundResponse(RoundDto round) {}
 
+    /** One round waiting for its tax invoice. No money: the row only says which one and how urgent. */
+    public record InvoiceQueueItem(long roundId, long ticketId, int roundNo, String displayCode, String buyerName,
+                                   String projectName, String ownerName, Instant forwardedAt,
+                                   java.time.LocalDate requestedDate) {}
+
+    public record InvoiceQueueResponse(List<InvoiceQueueItem> items) {}
+
     public record CreateRequest(Long quotationId) {}
 
     /** {@code kind}: QUOTATION, DEPOSIT_NOTICE, REMAINING_INVOICE or IMPORT_REQUEST. */
