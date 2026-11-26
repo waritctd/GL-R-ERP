@@ -79,3 +79,7 @@ export function monthLabel(yearMonth) {
   return m ? SHORT_MONTH[Number(m[2]) - 1] ?? '' : '';
 }
 
+
+/** The deal's เงิน tab with the เงินที่คาดว่าจะเข้า add form already open (ExpectedPaymentsPanel reads `add`). */
+export const ADD_EXPECTED_PARAM = 'expected';
+export const addExpectedPaymentPath = (ticketId) => `/tickets/${ticketId}?tab=money&add=${ADD_EXPECTED_PARAM}`;

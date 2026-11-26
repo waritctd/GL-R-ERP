@@ -198,14 +198,14 @@ describe('SalesOverview', () => {
     expect(screen.queryByText(/ควรตามต่อ|งานเงียบ|ดีล/)).toBeNull();
   });
 
-  it('an ordered job with no payment date is a money row whose button opens the money tab', async () => {
+  it('an ordered job with no payment date is a money row whose button opens the add-payment form on the money tab', async () => {
     setUp({ orders: [order()] });
     renderOverview();
     const row = await screen.findByTestId('today-row-undated-901');
     expect(screen.getByTestId('today-group-money').contains(row)).toBe(true);
     fireEvent.click(within(row).getByRole('button', { name: 'ระบุวันที่' }));
     await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/tickets/901'));
-    expect(screen.getByTestId('location-search').textContent).toBe('?tab=money');
+    expect(screen.getByTestId('location-search').textContent).toBe('?tab=money&add=expected');
   });
 
   it('a visit needs a result only after its day, or its time today; a time later today or none is not due yet', async () => {

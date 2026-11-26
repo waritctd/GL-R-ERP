@@ -65,8 +65,9 @@ describe('WeeklyReport', () => {
     api.salesVisits.team.mockResolvedValue([]);
   });
 
-  it('shows a rep the five money lines and tags a slipped payment', async () => {
-    api.salesBoard.weeklyReport.mockResolvedValue(report());
+  it('shows a rep the five money lines and tags a slipped payment; a ฿0 order is not "paid in full"', async () => {
+    const zeroAddOn = order({ ticketId: 2, code: 'PR-0001-2', value: 0, outstanding: 0, nextPayment: null });
+    api.salesBoard.weeklyReport.mockResolvedValue(report({ orders: [...report().orders, zeroAddOn] }));
     renderReport({ role: 'sales', id: 6 });
     expect(await screen.findByText('2 · รับชำระแล้ว', { selector: 'th' })).toBeTruthy();
     for (const line of ['3 · ส่งมอบแล้ว รอรับชำระ', '4 · นัดส่งมอบแล้ว รอรับชำระ', '5 · เงินมัดจำที่คาดว่าจะได้รับ']) {
@@ -75,6 +76,8 @@ describe('WeeklyReport', () => {
     expect(screen.getByText('1 · ประมาณการยอดรับเงินรวม')).toBeTruthy();
     expect(screen.getAllByText('เลื่อนกำหนด').length).toBeGreaterThan(0);
     expect(api.salesBoard.weeklyReport).toHaveBeenCalledWith({ week: monday, ownerId: undefined });
+    expect(screen.getAllByText(/^ยังไม่มียอด/).length).toBeGreaterThan(0);
+    expect(screen.queryByText('รับชำระครบ')).toBeNull();
   });
 
   it('lists each rep of the team as a link to that rep’s report', async () => {

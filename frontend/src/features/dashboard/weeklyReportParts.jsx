@@ -7,6 +7,7 @@ import { findStage } from '../tickets/stageCatalog.js';
 import { addDaysIso, bangkokTodayIso, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
 import { isoWeekdayIndex, timeLabel, visitIsDue } from '../salesBoard/visitWeek.js';
 import { quarterLabel } from '../salesBoard/boardFormat.js';
+import { addExpectedPaymentPath } from '../salesBoard/cashFormat.js';
 
 const DAY_NAMES = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
 const PAYMENT_KIND = { DEPOSIT: 'มัดจำ', ON_DELIVERY: 'รับชำระวันส่งมอบ', BALANCE: 'ส่วนที่เหลือ' };
@@ -124,8 +125,9 @@ function DueCell({ order }) {
       </span>
     );
   }
+  if (!(order.value > 0)) return <span className="text-text-muted">ยังไม่มียอด</span>;
   if (order.outstanding <= 0) return <span className="text-text-muted">รับชำระครบ</span>;
-  return <Link to={`/tickets/${order.ticketId}?tab=money`} className={buttonVariants({ variant: 'secondary', size: 'sm' })}>ระบุวันที่</Link>;
+  return <Link to={addExpectedPaymentPath(order.ticketId)} className={buttonVariants({ variant: 'secondary', size: 'sm' })}>ระบุวันที่</Link>;
 }
 
 /** ยอดที่สั่งซื้อแล้ว: one row per order ticket; `showOwner` adds the rep under the project (team view). */
@@ -161,7 +163,7 @@ export function OrdersTable({ orders, catalog, showOwner = false }) {
           id={o.ticketId}
           title={nameOf(o)}
           sub={[o.code, showOwner ? o.ownerName : null].filter(Boolean).join(' · ')}
-          lines={[stageText(catalog, o.salesStage), o.nextPayment ? `${PAYMENT_KIND[o.nextPayment.kind]} ${formatMoney(o.nextPayment.amount)} · กำหนดรับ ${weekRange(o.nextPayment.week).replace(/ \d{4}$/, '')}` : o.outstanding > 0 ? `${formatMoney(o.outstanding)} ยังไม่ระบุวันรับเงิน` : 'รับชำระครบ']}
+          lines={[stageText(catalog, o.salesStage), o.nextPayment ? `${PAYMENT_KIND[o.nextPayment.kind]} ${formatMoney(o.nextPayment.amount)} · กำหนดรับ ${weekRange(o.nextPayment.week).replace(/ \d{4}$/, '')}` : o.outstanding > 0 ? `${formatMoney(o.outstanding)} ยังไม่ระบุวันรับเงิน` : o.value > 0 ? 'รับชำระครบ' : 'ยังไม่มียอดสั่งซื้อ']}
           right={formatMoney(o.value)}
           rightSub={o.slipped ? <StatusBadge tone="warning">เลื่อนกำหนด</StatusBadge> : null}
         />

@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -154,9 +154,15 @@ function ExpectedPaymentDialog({ initial, dealValue, plannedOthers, title, submi
  * GET /api/tickets/{id}/expected-payments. `canWrite` is the deal's owner/keyer, sales_manager or ceo (the server
  * re-checks: ExpectedPaymentService). A RECEIVED row (matched from Express) is final, so it carries no actions.
  */
-export function ExpectedPaymentsPanel({ ticketId, dealValue = null, dealTitle = '', canWrite = false, showToast = () => {} }) {
+export function ExpectedPaymentsPanel({
+  ticketId, dealValue = null, dealTitle = '', canWrite = false, showToast = () => {}, startAdding = false, onStartedAdding = () => {},
+}) {
   const queryClient = useQueryClient();
-  const [editing, setEditing] = useState(null); // { row } — row null = a new one
+  // `startAdding`: arrived from a ระบุวันที่ button (addExpectedPaymentPath), so the add form opens at once.
+  const [editing, setEditing] = useState(() => (startAdding && canWrite ? { row: null } : null)); // { row } — row null = a new one
+  useEffect(() => {
+    if (startAdding) onStartedAdding();
+  }, [startAdding, onStartedAdding]);
   const [cancelling, setCancelling] = useState(null);
   const listQuery = useQuery({
     queryKey: queryKeys.expectedPayments(ticketId),
