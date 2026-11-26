@@ -72,7 +72,8 @@ test.describe('visits — happy paths @visits', () => {
     const contact = `${RUN} คุณอรุณ`;
     await loginAs(page, 'sales');
     await page.goto('/visits');
-    await expect(page.getByTestId('visits-planned')).toBeVisible();
+    // Not the นัดไว้ column: the page draws it only once the week holds a visit, and a fresh database has none.
+    await expect(page.getByText(/^สัปดาห์นี้ · /)).toBeVisible();
 
     await page.getByRole('button', { name: 'นัดเข้าพบ', exact: true }).click();
     const plan = page.getByRole('dialog', { name: 'นัดเข้าพบ' });
@@ -156,7 +157,7 @@ test.describe('visits — failure paths @visits', () => {
     await loginAs(page, 'sales');
     await page.goto('/visits');
     // Tomorrow may fall in next week (Sunday): page there if it is not in the current one.
-    await expect(page.getByTestId('visits-planned')).toBeVisible();
+    await expect(page.getByText(/^สัปดาห์นี้ · /)).toBeVisible();
     const dow = (iso) => (new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7; // Monday = 0
     if (dow(isoIn(0)) === 6) await page.getByRole('button', { name: 'สัปดาห์หน้า' }).click();
     const row = page.getByTestId('visits-planned').locator('li', { hasText: contact });
