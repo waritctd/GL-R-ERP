@@ -36,6 +36,9 @@ class WeeklyDigestIntegrationTest extends AbstractDealQuotationSlice2Integration
             .contains(shipping).doesNotContain(waiting, fresh);
         assertThat(repo.importItems()).extracting(WeeklyDigestRepository.ImportItem::link)
             .contains("/import/deals/" + shipping);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'COMPLETED' WHERE ticket_id = :t", Map.of("t", shipping));
+        assertThat(repo.importItems()).extracting(WeeklyDigestRepository.ImportItem::ticketId)
+            .doesNotContain(shipping);
 
         var items = repo.accountItems();
         assertThat(items).extracting(WeeklyDigestRepository.AccountItem::ticketId).contains(waiting)

@@ -78,7 +78,7 @@ public class WeeklyDigestService {
             if (account.isEmpty() || accountTo.isEmpty()) {
                 log.info("Weekly account digest skipped: nothing waiting or no recipient");
             } else {
-                mail.sendDigest(accountTo, roleEmails("account"), account.get().subject(),
+                mail.sendDigest(accountTo, ccFor("account", accountTo), account.get().subject(),
                     account.get().html(), account.get().text());
             }
         } catch (Exception e) {
@@ -89,7 +89,7 @@ public class WeeklyDigestService {
             if (imports.isEmpty() || importTo.isEmpty()) {
                 log.info("Weekly import digest skipped: nothing waiting or no recipient");
             } else {
-                mail.sendDigest(importTo, roleEmails("import"), imports.get().subject(),
+                mail.sendDigest(importTo, ccFor("import", importTo), imports.get().subject(),
                     imports.get().html(), imports.get().text());
             }
         } catch (Exception e) {
@@ -201,10 +201,11 @@ public class WeeklyDigestService {
         return LocalDate.now(clock).with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).minusWeeks(1);
     }
 
-    private List<String> roleEmails(String role) {
+    /** Every active employee of the role, minus the address already in To and any repeat. */
+    private List<String> ccFor(String role, String to) {
         return employees.findAllActive().stream()
             .filter(e -> role.equals(DivisionAccessPolicy.roleFor(e)) && hasEmail(e))
-            .map(EmployeeLoginRecord::email).toList();
+            .map(e -> e.email().trim()).filter(a -> !a.equalsIgnoreCase(to)).distinct().toList();
     }
 
     /** Active sales and sales-manager employees with an email who own at least one open deal. */

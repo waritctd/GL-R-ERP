@@ -85,7 +85,8 @@ public class WeeklyDigestRepository {
                    SELECT p.pricing_request_id, p.submitted_at FROM sales.pricing_request p
                     WHERE p.ticket_id = t.ticket_id AND p.status = 'SUBMITTED'
                     ORDER BY p.pricing_request_id LIMIT 1) pr ON TRUE
-             WHERE t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED') AND t.status NOT IN ('closed', 'cancelled')
+             WHERE t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED', 'COMPLETED')
+               AND t.status NOT IN ('closed', 'cancelled')
                AND (pr.pricing_request_id IS NOT NULL
                     OR t.fulfillment_status IN ('IR_ISSUED', 'IR_SENT', 'SHIPPING'))
              ORDER BY days DESC, t.ticket_id
