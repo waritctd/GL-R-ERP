@@ -91,8 +91,11 @@ function SalesToday({ user, switcher, ctx }) {
   const deals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   const pricingRequests = useMemo(() => pricingRequestsQuery.data ?? [], [pricingRequestsQuery.data]);
   const loading = ticketsQuery.isLoading || pricingRequestsQuery.isLoading;
-  // Own jobs only: a read-all or all-documents holder's list carries everyone's, and dashboards stay owner-only.
-  const activeDeals = useMemo(() => deals.filter((deal) => deal.lifecycle === 'ACTIVE' && isOwnerOrKeyer(deal, user?.id)), [deals, user?.id]);
+  // The invoice issuer's list is their own jobs only (their queue sits above it). Everyone else keeps whatever the server
+  // lists for them, including a read-all or all-documents holder's view of other reps' jobs (Ploy, 2026-11-26).
+  const ownOnly = Boolean(user?.canIssueTaxInvoice);
+  const activeDeals = useMemo(() => deals.filter((deal) => deal.lifecycle === 'ACTIVE' && (!ownOnly || isOwnerOrKeyer(deal, user?.id))),
+    [deals, ownOnly, user?.id]);
   const { catalog: stageCatalog } = useStageCatalog();
 
   // Each quoted deal's quotation list (the deal page's own query, shared through the cache), so the worklist reads
