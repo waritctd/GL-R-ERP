@@ -111,15 +111,16 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
         long superseded = importedDeal(); // only a SUPERSEDED import request: its rounds say nothing
         jdbc.update("UPDATE sales.import_request SET status = 'SUPERSEDED' WHERE ticket_id = :t", Map.of("t", superseded));
         long partly = importedDeal(); // its round arrived, but a second line is in no round yet
-        jdbc.update("UPDATE sales.shipment_round SET arrived_on = DATE '2026-11-20' WHERE shipment_round_id IN (SELECT"
-            + " l.shipment_round_id FROM sales.shipment_lot l JOIN sales.import_request ir USING (import_request_id)"
-            + " WHERE ir.ticket_id = :t)", Map.of("t", partly));
+        arriveRounds(partly);
         item(partly, "500");
-        jdbc.update("""
-            INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, qty)
-            SELECT ir.import_request_id, (SELECT MAX(item_id) FROM sales.ticket_item WHERE ticket_id = :t), 2, 'c2', 1
-              FROM sales.import_request ir WHERE ir.ticket_id = :t
-            """, Map.of("t", partly));
+        secondLine(partly);
+        long closedOut = importedDeal(); // round arrived; a second line, never placed, is closed out: nothing more to come
+        arriveRounds(closedOut);
+        item(closedOut, "500");
+        secondLine(closedOut);
+        jdbc.update("UPDATE sales.import_request_item SET closed_out_reason = 'x', closed_out_by = :by, closed_out_at = now()"
+            + " WHERE seq = 2 AND import_request_id IN (SELECT import_request_id FROM sales.import_request WHERE ticket_id = :t)",
+            Map.of("by", salesActor.id(), "t", closedOut));
         long addOn = deliveredDeal();
         jdbc.update("UPDATE sales.ticket SET parent_ticket_id = :p, child_kind = 'ADD_ON' WHERE ticket_id = :t",
             Map.of("p", ownRow, "t", addOn)); // the root's own row may already cover it
@@ -140,18 +141,19 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
         assertThat(byId.get(noEta).estimate()).isNull();
         assertThat(byId.get(superseded).estimate()).isNull();
         assertThat(byId.get(partly).estimate()).as("not every line has arrived, and one has no date").isNull();
+        assertThat(byId.get(closedOut).estimate().week()).as("the closed-out line wants nothing more").isEqualTo(WEEK);
         assertThat(byId.get(usd).estimate()).as("THB only").isNull();
         assertThat(byId.get(onDelivery).slipped()).as("the rep never gave that date").isFalse();
         assertThat(byId.get(delivered).estimate().amount()).as("payable 1070 less 70 received").isEqualByComparingTo("1000");
         assertThat(byId.get(ownRow).estimate()).isNull();
         var l = r.ledger();
         assertThat(l.depositsExpected()).isEqualByComparingTo("107");
-        assertThat(l.deliveriesScheduled()).as("1070 estimated + 50 of the rep's own").isEqualByComparingTo("1120");
+        assertThat(l.deliveriesScheduled()).as("1070 + 1605 (closed-out job) estimated + 50 of the rep's own").isEqualByComparingTo("2725");
         assertThat(l.deliveredAwaiting()).isEqualByComparingTo("1000");
-        assertThat(l.estimated()).isEqualByComparingTo("2177");
+        assertThat(l.estimated()).isEqualByComparingTo("3782");
         assertThat(l.weeks().stream().filter(w -> w.isCurrent()).findFirst().orElseThrow().slipped())
             .isEqualByComparingTo("0");
-        assertThat(r.reps().get(0).ordersWithDate()).isEqualTo(4);
+        assertThat(r.reps().get(0).ordersWithDate()).isEqualTo(5);
     }
 
     @Test
@@ -180,6 +182,21 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
 
         assertThat(rep.visitsDue()).isEqualTo(1);
         assertThat(rep.visitsDueWithResult()).isEqualTo(1);
+    }
+
+    private void arriveRounds(long ticketId) {
+        jdbc.update("UPDATE sales.shipment_round SET arrived_on = DATE '2026-11-20' WHERE shipment_round_id IN (SELECT"
+            + " l.shipment_round_id FROM sales.shipment_lot l JOIN sales.import_request ir USING (import_request_id)"
+            + " WHERE ir.ticket_id = :t)", Map.of("t", ticketId));
+    }
+
+    /** A second import line, on the ticket's newest item, placed in no round. */
+    private void secondLine(long ticketId) {
+        jdbc.update("""
+            INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, qty)
+            SELECT ir.import_request_id, (SELECT MAX(item_id) FROM sales.ticket_item WHERE ticket_id = :t), 2, 'c2', 1
+              FROM sales.import_request ir WHERE ir.ticket_id = :t
+            """, Map.of("t", ticketId));
     }
 
     private long importedDeal() {
