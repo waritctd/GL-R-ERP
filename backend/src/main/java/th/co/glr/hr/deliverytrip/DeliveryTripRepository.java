@@ -42,7 +42,7 @@ public class DeliveryTripRepository {
     private static final String ITEM_COLUMNS = """
         r.delivery_request_id, r.ticket_id, r.round_no, r.status, %s AS display_code, t.customer_name,
         p.name AS project_name, NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS owner_name,
-        r.note, r.sent_at, r.forwarded_at, %s AS remaining""".formatted(DISPLAY_CODE, REMAINING);
+        r.note, r.sent_at, r.forwarded_at, r.requested_date, %s AS remaining""".formatted(DISPLAY_CODE, REMAINING);
 
     private static final String ITEM_FROM = """
         FROM sales.delivery_request r
@@ -61,7 +61,7 @@ public class DeliveryTripRepository {
                AND NOT EXISTS (SELECT 1 FROM sales.delivery_trip_round x
                                 WHERE x.delivery_request_id = r.delivery_request_id AND x.state = 'PLANNED'
                                   AND r.status = 'INVOICED')
-             ORDER BY r.sent_at NULLS LAST, r.delivery_request_id
+             ORDER BY r.requested_date NULLS LAST, r.sent_at NULLS LAST, r.delivery_request_id
             """, Map.of(), (rs, n) -> item(rs));
     }
 
@@ -181,7 +181,8 @@ public class DeliveryTripRepository {
         return new RoundItem(rs.getLong("delivery_request_id"), rs.getLong("ticket_id"), rs.getInt("round_no"),
             rs.getString("status"), rs.getString("display_code"), rs.getString("customer_name"), rs.getString("project_name"),
             rs.getString("owner_name"), rs.getString("note"), instant(rs.getTimestamp("sent_at")),
-            instant(rs.getTimestamp("forwarded_at")), remaining, rs.getBoolean("delayed"), rs.getString("state"));
+            instant(rs.getTimestamp("forwarded_at")), remaining, rs.getBoolean("delayed"), rs.getString("state"),
+            rs.getObject("requested_date", LocalDate.class));
     }
 
     private static Instant instant(Timestamp ts) {

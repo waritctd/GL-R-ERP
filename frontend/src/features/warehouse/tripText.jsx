@@ -1,3 +1,4 @@
+import { formatThaiDate } from '../../utils/format.js';
 const num = (n) => Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
 
 export function RoundText({ round, extra = null }) {
@@ -7,6 +8,7 @@ export function RoundText({ round, extra = null }) {
       <small className="block text-sm text-text-muted">
         {[round.displayCode, `รอบส่งที่ ${round.roundNo}`, Number(round.remaining) > 0 ? `${num(round.remaining)} แผ่น` : null, round.ownerName ? `ฝ่ายขาย ${round.ownerName}` : null].filter(Boolean).join(' · ')}
       </small>
+      {round.requestedDate ? <b className="block text-sm">ต้องการให้ส่ง {formatThaiDate(round.requestedDate)}</b> : null}
       {round.note || extra ? <small className="block text-sm text-text-muted">{[extra, round.note].filter(Boolean).join(' · ')}</small> : null}
     </span>
   );

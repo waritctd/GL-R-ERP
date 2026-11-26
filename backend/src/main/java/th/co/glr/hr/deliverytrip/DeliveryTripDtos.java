@@ -12,7 +12,7 @@ public final class DeliveryTripDtos {
      * {@code remaining}: pieces still to deliver. */
     public record RoundItem(long roundId, long ticketId, int roundNo, String status, String displayCode, String customerName,
                             String projectName, String ownerName, String note, Instant sentAt, Instant forwardedAt,
-                            java.math.BigDecimal remaining, boolean delayed, String state) {}
+                            java.math.BigDecimal remaining, boolean delayed, String state, LocalDate requestedDate) {}
 
     public record Trip(long id, LocalDate deliveryDate, String route, String timeSlot, String vehicle, String note,
                        String status, List<RoundItem> rounds) {}
