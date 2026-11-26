@@ -56,6 +56,15 @@ public class DeliveryRequestRepository {
             Map.of("t", ticketId), (rs, n) -> map(rs));
     }
 
+    /** Every FORWARDED round of a deal not closed (a paused one can still be invoiced), soonest requested date first, then longest waiting. */
+    public List<Row> awaitingInvoice() {
+        return jdbc.query(ROW_SELECT + """
+             WHERE r.status = 'FORWARDED'
+               AND EXISTS (SELECT 1 FROM sales.ticket t WHERE t.ticket_id = r.ticket_id AND t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED', 'COMPLETED'))
+             ORDER BY r.requested_date NULLS LAST, r.forwarded_at, r.delivery_request_id
+            """, Map.of(), (rs, n) -> map(rs));
+    }
+
     public Optional<Row> findById(long id) {
         return jdbc.query(ROW_SELECT + " WHERE r.delivery_request_id = :id", Map.of("id", id), (rs, n) -> map(rs))
             .stream().findFirst();

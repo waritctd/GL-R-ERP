@@ -17742,6 +17742,21 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   },
   // Mirrors DeliveryRequestController + DeliveryRequestService (deliveryrequest/).
   deliveryRequests: {
+    // DeliveryRequestService#invoiceQueue: issuer-grant holders only (never import).
+    async awaitingInvoice() {
+      const user = requireSession();
+      if (!mockIsIssuer(user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const items = mockDeliveryRequests.filter((r) => r.status === 'FORWARDED')
+        .map((r) => ({ round: r, ticket: findTicketRaw(r.ticketId) }))
+        .filter(({ ticket }) => !['CLOSED_LOST', 'CANCELLED', 'COMPLETED'].includes(ticket.lifecycle ?? 'ACTIVE'))
+        .map(({ round, ticket }) => ({
+          roundId: round.id, ticketId: ticket.id, roundNo: round.roundNo, displayCode: mockRoundOrderRef(ticket).displayCode,
+          buyerName: ticket.customerName ?? null, projectName: ticket.projectName ?? null, ownerName: ticket.createdByName ?? null,
+          forwardedAt: round.forwardedAt ?? null, requestedDate: round.requestedDate ?? null,
+        }))
+        .sort((a, b) => (a.requestedDate ?? '9999').localeCompare(b.requestedDate ?? '9999'));
+      return delay({ items });
+    },
     async list(ticketId) {
       const ticket = findTicketRaw(Number(ticketId));
       const warehouse = requireSession().role === 'warehouse';
@@ -17797,7 +17812,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       round.note = payload?.note && String(payload.note).trim() ? String(payload.note).trim() : null;
       const wanted = payload?.requestedDate || null;
       if (wanted && wanted !== round.requestedDate && wanted < bangkokTodayIso()) fail('วันที่ต้องการให้ส่งต้องไม่เป็นวันย้อนหลัง');
-      round.requestedDate = wanted;
+      if (wanted || payload?.clearRequestedDate) round.requestedDate = wanted;
       if (Array.isArray(payload?.untickedDocs)) round.untickedDocs = mockRoundValidUnticked(ticket.id, payload.untickedDocs);
       return delay({ round: mockRoundDto(round, ticket, user) });
     },
@@ -17898,7 +17913,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       issuers.forEach((u) => addNotification(
         u.id, ticket.id, ticket.code, 'DELIVERY_REQUEST_FORWARDED',
         `${mockRoundOrderRef(ticket).displayCode} รอบส่งที่ ${round.roundNo} · คลังตรวจเอกสารแล้ว รอออกใบกำกับภาษี`,
-        `/tickets/${ticket.id}?tab=ship`,
+        `/tickets/${ticket.id}?view=issue`,
       ));
       return delay({ round: mockRoundDto(round, ticket, user) });
     },

@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SalesOverview } from './SalesOverview.jsx';
 import { api } from '../../api/index.js';
@@ -38,7 +38,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   };
 });
 
-const salesUser = { employeeId: 1, name: 'Sales Test', role: 'sales' };
+const salesUser = { id: 1, employeeId: 1, name: 'Sales Test', role: 'sales' };
 const employee = { nameTh: 'สมชาย ใจดี' };
 
 // Dates are derived from the REAL `bangkokTodayIso` so the fixtures always agree with what the component
@@ -56,7 +56,9 @@ const visit = (over) => ({ id: 1, ownerId: 1, contactName: 'คุณตัว�
 // One deal per next-action bucket (now including RECORD_DELIVERY — deal I — and RECORD_QUOTATION_OUTCOME —
 // deal J), plus a "nothing to do" deal (G) and a non-ACTIVE deal (H) that must be excluded from both the pulse
 // and the worklist entirely.
-const deals = [
+// Another rep's job: only the invoice issuer's to-do leaves it out.
+const othersDeal = { id: 611, createdById: 2, code: 'PR-2026-0611', customerName: 'บริษัท ของคนอื่น จำกัด', title: 'ดีลคนอื่น', lifecycle: 'ACTIVE', amountPayable: 5000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' };
+const ownDeals = [
   { id: 601, code: 'PR-2026-0601', customerName: 'บริษัท เอ จำกัด', title: 'ดีลเอ', lifecycle: 'ACTIVE', amountPayable: 100000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
   { id: 602, code: 'PR-2026-0602', customerName: 'บริษัท บี จำกัด', title: 'ดีลบี', lifecycle: 'ACTIVE', amountPayable: 200000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
   { id: 603, code: 'PR-2026-0603', customerName: 'บริษัท ซี จำกัด', title: 'ดีลซี', lifecycle: 'ACTIVE', amountPayable: 150000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
@@ -72,6 +74,8 @@ const deals = [
   // own comment, and salesActions.test.js's dedicated cases).
   { id: 610, code: 'PR-2026-0610', customerName: 'บริษัท เจ จำกัด', title: 'ดีลเจ', lifecycle: 'ACTIVE', amountPayable: 120000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
 ];
+
+const deals = ownDeals;
 
 const pricingRequests = [
   { id: 1, ticketId: 602, status: 'APPROVED_FOR_QUOTATION', recipientType: 'BUYER', orderConfirmedAt: null },
@@ -101,7 +105,7 @@ const defaultCommissionSummary = {
   tiers: [],
 };
 
-function renderOverview() {
+function renderOverview(user = salesUser) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -109,7 +113,7 @@ function renderOverview() {
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={['/']}>
         <Routes>
-          <Route path="/" element={<SalesOverview user={salesUser} employee={employee} />} />
+          <Route path="/" element={<SalesOverview user={user} employee={employee} />} />
           <Route path="*" element={<LocationProbe />} />
         </Routes>
       </MemoryRouter>
@@ -135,7 +139,8 @@ const buttonOf = (id) => within(rowOf(id)).getByRole('button').textContent;
 
 function setUp(over = {}) {
   vi.clearAllMocks();
-  api.tickets.list.mockResolvedValue({ tickets: over.deals ?? deals });
+  // Fixtures are the signed-in rep's own jobs unless they say otherwise.
+  api.tickets.list.mockResolvedValue({ tickets: (over.deals ?? deals).map((d) => ({ createdById: 1, ...d })) });
   api.pricingRequests.queue.mockResolvedValue({ items: over.pricingRequests ?? pricingRequests });
   api.commissions.monthlySummary.mockResolvedValue({ summary: over.summary ?? defaultCommissionSummary });
   api.salesBoard.myWork.mockResolvedValue({ followUp: [], board: [], quietDays: 14, visitsThisWeek: over.visits ?? [] });
@@ -166,6 +171,7 @@ describe('SalesOverview', () => {
   });
 
   it('maps each pipeline state to its button label; nothing for a deal that needs nothing, a closed one, or only a quiet log', async () => {
+    setUp({ deals: [...deals, othersDeal] });
     renderOverview();
     await screen.findByTestId('today-group-customer');
     expect(buttonOf(601)).toBe('สร้างคำขอราคา'); // no PR at all
@@ -176,6 +182,12 @@ describe('SalesOverview', () => {
     expect(buttonOf(609)).toBe('บันทึกส่งมอบ'); // GOODS_RECEIVED, priced outside the PCR chain
     expect(buttonOf(610)).toBe('บันทึกผลใบเสนอราคา'); // QUOTATION_ISSUED, outcome not recorded yet
     [606, 607, 608].forEach((id) => expect(screen.queryByTestId(`today-row-deal-${id}`)).toBeNull());
+    expect(rowOf(611)).toBeTruthy(); // everyone but the issuer keeps it
+
+    cleanup();
+    renderOverview({ ...salesUser, canIssueTaxInvoice: true });
+    await screen.findByTestId('today-row-deal-601');
+    expect(screen.queryByTestId('today-row-deal-611')).toBeNull(); // the issuer: own jobs only
   });
 
   it('puts the follow-up date on the row, and the button opens the call dialog', async () => {

@@ -88,7 +88,7 @@ function BuyerCard({ round }) {
 
 /** `round`: a FORWARDED round the viewer may issue (viewer.canIssue). */
 /** `primary`: false when another round of the order is also waiting on this viewer; its action then sits on the card as a secondary button. */
-export function TaxInvoiceStep({ round, ticketId, invoiceable = null, primary = true }) {
+export function TaxInvoiceStep({ round, ticketId, invoiceable = null, primary = true, pinActions = true }) {
   const queryClient = useQueryClient();
   const pickerRef = useRef(null);
   const file = round.files.find((f) => f.kind === 'INVOICE') ?? null;
@@ -205,7 +205,7 @@ export function TaxInvoiceStep({ round, ticketId, invoiceable = null, primary = 
         </>
       ) : null}
 
-      <div className={primary ? 'sticky bottom-0 z-10 -mx-1 flex flex-col gap-1 border-t border-border bg-surface px-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-3' : 'flex flex-col gap-1'} data-testid="invoice-actions">
+      <div className={primary && pinActions ? 'sticky bottom-0 z-10 -mx-1 flex flex-col gap-1 border-t border-border bg-surface px-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-3' : 'flex flex-col gap-1'} data-testid="invoice-actions">
         {problem ? <p role="status" className="m-0 text-center text-sm text-text-secondary" data-testid="invoice-blocked">{problem}</p> : null}
         <Button type="button" variant={primary ? 'primary' : 'secondary'} className="w-full" disabled={Boolean(problem) || uploading} data-testid="invoice-confirm" onClick={() => { setConfirmError(null); setConfirmOpen(true); }}>
           ยืนยันและแจ้งคลัง

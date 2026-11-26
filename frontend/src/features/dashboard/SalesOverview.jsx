@@ -12,6 +12,8 @@ import { addDaysIso, bangkokMonthStartIso, formatMoney } from '../../utils/forma
 import { MyWork } from '../salesBoard/MyWork.jsx';
 import { bangkokNowHm, carryOverRange, dayLineLabel, weekStartIso } from '../salesBoard/visitWeek.js';
 import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
+import { InvoiceQueue } from '../tickets/delivery/InvoiceQueue.jsx';
+import { isOwnerOrKeyer } from '../tickets/dealOwnership.js';
 import { defaultRange } from '../tickets/movementRange.js';
 import { nextSalesAction, sortWorklist } from '../tickets/salesActions.js';
 import { offRoutePartiesFor, stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
@@ -48,7 +50,7 @@ export function SalesOverview(props) {
   );
 }
 
-function SalesToday({ switcher, ctx }) {
+function SalesToday({ user, switcher, ctx }) {
   const navigate = useNavigate();
   const { work, todayIso } = ctx;
   const payrollMonth = bangkokMonthStartIso();
@@ -89,14 +91,19 @@ function SalesToday({ switcher, ctx }) {
   const deals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   const pricingRequests = useMemo(() => pricingRequestsQuery.data ?? [], [pricingRequestsQuery.data]);
   const loading = ticketsQuery.isLoading || pricingRequestsQuery.isLoading;
-  const activeDeals = useMemo(() => deals.filter((deal) => deal.lifecycle === 'ACTIVE'), [deals]);
+  // The invoice issuer's list is their own jobs only (their queue sits above it). Everyone else keeps whatever the server
+  // lists for them, including a read-all or all-documents holder's view of other reps' jobs (Ploy, 2026-11-26).
+  const ownOnly = Boolean(user?.canIssueTaxInvoice);
+  const activeDeals = useMemo(() => deals.filter((deal) => deal.lifecycle === 'ACTIVE' && (!ownOnly || isOwnerOrKeyer(deal, user?.id))),
+    [deals, ownOnly, user?.id]);
   const { catalog: stageCatalog } = useStageCatalog();
 
   // Each quoted deal's quotation list (the deal page's own query, shared through the cache), so the worklist reads
   // approval waits and redos the way the deal page does.
   const quotedDealIds = useMemo(() => [...new Set(pricingRequests
     .filter((pr) => pr.status === 'APPROVED_FOR_QUOTATION' || pr.status === 'QUOTATION_ISSUED')
-    .map((pr) => Number(pr.ticketId)))], [pricingRequests]);
+    .map((pr) => Number(pr.ticketId))
+    .filter((id) => activeDeals.some((d) => Number(d.id) === id)))], [pricingRequests, activeDeals]);
   const quotationRows = useQueries({
     queries: quotedDealIds.map((id) => ({
       queryKey: queryKeys.dealQuotationsByTicket(id),
@@ -190,6 +197,8 @@ function SalesToday({ switcher, ctx }) {
           </>
         )}
       />
+
+      {user?.canIssueTaxInvoice ? <div className="mb-[18px]"><InvoiceQueue /></div> : null}
 
       <div className="grid grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] items-start gap-[18px] nav-drawer:grid-cols-1">
         {/* Below the nav-drawer breakpoint the two columns dissolve and `order` restores the phone board's sequence. */}

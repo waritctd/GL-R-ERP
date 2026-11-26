@@ -475,6 +475,7 @@ export const API_ROUTES = {
   },
   // Delivery rounds (V236): one request per round from sales to the warehouse; files ride on the round.
   deliveryRequests: {
+    awaitingInvoice: '/api/delivery-requests/awaiting-invoice',
     list: (ticketId) => `/api/tickets/${ticketId}/delivery-requests`,
     one: (rid) => `/api/delivery-requests/${rid}`,
     files: (rid) => `/api/delivery-requests/${rid}/files`,

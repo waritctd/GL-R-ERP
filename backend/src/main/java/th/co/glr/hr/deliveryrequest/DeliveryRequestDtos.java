@@ -76,6 +76,13 @@ public final class DeliveryRequestDtos {
 
     public record RoundResponse(RoundDto round) {}
 
+    /** One round waiting for its tax invoice. No money: the row only says which one and how urgent. */
+    public record InvoiceQueueItem(long roundId, long ticketId, int roundNo, String displayCode, String buyerName,
+                                   String projectName, String ownerName, Instant forwardedAt,
+                                   java.time.LocalDate requestedDate) {}
+
+    public record InvoiceQueueResponse(List<InvoiceQueueItem> items) {}
+
     public record CreateRequest(Long quotationId) {}
 
     /** {@code kind}: QUOTATION, DEPOSIT_NOTICE, REMAINING_INVOICE or IMPORT_REQUEST. */
@@ -87,10 +94,12 @@ public final class DeliveryRequestDtos {
     /** {@code reasonCodes}: ADDRESS_TAX_ID, PAYMENT_PROOF, DELIVERY_DATE_PLACE; {@code detail}: free text. One of the two is required. */
     public record ReturnRequest(List<String> reasonCodes, String detail) {}
 
-    /** {@code requestedDate}: when sales would like the goods delivered; null clears it, like the note. */
-    public record UpdateRequest(Long quotationId, String note, List<String> untickedDocs, java.time.LocalDate requestedDate) {
+    /** {@code requestedDate}: when sales would like the goods delivered; null keeps what is stored, so a save from an old
+     * screen never wipes it. {@code clearRequestedDate} true removes it. */
+    public record UpdateRequest(Long quotationId, String note, List<String> untickedDocs, java.time.LocalDate requestedDate,
+                                Boolean clearRequestedDate) {
         public UpdateRequest(Long quotationId, String note, List<String> untickedDocs) {
-            this(quotationId, note, untickedDocs, null);
+            this(quotationId, note, untickedDocs, null, null);
         }
     }
 }

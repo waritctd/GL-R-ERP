@@ -230,7 +230,13 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         assertThat(rounds.list(ticketId, issuer).rounds()).singleElement().satisfies(r -> assertThat(r.status()).isEqualTo("SENT"));
         jdbc.update("UPDATE hr.employee SET can_read_all_sales = FALSE WHERE employee_id = :id", Map.of("id", issuerId));
         refusal(() -> rounds.list(ticketId, issuer), HttpStatus.FORBIDDEN);
+        assertThat(rounds.invoiceQueue(issuer)).as("not queued until the warehouse forwards it").isEmpty();
         rounds.forward(rid, warehouse);
+        assertThat(rounds.invoiceQueue(issuer)).singleElement().satisfies(q -> assertThat(q.roundId()).isEqualTo(rid));
+        refusal(() -> rounds.invoiceQueue(warehouse), HttpStatus.FORBIDDEN);
+        refusal(() -> rounds.invoiceQueue(salesActor), HttpStatus.FORBIDDEN);
+        assertThat(jdbc.queryForObject("SELECT link FROM hr.notification WHERE employee_id = :e AND type = 'DELIVERY_REQUEST_FORWARDED'",
+            Map.of("e", issuerId), String.class)).isEqualTo("/tickets/" + ticketId + "?view=issue");
 
         // Only the holder, only the forwarded round of this order; a rep or the warehouse is refused.
         var pdf = new MockMultipartFile("file", "iv.pdf", "application/pdf", TaxInvoicePdfReaderTest.pdf(
@@ -663,8 +669,14 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
             ticket[i] = confirmedDeal();
             rid[i] = rounds.createDraft(ticket[i], null, salesActor).id();
             long draft = rid[i];
-            if (i == 2) refusal(() -> rounds.update(draft, new UpdateRequest(null, null, null, TODAY.minusDays(1)), salesActor), HttpStatus.BAD_REQUEST);
-            if (i == 2) rounds.update(rid[i], new UpdateRequest(null, null, null, TODAY.plusDays(3)), salesActor);
+            if (i == 2) refusal(() -> rounds.update(draft, new UpdateRequest(null, null, null, TODAY.minusDays(1), null), salesActor), HttpStatus.BAD_REQUEST);
+            if (i == 2) {
+                rounds.update(draft, new UpdateRequest(null, null, null, TODAY.plusDays(3), null), salesActor);
+                assertThat(rounds.update(draft, new UpdateRequest(null, "x", null), salesActor).requestedDate())
+                    .as("a save without the date keeps it").isEqualTo(TODAY.plusDays(3));
+                assertThat(rounds.update(draft, new UpdateRequest(null, null, null, null, true), salesActor).requestedDate()).isNull();
+                rounds.update(draft, new UpdateRequest(null, null, null, TODAY.plusDays(3), null), salesActor);
+            }
             rounds.send(rid[i], null, salesActor);
             rounds.forward(rid[i], warehouse);
             invoice(rid[i], "IV2611-9" + i, "1000", issuer);
@@ -693,6 +705,8 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         // An update without roundIds changes the fields only.
         trips.update(trip.id(), new th.co.glr.hr.deliverytrip.DeliveryTripDtos.TripRequest(TODAY.plusDays(1), "สายบางนา", "บ่าย", null, null, null), manager);
         assertThat(trips.home(manager).trips().get(0).rounds()).hasSize(3);
+        trips.update(trip.id(), new th.co.glr.hr.deliverytrip.DeliveryTripDtos.TripRequest(TODAY.plusDays(2), "สายบางนา", "บ่าย", null, null, null), manager);
+        assertThat(notices(salesActor.id(), "DELIVERY_TRIP")).as("one notice for the date change, not one per order").hasSize(4);
         trips.delay(trip.id(), rid[2], true, manager);
         var pressed = trips.deliver(trip.id(), manager);
         assertThat(pressed.results()).extracting(r -> r.roundId(), r -> r.delivered())
@@ -707,6 +721,8 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
 
         trips.delay(trip.id(), rid[1], true, manager);
         assertThat(trips.deliver(trip.id(), manager).trip().status()).isEqualTo("DONE");
+        assertThat(trips.home(manager).waiting()).as("a delivered order leaves the queue")
+            .extracting(r -> r.roundId()).doesNotContain(rid[0]);
         refusal(() -> trips.deliver(trip.id(), manager), HttpStatus.CONFLICT);
     }
 

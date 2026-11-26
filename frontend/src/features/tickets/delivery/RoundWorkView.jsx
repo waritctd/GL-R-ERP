@@ -22,7 +22,7 @@ export function RoundWorkView({ user, ticketId, onBack }) {
           {order ? <small className="text-xs text-text-muted">{[order.customerName, order.displayCode].filter(Boolean).join(' · ')}</small> : null}
         </div>
       </header>
-      <DeliveryRoundsPanel ticketId={ticketId} warehouseUserId={user.role === 'warehouse' ? user.id : null} dealless={user.role !== 'warehouse'} />
+      <DeliveryRoundsPanel ticketId={ticketId} warehouseUserId={user.role === 'warehouse' ? user.id : null} dealless={user.role !== 'warehouse'} pinInvoiceActions={false} />
     </div>
   );
 }
