@@ -121,6 +121,24 @@ public class NotificationEmailService {
         }
     }
 
+    /** Absolute portal URL for an in-app path, for links inside digest bodies. */
+    public String portalUrl(String path) {
+        return appBaseUrl + normalizeLink(clean(path));
+    }
+
+    /** Wraps already-escaped content HTML in the branded shell (digest mails build their own body). */
+    public String renderShell(String contentHtml) {
+        return wrapShell(contentHtml);
+    }
+
+    /** Sends a digest: branded shell around {@code contentHtml}. Synchronous; a transport failure is thrown so the
+     * caller can log it per mail and carry on with the rest. */
+    public void sendDigest(String to, List<String> cc, String subject, String contentHtml, String textBody) {
+        mailer.send(new Mailer.OutgoingEmail(to, cc, clean(subject) + subjectSuffix, wrapShell(contentHtml),
+            textBody + "\n\nGL&R Portal\n— อีเมลฉบับนี้ส่งจากระบบอัตโนมัติ กรุณาอย่าตอบกลับ",
+            logoInlineImages, List.of()));
+    }
+
     /**
      * One reader's "มีอะไรใหม่" release-notice email (ReleaseNoticeDelivery). SYNCHRONOUS and THROWING, unlike
      * {@link #send}: the caller records the per-person outcome (sent / failed) in the audit log, so a provider
@@ -370,7 +388,7 @@ public class NotificationEmailService {
 
     /** Escapes the five HTML-significant characters. No third-party dependency - this is the entire surface a
      * plain-text notification body/name/link can hit. Run BEFORE converting "\n" to "<br>". */
-    private String escapeHtml(String value) {
+    public String escapeHtml(String value) {
         if (value == null || value.isEmpty()) {
             return "";
         }

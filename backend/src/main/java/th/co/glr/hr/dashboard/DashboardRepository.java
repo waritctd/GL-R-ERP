@@ -240,12 +240,16 @@ public class DashboardRepository {
      * commission recorded yet. Close-ready deals owe nothing, so they add nothing to an outstanding total.
      * {@code dashboard/money-cases.json} pins this against the JS rule.
      */
-    private static final String ACCOUNT_HAS_TODO = "("
+    /** The money half of {@link #ACCOUNT_HAS_TODO}: a deposit or final payment to take, or an overdue balance.
+     * Also what the weekly account digest lists. Needs {@code :bypassPolicies} bound to DepositPolicy.NON_REQUIRED. */
+    public static final String ACCOUNT_MONEY_TODO = "("
         + "(t.status = 'quotation_issued' AND ("
         + "t.payment_status IN ('DEPOSIT_NOTICE_ISSUED', 'AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID') "
         + "OR (t.deposit_policy IN (:bypassPolicies) AND (t.payment_status IS NULL OR t.payment_status = 'CUSTOMER_CONFIRMED')))) "
-        + "OR (t.sales_stage = 'CLOSED_PAID' AND NOT " + TicketRepository.hasRecordedCommission("t.ticket_id") + ") "
         + "OR " + TicketRepository.paymentOverduePredicate("t.ticket_id") + ")";
+
+    private static final String ACCOUNT_HAS_TODO = "(" + ACCOUNT_MONEY_TODO
+        + " OR (t.sales_stage = 'CLOSED_PAID' AND NOT " + TicketRepository.hasRecordedCommission("t.ticket_id") + "))";
 
     /** /finance's คงค้างรวม: outstanding on every deal in account's list scope that has an account to-do. */
     public java.math.BigDecimal financeOutstanding() {

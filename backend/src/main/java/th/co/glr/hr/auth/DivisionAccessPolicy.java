@@ -91,7 +91,7 @@ public final class DivisionAccessPolicy {
         return position.replaceAll("\\s+", "").contains(needle);
     }
 
-    private static String divisionCode(EmployeeLoginRecord employee) {
+    public static String divisionCode(EmployeeLoginRecord employee) {
         if (employee == null) {
             return "";
         }

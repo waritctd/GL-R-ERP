@@ -11341,6 +11341,12 @@ export const api = {
       fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
     },
   },
+  weeklyDigest: {
+    async test(payload = {}) {
+      void payload;
+      throw new Error('weeklyDigest.test is not supported in mock mode - run against the real backend');
+    },
+  },
   activityLog: {
     async list(params = {}) {
       void params;
