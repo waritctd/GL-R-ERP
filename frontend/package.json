@@ -1,7 +1,7 @@
 {
   "name": "glr-hr-react",
   "private": true,
-  "version": "2.13.0",
+  "version": "2.12.1",
   "type": "module",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
