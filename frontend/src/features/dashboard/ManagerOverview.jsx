@@ -15,7 +15,7 @@ import { PipelineImportDialog } from '../salesBoard/PipelineImportDialog.jsx';
 import { dayLineLabel, timeLabel, weekStartIso } from '../salesBoard/visitWeek.js';
 import { Figure, failed, moneySum } from './dashboardParts.jsx';
 import { InsightLanding } from './InsightSwitch.jsx';
-import { daysSince, nextMondayLabel } from './repToday.js';
+import { daysSince } from './repToday.js';
 import { ReportBlock, Row } from './repTodayParts.jsx';
 import { bangkokDay, dayMonth, weekRange } from './weeklyReportParts.jsx';
 
@@ -246,7 +246,7 @@ function ManagerToday({ user, employee, switcher, panelProps }) {
         <Panel title="รายงานสัปดาห์ของทีม">
           {failed(reportQuery) ? <Failed /> : !report ? <Skeleton height={140} /> : (
             <div className="grid gap-4">
-              <ReportBlock team rep={teamRep} nextMonday={nextMondayLabel(todayIso)} />
+              <ReportBlock team rep={teamRep} />
               <dl className="m-0 grid grid-cols-4 gap-x-6 border-t border-border-subtle pt-3 nav-drawer:grid-cols-2 mobile:grid-cols-1 mobile:divide-y mobile:divide-border mobile:[&>div]:py-2.5">
                 <Figure label="รับชำระแล้วสัปดาห์นี้" value={formatMoney(week?.received ?? 0)} caption={`จากประมาณการสัปดาห์ ${formatMoney((week?.received ?? 0) + weekOpen)}`} />
                 <Figure label="คาดว่าจะรับอีกสัปดาห์นี้" value={formatMoney(weekOpen)} caption={`ถึง${dayLineLabel(addDaysIso(thisMonday, 4))}`} />

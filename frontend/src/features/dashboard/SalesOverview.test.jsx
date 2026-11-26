@@ -193,7 +193,7 @@ describe('SalesOverview', () => {
     await screen.findByText('9 จาก 11 รายการ ครบถ้วน');
     expect(screen.getByText('4 จาก 5 งาน')).toBeTruthy();
     expect(screen.getByText('5 จาก 6 นัด')).toBeTruthy();
-    expect(screen.getByText(/ระบบจะสรุปรายงานสัปดาห์นี้ให้แก่ผู้จัดการฝ่ายขาย จันทร์ \d+ \S+ 06:00 น\./)).toBeTruthy();
+    expect(screen.getByText('ระบบสรุปรายงานสัปดาห์นี้ให้แก่ผู้จัดการฝ่ายขายจากข้อมูลที่คุณบันทึก อัปเดตทันทีทุกครั้งที่บันทึก')).toBeTruthy();
     expectFigure('ยังไม่นับในประมาณการ', '฿58,000.00');
     expect(screen.queryByText(/ควรตามต่อ|งานเงียบ|ดีล/)).toBeNull();
   });

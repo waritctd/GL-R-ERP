@@ -189,7 +189,7 @@ export function WeeklyReport({ user, showToast }) {
         <h2 className="m-0 text-xl font-extrabold">{title}</h2>
         <WeekStepper weeks={weeks} weekStart={weekStart} currentWeek={currentWeek} onChange={setWeek} />
         <p className="m-0 text-xs text-text-muted">
-          ระบบจัดทำรายงานนี้จากข้อมูลงาน ใบเสนอราคา นัดเข้าพบ และยอดรับชำระที่ฝ่ายบัญชีบันทึกในพอร์ทัล จึงไม่ต้องจัดทำไฟล์หรือส่งอีเมล
+          ระบบจัดทำรายงานนี้จากข้อมูลงาน ใบเสนอราคา นัดเข้าพบ และยอดรับชำระที่ฝ่ายบัญชีบันทึกในพอร์ทัล
         </p>
       </header>
 

@@ -27,7 +27,7 @@ function Measure({ label, done, total, unit }) {
  * รายงานสัปดาห์ของคุณ (board TD1): how much of the report's data is complete — payment dates of ordered jobs and visit
  * results due — a segmented bar of both, and what the rep entered this week. `rep` is the weekly report's row for the rep.
  */
-export function ReportBlock({ rep, nextMonday, team = false }) {
+export function ReportBlock({ rep, team = false }) {
   const total = rep.ordersOpen + rep.visitsDue;
   const done = rep.ordersWithDate + rep.visitsDueWithResult;
   const segments = [
@@ -65,7 +65,7 @@ export function ReportBlock({ rep, nextMonday, team = false }) {
             </div>
           ))}
         </dl>
-        <p className="m-0 text-xs text-text-muted">ระบบจะสรุปรายงานสัปดาห์นี้{team ? '' : 'ให้แก่ผู้จัดการฝ่ายขาย'} {nextMonday} 06:00 น.</p>
+        <p className="m-0 text-xs text-text-muted">{team ? 'ระบบสรุปรายงานสัปดาห์นี้จากข้อมูลที่ทีมบันทึก อัปเดตทันทีทุกครั้งที่บันทึก' : 'ระบบสรุปรายงานสัปดาห์นี้ให้แก่ผู้จัดการฝ่ายขายจากข้อมูลที่คุณบันทึก อัปเดตทันทีทุกครั้งที่บันทึก'}</p>
       </div>
     </div>
   );
