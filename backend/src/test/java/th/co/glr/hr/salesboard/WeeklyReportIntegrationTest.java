@@ -104,6 +104,22 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
         item(ownRow, "1000");
         round(ownRow, "2026-11-26");
         expected(ownRow, "ON_DELIVERY", "50", "2026-11-23");
+        long noEta = importedDeal(); // a round still to come with no ETA: no date, no estimate
+        jdbc.update("UPDATE sales.shipment_round SET eta_on = NULL WHERE shipment_round_id IN (SELECT l.shipment_round_id"
+            + " FROM sales.shipment_lot l JOIN sales.import_request ir USING (import_request_id) WHERE ir.ticket_id = :t)",
+            Map.of("t", noEta));
+        long superseded = importedDeal(); // only a SUPERSEDED import request: its rounds say nothing
+        jdbc.update("UPDATE sales.import_request SET status = 'SUPERSEDED' WHERE ticket_id = :t", Map.of("t", superseded));
+        long partly = importedDeal(); // its round arrived, but a second line is in no round yet
+        jdbc.update("UPDATE sales.shipment_round SET arrived_on = DATE '2026-11-20' WHERE shipment_round_id IN (SELECT"
+            + " l.shipment_round_id FROM sales.shipment_lot l JOIN sales.import_request ir USING (import_request_id)"
+            + " WHERE ir.ticket_id = :t)", Map.of("t", partly));
+        item(partly, "500");
+        jdbc.update("""
+            INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, qty)
+            SELECT ir.import_request_id, (SELECT MAX(item_id) FROM sales.ticket_item WHERE ticket_id = :t), 2, 'c2', 1
+              FROM sales.import_request ir WHERE ir.ticket_id = :t
+            """, Map.of("t", partly));
         long addOn = deliveredDeal();
         jdbc.update("UPDATE sales.ticket SET parent_ticket_id = :p, child_kind = 'ADD_ON' WHERE ticket_id = :t",
             Map.of("p", ownRow, "t", addOn)); // the root's own row may already cover it
@@ -121,6 +137,9 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
         assertThat(byId.get(deposit).estimate().amount()).isEqualByComparingTo("107");
         assertThat(byId.get(onDelivery).estimate().week()).as("a past date is due this week").isEqualTo(WEEK);
         assertThat(byId.get(addOn).estimate()).isNull();
+        assertThat(byId.get(noEta).estimate()).isNull();
+        assertThat(byId.get(superseded).estimate()).isNull();
+        assertThat(byId.get(partly).estimate()).as("not every line has arrived, and one has no date").isNull();
         assertThat(byId.get(usd).estimate()).as("THB only").isNull();
         assertThat(byId.get(onDelivery).slipped()).as("the rep never gave that date").isFalse();
         assertThat(byId.get(delivered).estimate().amount()).as("payable 1070 less 70 received").isEqualByComparingTo("1000");
@@ -161,6 +180,13 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
 
         assertThat(rep.visitsDue()).isEqualTo(1);
         assertThat(rep.visitsDueWithResult()).isEqualTo(1);
+    }
+
+    private long importedDeal() {
+        long id = stagedDeal("PROCUREMENT");
+        item(id, "1000");
+        round(id, "2026-12-01");
+        return id;
     }
 
     private long deliveredDeal() {
