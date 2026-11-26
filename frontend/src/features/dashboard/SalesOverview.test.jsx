@@ -208,6 +208,13 @@ describe('SalesOverview', () => {
     expect(screen.getByTestId('location-search').textContent).toBe('?tab=money&add=expected');
   });
 
+  it('an order the system estimated is dated: no ระบุวันที่ row for it', async () => {
+    setUp({ orders: [order({ estimate: { kind: 'ON_DELIVERY', amount: 58000, week: '2026-11-23' } })] });
+    renderOverview();
+    await screen.findByTestId('today-group-money').catch(() => null);
+    expect(screen.queryByTestId('today-row-undated-901')).toBeNull();
+  });
+
   it('a visit needs a result only after its day, or its time today; a time later today or none is not due yet', async () => {
     setUp({
       visits: [

@@ -64,7 +64,7 @@ function dealRow(deal, action, todayIso) {
 export function buildTodayRows({ worklist, orders, visits, returning, todayIso, nowHm }) {
   const rows = worklist.filter(({ action }) => groupOfAction(action.key)).map(({ deal, action }) => dealRow(deal, action, todayIso));
   const inRows = new Set(rows.map((r) => r.key));
-  orders.filter((o) => !o.nextPayment && o.outstanding > 0 && !inRows.has(`deal-${o.ticketId}`)).forEach((o) => rows.push({
+  orders.filter((o) => !o.nextPayment && !o.estimate && o.outstanding > 0 && !inRows.has(`deal-${o.ticketId}`)).forEach((o) => rows.push({
     key: `undated-${o.ticketId}`, group: 'money', name: o.projectName || o.customerName || o.title || o.code, code: o.code,
     to: `/tickets/${o.ticketId}`, reason: 'สั่งซื้อแล้ว ยังไม่ระบุวันคาดว่าจะรับเงิน', amount: formatMoney(o.outstanding),
     button: 'ระบุวันที่', act: { type: 'go', to: addExpectedPaymentPath(o.ticketId) },

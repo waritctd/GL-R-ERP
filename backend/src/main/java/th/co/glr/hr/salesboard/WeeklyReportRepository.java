@@ -27,6 +27,10 @@ public class WeeklyReportRepository {
                        String salesStage, String lifecycle, Instant confirmedAt, BigDecimal value,
                        BigDecimal received) {}
 
+    /** What the estimate needs beyond the order row; null = none. {@code due}: delivery date + credit days. */
+    record EstimateFacts(long ticketId, String depositPolicy, BigDecimal noticeTotal, LocalDate noticeDate, LocalDate eta,
+                         boolean arrived, LocalDate due) {}
+
     record OpenPayment(long id, long ticketId, String kind, BigDecimal remaining, LocalDate week) {}
 
     /** One thing a rep did. {@code a} / {@code b}: the stage codes, the activity kind or the quotation number. */
@@ -178,5 +182,38 @@ public class WeeklyReportRepository {
             """, Map.of("ids", ticketIds),
             (rs, n) -> new OpenPayment(rs.getLong(1), rs.getLong(2), rs.getString(3), rs.getBigDecimal(4),
                 rs.getObject(5, LocalDate.class)));
+    }
+
+    /**
+     * Facts for the "system estimate" of lines 3-5, for tickets with NO OPEN or RECEIVED expected payment of their own,
+     * nor (for an add-on) on their root, whose row may already cover it: a rep's row is their word. THB orders only (an
+     * accepted quotation in another currency is skipped). The latest ISSUED deposit notice; the shipment rounds: arrived
+     * = every round has arrived, eta = the latest ETA of the rounds still to come; and the payment due date (delivery +
+     * credit days, else the delivery date itself).
+     */
+    List<EstimateFacts> estimateFacts(Set<Long> ticketIds) {
+        if (ticketIds.isEmpty()) {
+            return new ArrayList<>();
+        }
+        String notice = "(SELECT %s FROM sales.deposit_notice d WHERE d.ticket_id = t.ticket_id AND d.status = 'ISSUED'"
+            + " ORDER BY d.version DESC, d.deposit_notice_id DESC LIMIT 1)";
+        String rounds = " FROM sales.shipment_round sr JOIN sales.shipment_lot l ON l.shipment_round_id = sr.shipment_round_id"
+            + " JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id WHERE ir.ticket_id = t.ticket_id";
+        String notArrived = " AND sr.arrived_on IS NULL AND sr.received_on IS NULL";
+        return jdbc.query("SELECT t.ticket_id, t.deposit_policy, " + notice.formatted("d.total_payable")
+                + " AS notice_total, " + notice.formatted("d.issue_date") + " AS notice_date, (SELECT MAX(sr.eta_on)" + rounds
+                + notArrived + ") AS eta, (EXISTS (SELECT 1" + rounds + ") AND NOT EXISTS (SELECT 1" + rounds + notArrived
+                + ")) AS arrived, COALESCE(" + TicketRepository.paymentDueDateScalarSql("t.ticket_id")
+                + ", (SELECT (MAX(dr.delivered_at) AT TIME ZONE 'Asia/Bangkok')::date FROM sales.delivery_record dr"
+                + " WHERE dr.ticket_id = t.ticket_id)) AS due"
+                + " FROM sales.ticket t WHERE t.ticket_id IN (:ids) AND NOT EXISTS (SELECT 1 FROM sales.expected_payment ep"
+                + " WHERE ep.status IN ('OPEN', 'RECEIVED') AND (ep.ticket_id = t.ticket_id"
+                + " OR (t.child_kind = 'ADD_ON' AND ep.ticket_id = t.parent_ticket_id)))"
+                + " AND NOT EXISTS (SELECT 1 FROM sales.quotation q WHERE q.ticket_id = t.ticket_id"
+                + " AND q.doc_status = 'ACCEPTED' AND COALESCE(q.currency, 'THB') <> 'THB')",
+            Map.of("ids", ticketIds),
+            (rs, n) -> new EstimateFacts(rs.getLong("ticket_id"), rs.getString("deposit_policy"),
+                rs.getBigDecimal("notice_total"), rs.getObject("notice_date", LocalDate.class),
+                rs.getObject("eta", LocalDate.class), rs.getBoolean("arrived"), rs.getObject("due", LocalDate.class)));
     }
 }

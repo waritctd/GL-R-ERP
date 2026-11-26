@@ -125,7 +125,7 @@ export function WeeklyReport({ user, showToast }) {
   const pendingVisits = visits.filter((v) => visitIsDue(v, todayIso));
 
   // รายการที่ควรติดตาม: only what has a button that opens the fix.
-  const undated = orders.filter((o) => !o.nextPayment && o.outstanding > 0);
+  const undated = orders.filter((o) => !o.nextPayment && !o.estimate && o.outstanding > 0);
   const slipped = orders.filter((o) => o.slipped && o.nextPayment);
   const items = [];
   if (undated.length) {

@@ -13,19 +13,24 @@ public final class WeeklyReportDtos {
      * earlier weeks; past weeks carry only {@code received}. */
     public record WeeklyLedgerWeek(LocalDate weekStart, BigDecimal received, BigDecimal deliveredAwaiting,
                              BigDecimal deliveriesScheduled, BigDecimal depositsExpected, BigDecimal slipped,
-                             boolean isCurrent, boolean isPast) {}
+                             BigDecimal estimated, boolean isCurrent, boolean isPast) {}
 
     /** The month holding the report week's Thursday. {@code total} = received + the three OPEN buckets. */
     public record WeeklyLedger(String month, List<WeeklyLedgerWeek> weeks, BigDecimal received, BigDecimal deliveredAwaiting,
-                         BigDecimal deliveriesScheduled, BigDecimal depositsExpected, BigDecimal total) {}
+                         BigDecimal deliveriesScheduled, BigDecimal depositsExpected, BigDecimal total,
+                         BigDecimal estimated) {}
 
     /** The earliest OPEN expected payment of an order; {@code amount} is what is still to come. */
     public record WeeklyNextPayment(long id, String kind, BigDecimal amount, LocalDate week) {}
 
+    /** The system's guess for an order with no expected payment of the rep's own; {@code kind} DEPOSIT, ON_DELIVERY or
+     * BALANCE (the ledger line it feeds), {@code week} the Monday it is expected (before the current week = slipped). */
+    public record WeeklyEstimate(String kind, BigDecimal amount, LocalDate week) {}
+
     public record WeeklyOrderRow(long ticketId, String code, String title, String customerName, String projectName,
                            long ownerId, String ownerName, String salesStage, Instant orderConfirmedAt,
                            BigDecimal value, BigDecimal received, BigDecimal outstanding, WeeklyNextPayment nextPayment,
-                           boolean slipped) {}
+                           WeeklyEstimate estimate, boolean slipped) {}
 
     public record WeeklyRepRow(long ownerId, String name, int newDeals, int stageMoves, int quotationsIssued,
                          int ordersConfirmed, int lost, int visitsDone, int visitsPlanned, int visitsDue,

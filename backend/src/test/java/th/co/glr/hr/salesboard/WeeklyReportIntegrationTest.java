@@ -89,6 +89,53 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
     }
 
     @Test
+    void estimatesFillLines3To5ForJobsWithoutARepRow_andARepRowWins() {
+        long deposit = stagedDeal("ORDER_RECEIVED");
+        notice(deposit, "2026-11-18", "107");
+        long onDelivery = stagedDeal("PROCUREMENT");
+        item(onDelivery, "1000");
+        round(onDelivery, "2026-11-12"); // ETA + 7 days is before the current week: lands in it, but is no slip
+        long delivered = stagedDeal("DELIVERED");
+        item(delivered, "1000");
+        jdbc.update("INSERT INTO sales.delivery_record (ticket_id, source, delivered_at, delivered_by) VALUES (:t, 'WAREHOUSE',"
+            + " '2026-11-24T05:00:00Z', :by)", Map.of("t", delivered, "by", salesActor.id()));
+        receipt(delivered, "70", "2026-11-24T03:00:00Z", "RE-EST");
+        long ownRow = stagedDeal("PROCUREMENT");
+        item(ownRow, "1000");
+        round(ownRow, "2026-11-26");
+        expected(ownRow, "ON_DELIVERY", "50", "2026-11-23");
+        long addOn = deliveredDeal();
+        jdbc.update("UPDATE sales.ticket SET parent_ticket_id = :p, child_kind = 'ADD_ON' WHERE ticket_id = :t",
+            Map.of("p", ownRow, "t", addOn)); // the root's own row may already cover it
+        long usd = deliveredDeal();
+        jdbc.update("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, total_amount, recipient_type, currency, issued_at, accepted_at)
+            VALUES (:t, 'QT-USD-' || :t, :by, 'ACCEPTED', 1000, 'BUYER', 'USD', now(), now())
+            """, Map.of("t", usd, "by", salesActor.id()));
+
+        WeeklyReport r = service.report(salesActor, WEEK, null);
+
+        var byId = new java.util.HashMap<Long, WeeklyOrderRow>();
+        r.orders().forEach(o -> byId.put(o.ticketId(), o));
+        assertThat(byId.get(deposit).estimate().kind()).isEqualTo("DEPOSIT");
+        assertThat(byId.get(deposit).estimate().amount()).isEqualByComparingTo("107");
+        assertThat(byId.get(onDelivery).estimate().week()).as("a past date is due this week").isEqualTo(WEEK);
+        assertThat(byId.get(addOn).estimate()).isNull();
+        assertThat(byId.get(usd).estimate()).as("THB only").isNull();
+        assertThat(byId.get(onDelivery).slipped()).as("the rep never gave that date").isFalse();
+        assertThat(byId.get(delivered).estimate().amount()).as("payable 1070 less 70 received").isEqualByComparingTo("1000");
+        assertThat(byId.get(ownRow).estimate()).isNull();
+        var l = r.ledger();
+        assertThat(l.depositsExpected()).isEqualByComparingTo("107");
+        assertThat(l.deliveriesScheduled()).as("1070 estimated + 50 of the rep's own").isEqualByComparingTo("1120");
+        assertThat(l.deliveredAwaiting()).isEqualByComparingTo("1000");
+        assertThat(l.estimated()).isEqualByComparingTo("2177");
+        assertThat(l.weeks().stream().filter(w -> w.isCurrent()).findFirst().orElseThrow().slipped())
+            .isEqualByComparingTo("0");
+        assertThat(r.reps().get(0).ordersWithDate()).isEqualTo(4);
+    }
+
+    @Test
     void scope_salesReadsOnlyOwn_managerReadsTeamOrOneRep() {
         assertThat(refusal(() -> service.report(salesActor, WEEK, otherSalesActor.id()), HttpStatus.FORBIDDEN))
             .isNotNull();
@@ -114,6 +161,53 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
 
         assertThat(rep.visitsDue()).isEqualTo(1);
         assertThat(rep.visitsDueWithResult()).isEqualTo(1);
+    }
+
+    private long deliveredDeal() {
+        long id = stagedDeal("DELIVERED");
+        item(id, "1000");
+        jdbc.update("INSERT INTO sales.delivery_record (ticket_id, source, delivered_at, delivered_by) VALUES (:t, 'WAREHOUSE',"
+            + " '2026-11-24T05:00:00Z', :by)", Map.of("t", id, "by", salesActor.id()));
+        return id;
+    }
+
+    private long stagedDeal(String stage) {
+        long id = confirmedDeal("2026-11-17T03:00:00Z");
+        jdbc.update("UPDATE sales.ticket SET sales_stage = :s WHERE ticket_id = :t", Map.of("s", stage, "t", id));
+        return id;
+    }
+
+    private void notice(long ticketId, String issueDate, String total) {
+        jdbc.update("""
+            INSERT INTO sales.deposit_notice (ticket_id, version, status, issue_date, customer_name, deposit_percent,
+                subtotal, deposit_amount, vat_percent, vat_amount, total_payable)
+            VALUES (:t, 1, 'ISSUED', :d, 'x', 0.3, 100, 100, 0.07, 7, :total)
+            """, Map.of("t", ticketId, "d", LocalDate.parse(issueDate), "total", new BigDecimal(total)));
+    }
+
+    private void item(long ticketId, String price) {
+        jdbc.update("INSERT INTO sales.ticket_item (ticket_id, brand, qty, qty_from_stock, approved_price) VALUES (:t, 'B', 1, 0, :p)",
+            Map.of("t", ticketId, "p", new BigDecimal(price)));
+    }
+
+    /** An import request with one line and a shipment round carrying it, ETA as given. */
+    private void round(long ticketId, String eta) {
+        long itemId = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId), Long.class);
+        long factory = jdbc.queryForObject("INSERT INTO price_catalog.factories (name, country, default_currency) VALUES ('F' || :t, 'IT', 'EUR')"
+            + " RETURNING factory_id", Map.of("t", ticketId), Long.class);
+        long req = jdbc.queryForObject("""
+            INSERT INTO sales.import_request (ticket_id, factory_id, brand, factory_name, version, status, doc_number, issue_date, import_step,
+                import_step_at, first_issued_date)
+            VALUES (:t, :f, 'B', 'F', 1, 'ISSUED', :n, CURRENT_DATE, 'ORDERED', CURRENT_DATE, CURRENT_DATE) RETURNING import_request_id
+            """, Map.of("t", ticketId, "f", factory, "n", "IR-" + ticketId), Long.class);
+        long line = jdbc.queryForObject("""
+            INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, qty)
+            VALUES (:r, :i, 1, 'c', 1) RETURNING import_request_item_id
+            """, Map.of("r", req, "i", itemId), Long.class);
+        long sr = jdbc.queryForObject("INSERT INTO sales.shipment_round (source, import_step, eta_on) VALUES ('PORTAL', 'ORDERED', :e)"
+            + " RETURNING shipment_round_id", Map.of("e", LocalDate.parse(eta)), Long.class);
+        jdbc.update("INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty) VALUES (:s, :r, :l, 1)",
+            Map.of("s", sr, "r", req, "l", line));
     }
 
     private long confirmedDeal(String confirmedAt) {
