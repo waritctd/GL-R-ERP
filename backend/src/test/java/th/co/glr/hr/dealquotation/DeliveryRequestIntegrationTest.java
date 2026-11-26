@@ -649,6 +649,60 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         assertThat(notices(warehouseEmployeeId, "DELIVERY_REQUEST_FORWARDED")).as("the bell still leaves the actor out").isEmpty();
     }
 
+    @Test
+    void trip_isTheWarehouseManagersOnly_deliversWhatCanLeave_leavesTheDelayedAndBlockedOnes_andSalesSeesThePlan() throws Exception {
+        EmployeeRepository employees = new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc),
+            new EmployeeCodeGenerator(jdbc));
+        UserPrincipal manager = actor(createEmployee(employees, "หัวหน้าคลัง รอบส่ง", "wh-mgr-trip@glr.co.th", "WH", "คลังสินค้า", "ผู้จัดการ"), "warehouse");
+        UserPrincipal issuer = issuer("issuer-trip@glr.co.th");
+        var trips = transactional(new th.co.glr.hr.deliverytrip.DeliveryTripService(new th.co.glr.hr.deliverytrip.DeliveryTripRepository(jdbc),
+            rounds, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP)));
+        long[] rid = new long[3];
+        long[] ticket = new long[3];
+        for (int i = 0; i < 3; i++) {
+            ticket[i] = confirmedDeal();
+            rid[i] = rounds.createDraft(ticket[i], null, salesActor).id();
+            rounds.send(rid[i], null, salesActor);
+            rounds.forward(rid[i], warehouse);
+            invoice(rid[i], "IV2611-9" + i, "1000", issuer);
+        }
+        // Only the first order's goods are in the warehouse.
+        jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'GOODS_RECEIVED' WHERE ticket_id = :t", Map.of("t", ticket[0]));
+        new TicketRepository(jdbc).addEvent(ticket[0], salesActor.id(), "เจ้าของ", "GOODS_RECEIVED", null, null, null);
+
+        assertThat(trips.home(manager).waiting()).extracting(r -> r.roundId()).contains(rid[0], rid[1], rid[2]);
+        refusal(() -> trips.home(warehouse), HttpStatus.FORBIDDEN);
+        refusal(() -> trips.home(salesActor), HttpStatus.FORBIDDEN);
+        var all = List.of(rid[0], rid[1], rid[2]);
+        refusal(() -> trips.create(new th.co.glr.hr.deliverytrip.DeliveryTripDtos.TripRequest(TODAY.minusDays(1), "สายบางนา", null, null, null, all), manager),
+            HttpStatus.BAD_REQUEST);
+        var request = new th.co.glr.hr.deliverytrip.DeliveryTripDtos.TripRequest(TODAY.plusDays(1), "สายบางนา", "เช้า", null, null, all);
+        var trip = trips.create(request, manager);
+        assertThat(trips.home(manager).waiting()).extracting(r -> r.roundId()).doesNotContain(rid[0], rid[1], rid[2]);
+        refusal(() -> trips.create(request, manager), HttpStatus.CONFLICT);
+        assertThat(rounds.list(ticket[0], salesActor).rounds().get(0).trip()).satisfies(p -> {
+            assertThat(p.state()).isEqualTo("PLANNED");
+            assertThat(p.deliveryDate()).isEqualTo(TODAY.plusDays(1));
+        });
+        assertThat(notices(salesActor.id(), "DELIVERY_TRIP")).hasSize(3);
+
+        trips.delay(trip.id(), rid[2], true, manager);
+        var pressed = trips.deliver(trip.id(), manager);
+        assertThat(pressed.results()).extracting(r -> r.roundId(), r -> r.delivered())
+            .containsExactly(org.assertj.core.groups.Tuple.tuple(rid[0], true), org.assertj.core.groups.Tuple.tuple(rid[1], false));
+        assertThat(pressed.results().get(1).reason()).isNotBlank();
+        assertThat(pressed.trip().status()).as("a blocked order keeps the trip open").isEqualTo("OPEN");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.delivery_record WHERE ticket_id IN (:a,:b)",
+            Map.of("a", ticket[1], "b", ticket[2]), Integer.class)).isZero();
+        assertThat(rounds.list(ticket[2], salesActor).rounds().get(0).trip().state()).isEqualTo("DELAYED");
+        assertThat(trips.home(manager).waiting()).filteredOn(r -> r.roundId() == rid[2]).singleElement().matches(r -> r.delayed());
+        refusal(() -> trips.cancel(trip.id(), manager), HttpStatus.CONFLICT);
+
+        trips.delay(trip.id(), rid[1], true, manager);
+        assertThat(trips.deliver(trip.id(), manager).trip().status()).isEqualTo("DONE");
+        refusal(() -> trips.deliver(trip.id(), manager), HttpStatus.CONFLICT);
+    }
+
     private void invoice(long rid, String number, String total, UserPrincipal issuer) throws Exception {
         rounds.attachTaxInvoice(rid, new MockMultipartFile("file", number + ".pdf", "application/pdf",
             TaxInvoicePdfReaderTest.pdf("No. " + number, "Grand Total " + total)), issuer);

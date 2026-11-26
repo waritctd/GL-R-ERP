@@ -30,6 +30,8 @@ export function userFromAuthResponse(response) {
     canSeeShowroomOrders: Boolean(response.canSeeShowroomOrders),
     canViewAs: Boolean(response.canViewAs),
     canViewPeopleInsights: Boolean(response.canViewPeopleInsights),
+    // The warehouse manager's own home and delivery trips. A hint: DeliveryTripService decides again.
+    canPlanDeliveries: Boolean(response.canPlanDeliveries),
     viewAs: response.viewAs ?? null,
   };
 }

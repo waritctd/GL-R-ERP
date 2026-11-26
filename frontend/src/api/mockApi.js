@@ -2380,6 +2380,7 @@ function authResponse(user) {
     canSeeShowroomOrders: user?.canSeeShowroomOrders === true,
     canViewAs: false,
     canViewPeopleInsights: ['ceo', 'hr'].includes(user?.role),
+    canPlanDeliveries: Boolean(user) && mockIsTripPlanner(user),
     viewAs: null,
   };
 }
@@ -4290,6 +4291,69 @@ function mockIsWarehouseManager(u) {
   return u.active && u.role === 'warehouse' && String(u.positionTh || '').replace(/\s+/g, '').startsWith('ผู้จัดการ');
 }
 
+// DeliveryTripService#requirePlanner: WarehouseStaff#managerRecipientIds (every warehouse person when nobody has the title).
+function mockIsTripPlanner(user) {
+  const staff = db.users.filter((u) => u.active && u.role === 'warehouse');
+  const managers = staff.filter(mockIsWarehouseManager);
+  return (managers.length ? managers : staff).some((u) => u.id === user.id);
+}
+
+const mockTrips = [];
+
+function mockPlanner() {
+  const user = requireSession();
+  if (user.role !== 'warehouse' || !mockIsTripPlanner(user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return user;
+}
+
+function mockTripRoundItem(round, state = null) {
+  const ticket = findTicketRaw(round.ticketId);
+  return {
+    roundId: round.id, ticketId: round.ticketId, roundNo: round.roundNo, status: round.status,
+    displayCode: mockRoundOrderRef(ticket).displayCode, customerName: ticket.customerName ?? null,
+    projectName: mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null, ownerName: ticket.createdByName ?? null,
+    note: round.note ?? null, sentAt: round.sentAt ?? null, forwardedAt: round.forwardedAt ?? null,
+    remaining: (round.lines ?? []).reduce((sum, l) => sum + mockRoundLineRemaining(round, l.itemId), 0),
+    delayed: state == null && mockTrips.some((t) => t.rows.some((r) => r.roundId === round.id && r.state === 'DELAYED')), state,
+  };
+}
+
+function mockTripDto(trip) {
+  const { rows, ...rest } = trip;
+  return { ...rest, rounds: rows.filter((r) => r.state !== 'REMOVED').map((r) => mockTripRoundItem(mockRoundOf(r.roundId), r.state)) };
+}
+
+// DeliveryRequestRepository#tripPlan: the PLANNED row, else the latest one.
+function mockTripPlan(roundId) {
+  const found = mockTrips.flatMap((t) => t.rows.filter((r) => r.roundId === roundId).map((r) => ({ t, r })))
+    .sort((a, b) => Number(b.r.state === 'PLANNED') - Number(a.r.state === 'PLANNED') || b.r.at - a.r.at)[0];
+  if (!found) return null;
+  const { t, r } = found;
+  return { state: r.state, deliveryDate: t.deliveryDate, route: t.route, timeSlot: t.timeSlot, vehicle: t.vehicle, note: t.note };
+}
+
+function mockOpenTrip(id) {
+  mockPlanner();
+  const trip = mockTrips.find((t) => t.id === Number(id));
+  if (!trip) fail('ไม่พบรอบส่งนี้', 404);
+  if (trip.status !== 'OPEN') fail('รอบส่งนี้ปิดแล้ว', 409);
+  return trip;
+}
+
+function mockTripSetRow(trip, roundId, state) {
+  const row = trip.rows.find((r) => r.roundId === roundId);
+  const at = Date.now();
+  if (row) Object.assign(row, { state, at });
+  else trip.rows.push({ roundId, state, at });
+}
+
+function mockTripFields(body) {
+  if (!body.deliveryDate) fail('ระบุวันที่ส่ง');
+  if (!body.route?.trim()) fail('ระบุสายส่ง');
+  const clean = (v) => v?.trim() || null;
+  return { deliveryDate: body.deliveryDate, route: body.route.trim(), timeSlot: clean(body.timeSlot), vehicle: clean(body.vehicle), note: clean(body.note) };
+}
+
 // TicketService#becomePrePortal: the flag, the deposit as ONE DEPOSIT receipt of source PRE_PORTAL (nothing when 0), and one
 // bell per person to account, sales manager, the warehouse manager (WarehouseStaff#isManager, else every warehouse
 // person) and every invoice issuer.
@@ -4442,6 +4506,7 @@ function mockRoundDto(round, ticket, user) {
     taxId: user.role === 'warehouse' ? null : buyer?.taxId ?? null,
     branch: user.role === 'warehouse' ? null : buyer?.branch ?? null,
     customerFromDeal: partyCustomerId == null,
+    trip: mockTripPlan(round.id),
     id: round.id, roundNo: round.roundNo, status: round.status, quotationId: round.quotationId ?? null,
     quotationNumber: quotation?.number ?? null, note: round.note ?? null,
     returnReasonCodes: round.returnReasonCodes ?? [], returnReasonText: round.returnReasonText ?? null,
@@ -17622,6 +17687,58 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     },
   },
 
+  // Mirrors DeliveryTripController + DeliveryTripService (deliverytrip/). No bells or email in the mock.
+  deliveryTrips: {
+    async home() {
+      mockPlanner();
+      const today = bangkokTodayIso();
+      const planned = new Set(mockTrips.flatMap((t) => t.rows.filter((r) => r.state === 'PLANNED').map((r) => r.roundId)));
+      mockTrips.forEach((t) => t.rows.filter((r) => r.state === 'DELIVERED').forEach((r) => planned.add(r.roundId)));
+      const free = mockDeliveryRequests.filter((r) => !planned.has(r.id)).map((r) => mockTripRoundItem(r));
+      return delay({
+        today,
+        toCheck: free.filter((r) => r.status === 'SENT'),
+        toInvoice: free.filter((r) => r.status === 'FORWARDED'),
+        waiting: free.filter((r) => r.status === 'INVOICED' && r.remaining > 0),
+        trips: mockTrips.filter((t) => t.status !== 'CANCELLED').map(mockTripDto),
+        routes: [...new Set(mockTrips.map((t) => t.route).reverse())].slice(0, 6),
+      });
+    },
+    async create(body) {
+      mockPlanner();
+      if (!body.roundIds?.length) fail('เลือกออเดอร์อย่างน้อย 1 รายการ');
+      const trip = { id: mockTrips.length + 1, ...mockTripFields(body), status: 'OPEN', rows: [] };
+      body.roundIds.forEach((rid) => mockTripSetRow(trip, rid, 'PLANNED'));
+      mockTrips.push(trip);
+      return delay(mockTripDto(trip));
+    },
+    async update(id, body) {
+      const trip = mockOpenTrip(id);
+      Object.assign(trip, mockTripFields(body));
+      trip.rows.filter((r) => r.state === 'PLANNED' && !body.roundIds.includes(r.roundId)).forEach((r) => mockTripSetRow(trip, r.roundId, 'REMOVED'));
+      body.roundIds.forEach((rid) => mockTripSetRow(trip, rid, 'PLANNED'));
+      return delay(mockTripDto(trip));
+    },
+    async delay(id, rid, delayed) {
+      const trip = mockOpenTrip(id);
+      mockTripSetRow(trip, Number(rid), delayed ? 'DELAYED' : 'PLANNED');
+      return delay(mockTripDto(trip));
+    },
+    async cancel(id) {
+      const trip = mockOpenTrip(id);
+      trip.rows.filter((r) => r.state === 'PLANNED').forEach((r) => mockTripSetRow(trip, r.roundId, 'REMOVED'));
+      trip.status = 'CANCELLED';
+      return delay(mockTripDto(trip));
+    },
+    // Marks the rows only: the real record-delivery rules live in TicketService.
+    async deliver(id) {
+      const trip = mockOpenTrip(id);
+      const results = trip.rows.filter((r) => r.state === 'PLANNED').map((r) => ({ roundId: r.roundId, delivered: true, reason: null }));
+      results.forEach((r) => mockTripSetRow(trip, r.roundId, 'DELIVERED'));
+      trip.status = 'DONE';
+      return delay({ trip: mockTripDto(trip), results });
+    },
+  },
   // Mirrors DeliveryRequestController + DeliveryRequestService (deliveryrequest/).
   deliveryRequests: {
     async list(ticketId) {

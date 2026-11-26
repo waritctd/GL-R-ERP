@@ -20,7 +20,7 @@ import { TaxInvoiceStep } from './TaxInvoiceStep.jsx';
 import { VoidInvoiceSheet } from './VoidInvoiceSheet.jsx';
 import { canRequestDelivery, deliveryRoundsQueryOptions, isDelivered, openRoundsOf, requestActionLabel } from './deliveryRoundsQuery.js';
 import { fileCaption, MAX_UPLOAD_BYTES, useFileOpener, returnReasonText, ROUND_STEPS, roundQtyText, stepState, thaiDateTime } from './deliveryRound.js';
-import { formatMoney } from '../../../utils/format.js';
+import { formatThaiDate, formatMoney } from '../../../utils/format.js';
 
 const OPEN = ['DRAFT', 'SENT', 'RETURNED', 'FORWARDED'];
 
@@ -178,6 +178,22 @@ function RoundFiles({ round, warehouse = null }) {
 }
 
 /** `warehouse`: { ticketId, userId } on the warehouse's own screen. */
+// The warehouse's plan for this round: what sales tells the customer. A delivered round shows its delivery instead.
+function TripPlan({ trip }) {
+  if (!trip || trip.state === 'DELIVERED') return null;
+  if (trip.state !== 'PLANNED') {
+    return <p role="status" className="m-0 rounded-md border border-border bg-warning-bg px-3 py-2 text-sm text-warning-dark" data-testid="trip-plan">เลื่อนส่ง · รอจัดรอบส่งใหม่</p>;
+  }
+  return (
+    <div role="status" className="rounded-md border border-border bg-surface px-3 py-2 text-sm" data-testid="trip-plan">
+      <span className="block text-text-muted">จะส่งถึงลูกค้า</span>
+      <b className="block text-lg">{formatThaiDate(trip.deliveryDate)}</b>
+      <b className="block">{trip.route}</b>
+      {[trip.timeSlot, trip.vehicle, trip.note].filter(Boolean).map((text) => <span key={text} className="block text-text-muted">{text}</span>)}
+    </div>
+  );
+}
+
 function OpenRound({ round, orderLabel, warehouse = null, onVoid = null, onRecord = null }) {
   const qty = roundQtyText(round);
   return (
@@ -186,6 +202,7 @@ function OpenRound({ round, orderLabel, warehouse = null, onVoid = null, onRecor
         {orderLabel}รอบส่งที่ {round.roundNo}
         {qty ? <span className="font-normal text-text-muted">{qty}</span> : null}
       </h3>
+      <TripPlan trip={round.trip} />
       {round.status === 'INVOICED' ? (
         <div role="status" className="rounded-md border border-success bg-success-bg px-3 py-2 text-sm text-text" data-testid="invoiced-callout">
           <b className="block text-base">ออกใบกำกับแล้ว ส่งของได้</b>
