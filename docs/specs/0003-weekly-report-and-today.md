@@ -20,7 +20,7 @@ Taken by this session while Ploy was away (Ploy: "any decision within yourself")
 | # | Decision | Why |
 |---|---|---|
 | D1 | Reuse `SalesBoardService.cashForMonth` for the five money lines. Add one read endpoint, `GET /api/sales/weekly-report`, for what does not exist yet. No migration. | The five lines are already computed and reviewed; the gap is the order list, the week's counts and completeness. |
-| D2 | The cutoff is a property, `app.sales.money-from` (default `2026-11-16`, empty = no cutoff). It applies in `CashRepository`, so the my-work and team-overview cash figures follow the same rule. | One rule for every money figure. A property keeps it reversible without a release. |
+| D2 | The cutoff is a property, `app.sales.money-from` (default `2026-11-16`, empty = no cutoff). It applies in `CashRepository`, so the my-work and team-overview cash figures follow the same rule, and in `DashboardRepository.cashReceivedByRep` (the CEO, manager and account เงินรับแล้ว). | One rule for every money figure. A property keeps it reversible without a release. |
 | D3 | An order's money counts when its confirmation time is on or after the cutoff (Bangkok midnight). The confirmation time is exactly what `TicketRepository.ORDER_CONFIRMED_AT_SQL` returns for the ticket; an add-on order with no confirmation event of its own uses its root's. No confirmation event means the money does not count (pre-portal orders, PRE_PORTAL deposits, receipts on unconfirmed deals): that is the ruling. | One definition of "order confirmed" in the codebase; no second rule to drift. |
 | D4 | Money lines are cash, VAT included, as stored (receipts and expected payments are both VAT-inclusive cash). Job values use `amountPayable`, also VAT-inclusive. Screens label money "รวม VAT". | One basis on every money figure of the report. |
 | D5 | A slip is an OPEN expected payment whose week is before the current Bangkok week (any month). The report's ledger is computed by the new endpoint, not by `CashMonth`: past weeks carry only money received; the current week carries its own OPEN rows plus every slip, each counted once; later weeks carry their own OPEN rows. Month total = received + still to come. There is no "moved N times": `expected_week` changes are not recorded. | `CashMonth.assemble` buckets by planned week and cannot carry a slip without double counting; no history exists without a migration. |
@@ -88,6 +88,6 @@ Each slice is end to end and shown running in the real app (demo profile, privat
 
 API changes touch both sides: `hrApi.js` + `routes.js` + `queryKeys.js`, a `mockApi.js` twin naming the Java class it mirrors, and the digests (`api-surface`, `response-fields`, `ui-reachable`).
 
-The cutoff property is empty in the test profile so existing cash tests keep their seeds; the new integration test sets it explicitly. The demo profile keeps the default, so the walk exercises the real rule.
+Integration tests hand-wire the repositories without a cutoff, so existing cash tests keep their seeds; the weekly report and dashboard money tests pass one explicitly. The demo profile keeps the default, so the walk exercises the real rule.
 
 Few, after the code. One integration test for the endpoint (scope, cutoff, slip, counts); revise the existing dashboard tests the rework breaks, and delete the ones for removed pieces. Contract digests regenerated.

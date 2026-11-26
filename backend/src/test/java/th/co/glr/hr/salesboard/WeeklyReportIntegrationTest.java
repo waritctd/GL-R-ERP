@@ -75,7 +75,8 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
     }
 
     @Test
-    void anOpenRowNoStageBucketTakesStillLandsByKind() {
+    void anUndeliveredOrdersRowsStayOutOfTheDeliveryLines() {
+        // CashRepository's stage/kind rules, as on the cash cards: at ORDER_RECEIVED nothing is delivered or scheduled.
         long id = confirmedDeal("2026-11-17T03:00:00Z");
         jdbc.update("UPDATE sales.ticket SET sales_stage = 'ORDER_RECEIVED' WHERE ticket_id = :t", Map.of("t", id));
         expected(id, "ON_DELIVERY", "400", "2026-11-23");
@@ -83,9 +84,8 @@ class WeeklyReportIntegrationTest extends AbstractDealQuotationSlice2Integration
 
         var ledger = service.report(salesActor, WEEK, null).ledger();
 
-        assertThat(ledger.deliveriesScheduled()).isEqualByComparingTo("400");
-        assertThat(ledger.deliveredAwaiting()).isEqualByComparingTo("50");
-        assertThat(ledger.total()).isEqualByComparingTo("450");
+        assertThat(ledger.deliveriesScheduled()).isEqualByComparingTo("0");
+        assertThat(ledger.deliveredAwaiting()).isEqualByComparingTo("0");
     }
 
     @Test

@@ -96,6 +96,8 @@ class DashboardMoneyTotalsIntegrationTest extends AbstractPostgresIntegrationTes
             .satisfies(row -> assertThat(row.amount()).isEqualByComparingTo("100"));
         assertThat(dashboard.cashReceivedByRep(month.minusMonths(1))).singleElement()
             .satisfies(row -> assertThat(row.amount()).isEqualByComparingTo("5000"));
+        // With the money-from cutoff (spec 0003 D2) an order never confirmed in the portal counts nothing.
+        assertThat(new DashboardRepository(jdbc, month.minusMonths(1)).cashReceivedByRep(month)).isEmpty();
     }
 
     // ── builders ────────────────────────────────────────────────────────────────────────────

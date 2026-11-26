@@ -117,10 +117,8 @@ public class WeeklyReportService {
             got[i] = got[i].add(r.received());
         }
         // A week before the current one carries no OPEN money: its rows are slips, counted once below.
-        // Every OPEN row lands in exactly one line: the stage buckets first, the rest by kind.
-        List<CashRepository.ExpectedWeekRow> inMonth = new ArrayList<>(cash.expectedByWeek(owner, first, last));
-        inMonth.addAll(cash.unbucketedOpenByWeek(owner, first, last));
-        for (CashRepository.ExpectedWeekRow r : inMonth) {
+        // OPEN rows follow CashRepository's stage/kind buckets, as on the my-work and team cash cards.
+        for (CashRepository.ExpectedWeekRow r : cash.expectedByWeek(owner, first, last)) {
             int i = mondays.indexOf(r.week());
             if (i >= 0 && !r.week().isBefore(currentMonday)) {
                 open[0][i] = open[0][i].add(r.deliveredAwaiting());
@@ -129,10 +127,7 @@ public class WeeklyReportService {
             }
         }
         BigDecimal[] slip = zeros(3);
-        List<CashRepository.ExpectedWeekRow> late = new ArrayList<>(
-            cash.expectedByWeek(owner, EPOCH, currentMonday.plusDays(2)));
-        late.addAll(cash.unbucketedOpenByWeek(owner, EPOCH, currentMonday.plusDays(2)));
-        for (CashRepository.ExpectedWeekRow r : late) {
+        for (CashRepository.ExpectedWeekRow r : cash.expectedByWeek(owner, EPOCH, currentMonday.plusDays(2))) {
             slip[0] = slip[0].add(r.deliveredAwaiting());
             slip[1] = slip[1].add(r.deliveriesScheduled());
             slip[2] = slip[2].add(r.depositsExpected());
