@@ -281,7 +281,9 @@ public class DeliveryRequestService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ต้องการให้ส่งต้องไม่เป็นวันย้อนหลัง");
         }
         rounds.updateDraft(rid, quotationId, note, validUnticked(round.ticketId(), request.untickedDocs()));
-        rounds.setRequestedDate(rid, request.requestedDate());
+        if (wanted != null || Boolean.TRUE.equals(request.clearRequestedDate())) {
+            rounds.setRequestedDate(rid, wanted);
+        }
         return toDto(rounds.findById(rid).orElseThrow(), s, true, false, false, VoidCtx.NONE);
     }
 

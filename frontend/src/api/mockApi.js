@@ -17797,7 +17797,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       round.note = payload?.note && String(payload.note).trim() ? String(payload.note).trim() : null;
       const wanted = payload?.requestedDate || null;
       if (wanted && wanted !== round.requestedDate && wanted < bangkokTodayIso()) fail('วันที่ต้องการให้ส่งต้องไม่เป็นวันย้อนหลัง');
-      round.requestedDate = wanted;
+      if (wanted || payload?.clearRequestedDate) round.requestedDate = wanted;
       if (Array.isArray(payload?.untickedDocs)) round.untickedDocs = mockRoundValidUnticked(ticket.id, payload.untickedDocs);
       return delay({ round: mockRoundDto(round, ticket, user) });
     },

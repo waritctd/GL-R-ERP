@@ -5,9 +5,13 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -100,8 +104,7 @@ public class DeliveryTripService {
         added.forEach(rid -> tell(rid, after, "กำหนดวันส่งสินค้าแล้ว", planText(after), actor));
         removed.forEach(rid -> tell(rid, after, "รอจัดรอบส่งใหม่", "นำออกจากรอบส่ง " + ThaiText.date(after.deliveryDate()), actor));
         if (!before.deliveryDate().equals(after.deliveryDate())) {
-            ids.stream().filter(planned::contains)
-                .forEach(rid -> tell(rid, after, "เปลี่ยนวันส่งสินค้า", planText(after), actor));
+            tellTogether(ids.stream().filter(planned::contains).toList(), after, "เปลี่ยนวันส่งสินค้า", planText(after), actor);
         }
         return after;
     }
@@ -214,18 +217,32 @@ public class DeliveryTripService {
     }
 
     private void tell(long roundId, Trip trip, String title, String detail, UserPrincipal actor) {
-        var to = trips.recipients(roundId);
-        Set<Long> ids = new LinkedHashSet<>();
-        for (Long id : new Long[] {to.ownerId(), to.keyerId(), to.requesterId()}) {
-            if (id != null && id != actor.id()) {
-                ids.add(id);
+        tellTogether(List.of(roundId), trip, title, detail, actor);
+    }
+
+    /** One notice per person, naming each of their orders among {@code roundIds}; it opens the first of them. */
+    private void tellTogether(List<Long> roundIds, Trip trip, String title, String detail, UserPrincipal actor) {
+        Map<Long, List<Long>> roundsOf = new LinkedHashMap<>();
+        Map<Long, String> names = new HashMap<>();
+        for (Long roundId : roundIds) {
+            var to = trips.recipients(roundId);
+            names.put(roundId, to.displayCode() + " · " + deliveryRequests.buyerNameOfRound(roundId));
+            Set<Long> people = new LinkedHashSet<>();
+            for (Long id : new Long[] {to.ownerId(), to.keyerId(), to.requesterId()}) {
+                if (id != null && id != actor.id()) {
+                    people.add(id);
+                }
             }
+            people.forEach(id -> roundsOf.computeIfAbsent(id, k -> new ArrayList<>()).add(roundId));
         }
-        String message = to.displayCode() + " · " + deliveryRequests.buyerNameOfRound(roundId) + " · " + detail;
-        long ticketId = trip.rounds().stream().filter(r -> r.roundId() == roundId).map(RoundItem::ticketId).findFirst()
-            .orElseGet(() -> trips.ticketIdOf(roundId));
-        ids.forEach(id -> notifications.notifyEmployeeAtLinkTitled(id, "DELIVERY_TRIP", title, message,
-            "/tickets/" + ticketId + "?tab=ship"));
+        roundsOf.forEach((person, theirs) -> {
+            long first = theirs.get(0);
+            long ticketId = trip.rounds().stream().filter(r -> r.roundId() == first).map(RoundItem::ticketId).findFirst()
+                .orElseGet(() -> trips.ticketIdOf(first));
+            String orders = theirs.stream().map(names::get).collect(Collectors.joining(", "));
+            notifications.notifyEmployeeAtLinkTitled(person, "DELIVERY_TRIP", title, orders + " · " + detail,
+                "/tickets/" + ticketId + "?tab=ship");
+        });
     }
 
     private static String planText(Trip t) {

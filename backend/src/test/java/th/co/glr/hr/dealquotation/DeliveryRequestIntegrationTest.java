@@ -663,8 +663,14 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
             ticket[i] = confirmedDeal();
             rid[i] = rounds.createDraft(ticket[i], null, salesActor).id();
             long draft = rid[i];
-            if (i == 2) refusal(() -> rounds.update(draft, new UpdateRequest(null, null, null, TODAY.minusDays(1)), salesActor), HttpStatus.BAD_REQUEST);
-            if (i == 2) rounds.update(rid[i], new UpdateRequest(null, null, null, TODAY.plusDays(3)), salesActor);
+            if (i == 2) refusal(() -> rounds.update(draft, new UpdateRequest(null, null, null, TODAY.minusDays(1), null), salesActor), HttpStatus.BAD_REQUEST);
+            if (i == 2) {
+                rounds.update(draft, new UpdateRequest(null, null, null, TODAY.plusDays(3), null), salesActor);
+                assertThat(rounds.update(draft, new UpdateRequest(null, "x", null), salesActor).requestedDate())
+                    .as("a save without the date keeps it").isEqualTo(TODAY.plusDays(3));
+                assertThat(rounds.update(draft, new UpdateRequest(null, null, null, null, true), salesActor).requestedDate()).isNull();
+                rounds.update(draft, new UpdateRequest(null, null, null, TODAY.plusDays(3), null), salesActor);
+            }
             rounds.send(rid[i], null, salesActor);
             rounds.forward(rid[i], warehouse);
             invoice(rid[i], "IV2611-9" + i, "1000", issuer);
@@ -693,6 +699,8 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         // An update without roundIds changes the fields only.
         trips.update(trip.id(), new th.co.glr.hr.deliverytrip.DeliveryTripDtos.TripRequest(TODAY.plusDays(1), "สายบางนา", "บ่าย", null, null, null), manager);
         assertThat(trips.home(manager).trips().get(0).rounds()).hasSize(3);
+        trips.update(trip.id(), new th.co.glr.hr.deliverytrip.DeliveryTripDtos.TripRequest(TODAY.plusDays(2), "สายบางนา", "บ่าย", null, null, null), manager);
+        assertThat(notices(salesActor.id(), "DELIVERY_TRIP")).as("one notice for the date change, not one per order").hasSize(4);
         trips.delay(trip.id(), rid[2], true, manager);
         var pressed = trips.deliver(trip.id(), manager);
         assertThat(pressed.results()).extracting(r -> r.roundId(), r -> r.delivered())
@@ -707,6 +715,8 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
 
         trips.delay(trip.id(), rid[1], true, manager);
         assertThat(trips.deliver(trip.id(), manager).trip().status()).isEqualTo("DONE");
+        assertThat(trips.home(manager).waiting()).as("a delivered order leaves the queue")
+            .extracting(r -> r.roundId()).doesNotContain(rid[0]);
         refusal(() -> trips.deliver(trip.id(), manager), HttpStatus.CONFLICT);
     }
 
