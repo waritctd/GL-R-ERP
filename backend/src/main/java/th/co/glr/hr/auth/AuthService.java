@@ -146,7 +146,8 @@ public class AuthService {
             employees.canIssueBillingNote(user.id()), !"import".equals(user.role()) && employees.canIssueTaxInvoice(user.id()),
             OversightReader.holder(user, employees::canReadAllSales),
             employees.canManageAllSalesDocuments(user), employees.canSeeShowroomOrders(user.id()), canViewAs,
-            canViewPeopleInsights(user), info);
+            canViewPeopleInsights(user),
+            WarehouseStaff.is(user) && WarehouseStaff.managerRecipientIds(employees).contains(user.id()), info);
     }
 
     /** ceo and hr see the page; so does a team head. A hint for the menu only: the endpoint decides again. */

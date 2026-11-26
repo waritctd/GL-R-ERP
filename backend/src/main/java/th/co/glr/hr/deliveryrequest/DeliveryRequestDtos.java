@@ -61,7 +61,13 @@ public final class DeliveryRequestDtos {
                            List<String> returnReasonCodes, String returnReasonText, String requestedByName,
                            Instant sentAt, String forwardedByName, Instant forwardedAt, InvoiceDto invoice,
                            List<LineDto> lines, List<FileDto> files, List<String> untickedDocs, ViewerDto viewer,
-                           String customerName, String taxId, String branch, boolean customerFromDeal) {}
+                           String customerName, String taxId, String branch, boolean customerFromDeal, TripPlanDto trip,
+                           java.time.LocalDate requestedDate) {}
+
+    /** The warehouse's plan for this round (V248), null when it was never on a trip. {@code state}: PLANNED, DELAYED,
+     * REMOVED or DELIVERED. */
+    public record TripPlanDto(String state, java.time.LocalDate deliveryDate, String route, String timeSlot,
+                              String vehicle, String note) {}
 
     /** {@code invoiceable}: what the order may still be invoiced for (payable minus confirmed invoices); null for the
      * warehouse and import, which never see money. */
@@ -81,5 +87,10 @@ public final class DeliveryRequestDtos {
     /** {@code reasonCodes}: ADDRESS_TAX_ID, PAYMENT_PROOF, DELIVERY_DATE_PLACE; {@code detail}: free text. One of the two is required. */
     public record ReturnRequest(List<String> reasonCodes, String detail) {}
 
-    public record UpdateRequest(Long quotationId, String note, List<String> untickedDocs) {}
+    /** {@code requestedDate}: when sales would like the goods delivered; null clears it, like the note. */
+    public record UpdateRequest(Long quotationId, String note, List<String> untickedDocs, java.time.LocalDate requestedDate) {
+        public UpdateRequest(Long quotationId, String note, List<String> untickedDocs) {
+            this(quotationId, note, untickedDocs, null);
+        }
+    }
 }

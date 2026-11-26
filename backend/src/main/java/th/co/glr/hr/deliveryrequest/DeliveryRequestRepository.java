@@ -33,7 +33,7 @@ public class DeliveryRequestRepository {
                       Instant sentAt, String forwardedByName, Instant forwardedAt, List<String> untickedDocs,
                       Long requestedById, String invoiceNumber, java.time.LocalDate invoiceDate, BigDecimal invoiceTotal,
                       BigDecimal recordedAmount, Long receiptId, Long invoiceAttachmentId, String invoicedByName,
-                      Instant invoicedAt) {}
+                      Instant invoicedAt, java.time.LocalDate requestedDate) {}
 
     /** One ticket_item's coverage facts for a new round (see {@link #coverage}). */
     public record Coverage(long itemId, String description, String unit, BigDecimal qty, BigDecimal remaining) {}
@@ -43,7 +43,7 @@ public class DeliveryRequestRepository {
                r.note, r.return_reason_codes, r.return_reason_text, %s AS requested_by_name, r.sent_at,
                %s AS forwarded_by_name, r.forwarded_at, r.unticked_docs, r.requested_by,
                r.invoice_number, r.invoice_date, r.invoice_total, r.recorded_amount, r.receipt_id,
-               r.invoice_attachment_id, %s AS invoiced_by_name, r.invoiced_at
+               r.invoice_attachment_id, %s AS invoiced_by_name, r.invoiced_at, r.requested_date
           FROM sales.delivery_request r
           LEFT JOIN sales.quotation q ON q.quotation_id = r.quotation_id
           LEFT JOIN hr.employee rb ON rb.employee_id = r.requested_by
@@ -91,6 +91,11 @@ public class DeliveryRequestRepository {
              WHERE delivery_request_id = :id
             """, new MapSqlParameterSource().addValue("id", id).addValue("q", quotationId).addValue("note", note)
                 .addValue("unticked", untickedDocs == null ? null : String.join(",", untickedDocs)));
+    }
+
+    public void setRequestedDate(long id, java.time.LocalDate date) {
+        jdbc.update("UPDATE sales.delivery_request SET requested_date = :d WHERE delivery_request_id = :id",
+            new MapSqlParameterSource().addValue("id", id).addValue("d", date));
     }
 
     public void markSent(long id, long by) {
@@ -146,6 +151,19 @@ public class DeliveryRequestRepository {
     public boolean hasDelivery(long id) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM sales.delivery_record WHERE delivery_request_id = :id)", Map.of("id", id), Boolean.class));
+    }
+
+    /** The latest trip row of a round: its PLANNED one when there is one. */
+    public DeliveryRequestDtos.TripPlanDto tripPlan(long roundId) {
+        return jdbc.query("""
+            SELECT x.state, d.delivery_date, d.route, d.time_slot, d.vehicle, d.note
+              FROM sales.delivery_trip_round x JOIN sales.delivery_trip d ON d.delivery_trip_id = x.delivery_trip_id
+              JOIN sales.delivery_request r ON r.delivery_request_id = x.delivery_request_id
+             WHERE x.delivery_request_id = :id AND (x.state <> 'PLANNED' OR r.status = 'INVOICED')
+             ORDER BY (x.state = 'PLANNED') DESC, x.updated_at DESC LIMIT 1
+            """, Map.of("id", roundId), (rs, n) -> new DeliveryRequestDtos.TripPlanDto(rs.getString("state"),
+                rs.getObject("delivery_date", java.time.LocalDate.class), rs.getString("route"), rs.getString("time_slot"),
+                rs.getString("vehicle"), rs.getString("note"))).stream().findFirst().orElse(null);
     }
 
     /** The expected-payment deltas stored at confirm (JSON text, null when none). */
@@ -460,6 +478,7 @@ public class DeliveryRequestRepository {
                 : List.of(unticked.split(",")), requestedBy, rs.getString("invoice_number"),
             invDate == null ? null : invDate.toLocalDate(), rs.getBigDecimal("invoice_total"),
             rs.getBigDecimal("recorded_amount"), receiptId, invoiceAttachmentId, rs.getString("invoiced_by_name"),
-            invoicedAt == null ? null : invoicedAt.toInstant());
+            invoicedAt == null ? null : invoicedAt.toInstant(),
+            rs.getObject("requested_date", java.time.LocalDate.class));
     }
 }

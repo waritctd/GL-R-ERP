@@ -26,6 +26,7 @@ const ChangePasswordModal = lazy(() => import('./features/auth/ChangePasswordMod
 const PeopleInsightsPage = lazy(() => import('./features/insights/PeopleInsightsPage.jsx').then(toDefault('PeopleInsightsPage')));
 const HrDashboard = lazy(() => import('./features/dashboard/HrDashboard.jsx').then(toDefault('HrDashboard')));
 const HrOverview = lazy(() => import('./features/dashboard/HrOverview.jsx').then(toDefault('HrOverview')));
+const WarehouseHome = lazy(() => import('./features/warehouse/WarehouseHome.jsx').then(toDefault('WarehouseHome')));
 const EmployeeDashboard = lazy(() => import('./features/dashboard/EmployeeDashboard.jsx').then(toDefault('EmployeeDashboard')));
 const SalesOverview = lazy(() => import('./features/dashboard/SalesOverview.jsx').then(toDefault('SalesOverview')));
 // CEO's exec-cockpit landing (docs/role-scoped-views.md).
@@ -301,7 +302,9 @@ export function App() {
               // Role-scoped views: each role's landing branches off `/` to its own Overview instead of the generic
               // EmployeeDashboard — this generalizes into a role -> Overview map as more roles ship their own (see
               // docs/role-scoped-views.md).
-              selfServiceLocked ? (
+              user.canPlanDeliveries && SALES_ENABLED ? (
+                <WarehouseHome />
+              ) : selfServiceLocked ? (
                 user.employeeId ? (
                   <EmployeeSelfService
                     user={user}

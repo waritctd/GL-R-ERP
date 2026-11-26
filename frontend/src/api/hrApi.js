@@ -937,6 +937,14 @@ export const api = {
   },
   // Delivery rounds (V236). list -> { order, rounds, approvedQuotations, canStart, startBlockedReason }; the writes
   // return { round }. A file is removed with attachments.delete (the uploader may) and opened with attachments.fileUrl.
+  deliveryTrips: {
+    home: () => apiRequest(API_ROUTES.deliveryTrips.home),
+    create: (body) => apiRequest(API_ROUTES.deliveryTrips.create, { method: 'POST', body }),
+    update: (id, body) => apiRequest(API_ROUTES.deliveryTrips.one(id), { method: 'PATCH', body }),
+    delay: (id, rid, delayed) => apiRequest(API_ROUTES.deliveryTrips.delay(id, rid), { method: 'POST', body: { delayed } }),
+    cancel: (id) => apiRequest(API_ROUTES.deliveryTrips.cancel(id), { method: 'POST' }),
+    deliver: (id) => apiRequest(API_ROUTES.deliveryTrips.deliver(id), { method: 'POST' }),
+  },
   deliveryRequests: {
     list: (ticketId) => apiRequest(API_ROUTES.deliveryRequests.list(ticketId)),
     createDraft: (ticketId, payload = {}) =>
