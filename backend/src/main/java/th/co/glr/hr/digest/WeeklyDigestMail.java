@@ -5,6 +5,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.function.UnaryOperator;
 import th.co.glr.hr.digest.WeeklyDigestRepository.AccountItem;
+import th.co.glr.hr.digest.WeeklyDigestRepository.ImportItem;
 import th.co.glr.hr.digest.WeeklyDigestRepository.PendingNote;
 import th.co.glr.hr.digest.WeeklyDigestRepository.StaleDeal;
 
@@ -56,6 +57,25 @@ final class WeeklyDigestMail {
         h.append("<p style=\"margin:16px 0 0 0;\">").append(CLOSING).append("</p>");
         t.append("\n").append(CLOSING);
         return new Rendered("[GL&R Portal] สรุปงานที่รอฝ่ายบัญชียืนยันการรับชำระเงิน ประจำวันที่ " + thaiDate(today),
+            h.toString(), t.toString());
+    }
+
+    static Rendered imports(List<ImportItem> items, LocalDate today, UnaryOperator<String> url) {
+        String intro = "ระบบ GL&R Portal ขอแจ้งรายการงานที่รอฝ่ายจัดซื้อต่างประเทศดำเนินการ จำนวน " + items.size()
+            + " รายการ สามารถตรวจสอบและอัปเดตสถานะได้จากลิงก์ด้านล่าง";
+        StringBuilder h = new StringBuilder("<p style=\"margin:0 0 8px 0;\">เรียน ฝ่ายจัดซื้อต่างประเทศ</p>")
+            .append("<p style=\"margin:0 0 16px 0;\">").append(esc(intro)).append("</p>");
+        StringBuilder t = new StringBuilder("เรียน ฝ่ายจัดซื้อต่างประเทศ\n\n").append(intro).append("\n\n");
+        for (ImportItem i : items) {
+            String name = name(i.title(), i.customer());
+            String link = url.apply(i.link());
+            String meta = i.action() + " · ผู้ดูแล " + i.repName() + " · ไม่มีการอัปเดต " + i.days() + " วัน";
+            h.append(row(name, meta, "อัปเดต", link));
+            t.append("- ").append(name).append(" (").append(meta).append(")\n  ").append(link).append('\n');
+        }
+        h.append("<p style=\"margin:16px 0 0 0;\">").append(CLOSING).append("</p>");
+        t.append("\n").append(CLOSING);
+        return new Rendered("[GL&R Portal] สรุปงานที่รอฝ่ายจัดซื้อต่างประเทศดำเนินการ ประจำวันที่ " + thaiDate(today),
             h.toString(), t.toString());
     }
 

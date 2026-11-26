@@ -37,8 +37,8 @@ public class WeeklyDigestController {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (request.to() == null || !request.to().contains("@")
-            || !java.util.Set.of("account", "sales", "pending").contains(request.kind())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ระบุประเภท (account/sales/pending) และอีเมลปลายทางให้ถูกต้อง");
+            || !java.util.Set.of("account", "import", "sales", "pending").contains(request.kind())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ระบุประเภท (account/import/sales/pending) และอีเมลปลายทางให้ถูกต้อง");
         }
         var subject = service.sendTest(request.kind(), request.to().trim(), request.weekStart(), request.employeeId());
         return Map.of("sent", subject.isPresent(), "subject", subject.orElse(""));

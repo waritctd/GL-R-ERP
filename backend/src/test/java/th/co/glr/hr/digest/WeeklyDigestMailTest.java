@@ -13,6 +13,7 @@ import org.mockito.Mockito;
 import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.digest.WeeklyDigestMail.SalesWeek;
 import th.co.glr.hr.digest.WeeklyDigestRepository.AccountItem;
+import th.co.glr.hr.digest.WeeklyDigestRepository.ImportItem;
 import th.co.glr.hr.digest.WeeklyDigestRepository.PendingNote;
 import th.co.glr.hr.digest.WeeklyDigestRepository.StaleDeal;
 import th.co.glr.hr.mail.Mailer;
@@ -74,6 +75,12 @@ class WeeklyDigestMailTest {
         var pending = WeeklyDigestMail.pending("สมศรี ตัวอย่าง", List.of(
             new PendingNote("มีคำขอจัดส่งสินค้าใหม่รอจัดรอบรถ", "/warehouse/deliveries", 2),
             new PendingNote("ใบแจ้งหนี้รอออกใบกำกับภาษี", null, 5)), LocalDate.of(2026, 11, 30), shell::portalUrl);
+        var imports = WeeklyDigestMail.imports(List.of(
+            new ImportItem(301, "โครงการบ้านตัวอย่าง E", "บริษัท ตัวอย่าง จำกัด", "สมหญิง ตัวอย่าง",
+                "อัปเดตสถานะนำเข้า", "/fulfilment", 12),
+            new ImportItem(302, "โรงแรมตัวอย่าง F", "คุณตัวอย่าง", "สมชาย ตัวอย่าง",
+                "บันทึกออกเดินทาง", "/import/deals/302", 4)), LocalDate.of(2026, 11, 30), shell::portalUrl);
+        Files.writeString(Path.of(dir, "import.html"), shell.renderShell(imports.html()));
         Files.writeString(Path.of(dir, "pending.html"), shell.renderShell(pending.html()));
     }
 }

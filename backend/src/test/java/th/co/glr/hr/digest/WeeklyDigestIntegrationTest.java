@@ -29,6 +29,13 @@ class WeeklyDigestIntegrationTest extends AbstractDealQuotationSlice2Integration
         jdbc.update("UPDATE sales.deal_activity SET created_at = now() - interval '20 days' WHERE ticket_id = :t",
             Map.of("t", waiting));
         long fresh = deal(salesActor);
+        long shipping = deal(salesActor);
+        jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'IR_SENT' WHERE ticket_id = :t",
+            Map.of("t", shipping));
+        assertThat(repo.importItems()).extracting(WeeklyDigestRepository.ImportItem::ticketId)
+            .contains(shipping).doesNotContain(waiting, fresh);
+        assertThat(repo.importItems()).extracting(WeeklyDigestRepository.ImportItem::link)
+            .contains("/import/deals/" + shipping);
 
         var items = repo.accountItems();
         assertThat(items).extracting(WeeklyDigestRepository.AccountItem::ticketId).contains(waiting)

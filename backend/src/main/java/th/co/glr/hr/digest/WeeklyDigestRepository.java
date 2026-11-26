@@ -23,6 +23,9 @@ public class WeeklyDigestRepository {
     public record AccountItem(long ticketId, String title, String customer, String repName, BigDecimal amount,
                               int daysWaiting) {}
 
+    public record ImportItem(long ticketId, String title, String customer, String repName, String action,
+                             String link, int days) {}
+
     public record StaleDeal(long ticketId, String title, String customer, int quietDays) {}
 
     public record PendingNote(String title, String link, int daysAgo) {}
@@ -64,6 +67,41 @@ public class WeeklyDigestRepository {
             (rs, n) -> new AccountItem(rs.getLong("ticket_id"), rs.getString("title"),
                 rs.getString("customer_name"), rs.getString("rep_name"), rs.getBigDecimal("amount"),
                 rs.getInt("days_waiting")));
+    }
+
+    /** What waits on import, as {@code importActions.js#nextImportAction} defines it: an unpicked SUBMITTED pricing
+     * request first, else the IR_ISSUED / IR_SENT / SHIPPING step. Delivery is sales's, so it is not listed.
+     * Days = since the request was submitted, else since the deal was last touched. */
+    public List<ImportItem> importItems() {
+        return jdbc.query("""
+            SELECT t.ticket_id, %1$s AS title, t.customer_name,
+                   COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), '-') AS rep_name,
+                   pr.pricing_request_id, t.fulfillment_status,
+                   GREATEST((now() AT TIME ZONE 'Asia/Bangkok')::date
+                            - (COALESCE(pr.submitted_at, %2$s) AT TIME ZONE 'Asia/Bangkok')::date, 0) AS days
+              FROM sales.ticket t
+              LEFT JOIN hr.employee e ON e.employee_id = t.created_by
+              LEFT JOIN LATERAL (
+                   SELECT p.pricing_request_id, p.submitted_at FROM sales.pricing_request p
+                    WHERE p.ticket_id = t.ticket_id AND p.status = 'SUBMITTED'
+                    ORDER BY p.pricing_request_id LIMIT 1) pr ON TRUE
+             WHERE t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED') AND t.status NOT IN ('closed', 'cancelled')
+               AND (pr.pricing_request_id IS NOT NULL
+                    OR t.fulfillment_status IN ('IR_ISSUED', 'IR_SENT', 'SHIPPING'))
+             ORDER BY days DESC, t.ticket_id
+            """.formatted(TITLE, QuietRule.lastTouchedSql("t")), new MapSqlParameterSource(), (rs, n) -> {
+                long ticketId = rs.getLong("ticket_id");
+                long requestId = rs.getLong("pricing_request_id");
+                boolean pickup = !rs.wasNull();
+                String step = rs.getString("fulfillment_status");
+                String action = pickup ? "รับเรื่องขอราคา"
+                    : "IR_ISSUED".equals(step) ? "อัปเดตสถานะนำเข้า"
+                    : "IR_SENT".equals(step) ? "บันทึกออกเดินทาง" : "ยืนยันรับเข้าคลัง";
+                String link = pickup ? "/pricing-requests/" + requestId
+                    : "IR_ISSUED".equals(step) ? "/fulfilment" : "/import/deals/" + ticketId;
+                return new ImportItem(ticketId, rs.getString("title"), rs.getString("customer_name"),
+                    rs.getString("rep_name"), action, link, rs.getInt("days"));
+            });
     }
 
     /** Owner id -> number of ACTIVE deals, for owners with at least one. */

@@ -24,7 +24,7 @@ import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.salesboard.WeeklyReportRepository;
 import th.co.glr.hr.ticket.QuietRule;
 
-/** Monday 08:30 Asia/Bangkok digests: one to account (cc every active account employee), one "สัปดาห์ของคุณ" per
+/** Monday 08:30 Asia/Bangkok digests: one each to account and import (cc every active employee of that role), one "สัปดาห์ของคุณ" per
  * sales rep. Off unless {@code app.digest.weekly.enabled=true}. */
 @Service
 public class WeeklyDigestService {
@@ -41,19 +41,21 @@ public class WeeklyDigestService {
     private final QuietRule quietRule;
     private final boolean enabled;
     private final String accountTo;
+    private final String importTo;
     private final Clock clock;
 
     @Autowired
     public WeeklyDigestService(WeeklyDigestRepository repo, WeeklyReportRepository weekly,
                                EmployeeAuthRepository employees, NotificationEmailService mail, QuietRule quietRule,
                                @Value("${app.digest.weekly.enabled:false}") boolean enabled,
-                               @Value("${app.digest.weekly.account-to:account@glr.co.th}") String accountTo) {
-        this(repo, weekly, employees, mail, quietRule, enabled, accountTo, Clock.system(BANGKOK));
+                               @Value("${app.digest.weekly.account-to:account@glr.co.th}") String accountTo,
+                               @Value("${app.digest.weekly.import-to:import@glr.co.th}") String importTo) {
+        this(repo, weekly, employees, mail, quietRule, enabled, accountTo, importTo, Clock.system(BANGKOK));
     }
 
     WeeklyDigestService(WeeklyDigestRepository repo, WeeklyReportRepository weekly, EmployeeAuthRepository employees,
                         NotificationEmailService mail, QuietRule quietRule, boolean enabled, String accountTo,
-                        Clock clock) {
+                        String importTo, Clock clock) {
         this.repo = repo;
         this.weekly = weekly;
         this.employees = employees;
@@ -61,6 +63,7 @@ public class WeeklyDigestService {
         this.quietRule = quietRule;
         this.enabled = enabled;
         this.accountTo = accountTo == null ? "" : accountTo.trim();
+        this.importTo = importTo == null ? "" : importTo.trim();
         this.clock = clock;
     }
 
@@ -75,11 +78,22 @@ public class WeeklyDigestService {
             if (account.isEmpty() || accountTo.isEmpty()) {
                 log.info("Weekly account digest skipped: nothing waiting or no recipient");
             } else {
-                mail.sendDigest(accountTo, accountCc(), account.get().subject(),
+                mail.sendDigest(accountTo, roleEmails("account"), account.get().subject(),
                     account.get().html(), account.get().text());
             }
         } catch (Exception e) {
             log.error("Weekly account digest failed", e);
+        }
+        try {
+            Optional<Rendered> imports = renderImport();
+            if (imports.isEmpty() || importTo.isEmpty()) {
+                log.info("Weekly import digest skipped: nothing waiting or no recipient");
+            } else {
+                mail.sendDigest(importTo, roleEmails("import"), imports.get().subject(),
+                    imports.get().html(), imports.get().text());
+            }
+        } catch (Exception e) {
+            log.error("Weekly import digest failed", e);
         }
         int sent = 0;
         LocalDate monday = lastWeekMonday();
@@ -117,6 +131,8 @@ public class WeeklyDigestService {
         Optional<Rendered> r;
         if ("account".equals(kind)) {
             r = renderAccount();
+        } else if ("import".equals(kind)) {
+            r = renderImport();
         } else if ("pending".equals(kind)) {
             r = otherStaff().stream().filter(e -> employeeId == null || e.employeeId() == employeeId)
                 .map(this::renderPending).flatMap(Optional::stream).findFirst();
@@ -139,6 +155,12 @@ public class WeeklyDigestService {
     private Map<Long, BigDecimal> receivedFor(LocalDate monday) {
         return repo.receivedByOwner(monday.atStartOfDay(BANGKOK).toInstant(),
             monday.plusWeeks(1).atStartOfDay(BANGKOK).toInstant());
+    }
+
+    Optional<Rendered> renderImport() {
+        var items = repo.importItems();
+        return items.isEmpty() ? Optional.empty()
+            : Optional.of(WeeklyDigestMail.imports(items, LocalDate.now(clock), mail::portalUrl));
     }
 
     Optional<Rendered> renderSales(EmployeeLoginRecord rep, LocalDate monday, Map<Long, BigDecimal> receivedByOwner) {
@@ -179,9 +201,9 @@ public class WeeklyDigestService {
         return LocalDate.now(clock).with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).minusWeeks(1);
     }
 
-    private List<String> accountCc() {
+    private List<String> roleEmails(String role) {
         return employees.findAllActive().stream()
-            .filter(e -> "account".equals(DivisionAccessPolicy.roleFor(e)) && hasEmail(e))
+            .filter(e -> role.equals(DivisionAccessPolicy.roleFor(e)) && hasEmail(e))
             .map(EmployeeLoginRecord::email).toList();
     }
 
