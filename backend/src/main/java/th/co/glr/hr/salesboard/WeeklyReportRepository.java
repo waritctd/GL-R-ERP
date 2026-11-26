@@ -84,7 +84,7 @@ public class WeeklyReportRepository {
     }
 
     /** Per owner, in [from, to): the week's counts keyed new / stage / lost / quotations / confirmed. */
-    Map<String, Map<Long, Integer>> weekCounts(Long ownerId, Instant from, Instant to) {
+    public Map<String, Map<Long, Integer>> weekCounts(Long ownerId, Instant from, Instant to) {
         MapSqlParameterSource p = params(ownerId).addValue("from", Timestamp.from(from))
             .addValue("to", Timestamp.from(to));
         String ev = "SELECT t.created_by AS owner_id, COUNT(*) AS n FROM sales.ticket_event e "

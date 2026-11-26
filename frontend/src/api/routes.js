@@ -26,6 +26,10 @@ export const API_ROUTES = {
     events: '/api/activity-log/events',
     summary: '/api/activity-log/summary',
   },
+  // Admin-only. Mirrors WeeklyDigestController.
+  weeklyDigest: {
+    test: '/api/admin/weekly-digest/test',
+  },
   employees: {
     list: '/api/employees',
     create: '/api/employees',

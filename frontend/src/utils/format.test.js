@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   addDaysIso,
   displayRole,
+  headerRoleLabel,
   roleLabel,
   bangkokMonthStartIso,
   depositNoticeStatusLabel,
@@ -208,5 +209,8 @@ describe('displayRole', () => {
     expect(displayRole({ role: 'ceo', operator: true })).toBe('operator');
     expect(displayRole({ role: 'ceo' })).toBe('ceo');
     expect(roleLabel(displayRole({ role: 'ceo', operator: true }))).toBe('OPERATOR');
+    // A QC person treated as a sales rep still reads as QC in the header; an ordinary rep does not.
+    expect(headerRoleLabel({ role: 'sales' }, { divisionTh: 'QC&ISO' })).toBe('QC');
+    expect(headerRoleLabel({ role: 'sales' }, { divisionTh: 'SA-ฝ่ายขาย' })).toBe(roleLabel('sales'));
   });
 });

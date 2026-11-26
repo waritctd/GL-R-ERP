@@ -57,6 +57,10 @@ export const api = {
     events: (params) => apiRequest(withQuery(API_ROUTES.activityLog.events, params)),
     summary: (params) => apiRequest(withQuery(API_ROUTES.activityLog.summary, params)),
   },
+  // Admin-only test send of one weekly digest. Mirrors WeeklyDigestController; the gate is server-side.
+  weeklyDigest: {
+    test: (payload) => apiRequest(API_ROUTES.weeklyDigest.test, { method: 'POST', body: payload }),
+  },
   employees: {
     list: (params) => apiRequest(withQuery(API_ROUTES.employees.list, params)),
     create: (payload) => apiRequest(API_ROUTES.employees.create, { method: 'POST', body: payload }),

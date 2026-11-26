@@ -116,6 +116,13 @@ export function displayRole(user) {
   return user?.operator ? 'operator' : user?.role;
 }
 
+/** The label under the product name. Display only: a QC person the portal treats as a sales rep (by their quotation grant)
+ * still reads as QC. */
+export function headerRoleLabel(user, employee) {
+  if (user?.role === 'sales' && !user.operator && employee?.divisionTh?.startsWith('QC')) return 'QC';
+  return roleLabel(displayRole(user));
+}
+
 export function roleLabel(role) {
   return ROLE_LABELS[role] ?? role?.toUpperCase() ?? '-';
 }

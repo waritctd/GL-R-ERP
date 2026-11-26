@@ -306,7 +306,7 @@ function PastRound({ round }) {
  * order with no rounds, or when the rounds cannot be read.
  * Whoever holds the issuer grant gets the TaxInvoiceStep on a FORWARDED round (`round.viewer.canIssue`, the server's call).
  */
-export function DeliveryRoundsPanel({ ticketId, showRequestButton = true, hostRecordRoundId = null, hostHasPrimary = false, canRecordNoInvoice = false, onCreateIr, showToast, warehouseUserId = null, dealless = false, quiet = false }) {
+export function DeliveryRoundsPanel({ ticketId, showRequestButton = true, hostRecordRoundId = null, hostHasPrimary = false, canRecordNoInvoice = false, onCreateIr, showToast, warehouseUserId = null, dealless = false, quiet = false, pinInvoiceActions = true }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [localOpen, setLocalOpen] = useState(false);
   const isWarehouse = warehouseUserId != null;
@@ -476,7 +476,7 @@ export function DeliveryRoundsPanel({ ticketId, showRequestButton = true, hostRe
             warehouse={isWarehouse ? { ticketId, userId: warehouseUserId } : null}
           />
           {round.viewer?.canIssue ? (
-            <TaxInvoiceStep round={round} ticketId={ticketId} invoiceable={roundsQuery.data.invoiceable ?? null} primary={round.id === primaryId} />
+            <TaxInvoiceStep round={round} ticketId={ticketId} invoiceable={roundsQuery.data.invoiceable ?? null} primary={round.id === primaryId} pinActions={pinInvoiceActions} />
           ) : null}
           {isWarehouse && round.viewer?.canReview && round.id !== primaryId ? (
             <div className="flex flex-col gap-1" data-testid={`review-actions-${round.roundNo}`}>
