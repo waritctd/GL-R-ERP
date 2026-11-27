@@ -89,7 +89,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         irService = transactional(new ImportRequestService(new ImportRequestQueryRepository(jdbc),
             new ImportRequestRenderer(), stored, new FactoryConfigRepository(jdbc), tickets, ticketService,
             notifications, roundRepo));
-        rounds = transactional(new ShipmentRoundService(roundRepo, stored, irService, tickets, files));
+        rounds = transactional(new ShipmentRoundService(roundRepo, stored, irService, tickets, files, new EmployeeAuthRepository(jdbc)));
         lineNotDelivered = transactional(new LineNotDeliveredService(ticketService, rounds));
         links = transactional(new IrLineLinkService(stored, rounds, irService, ticketService, tickets));
         incoming = new IncomingService(ticketService, stored, roundRepo, new ImportRequestQueryRepository(jdbc));
@@ -181,6 +181,15 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         }
         assertThat(rounds.list(salesManager).rounds()).hasSize(1);
         assertRefused(() -> rounds.list(owner), HttpStatus.FORBIDDEN);
+        // The warehouse manager (the outbound leg's planner) reads the rounds, without documents, and cannot advance one.
+        var employeeRepo = new th.co.glr.hr.employee.EmployeeRepository(jdbc, new th.co.glr.hr.employee.EmployeeReferenceRepository(jdbc),
+            new th.co.glr.hr.employee.EmployeeCodeGenerator(jdbc));
+        UserPrincipal whManager = principal(employeeRepo.create(new th.co.glr.hr.employee.UpsertEmployeeRequest(
+            null, null, "หัวหน้าคลัง รอบ", null, null, null, null, null, null, null, "wh-mgr-round@glr.co.th", null, "WH", "คลังสินค้า", "คลังสินค้า",
+            "ผู้จัดการ", null, null, "ACT", new java.math.BigDecimal("30000"), null, null, null, null, null, null, null)), "warehouse");
+        assertThat(rounds.list(whManager).rounds()).hasSize(1);
+        assertThat(rounds.list(whManager).rounds().get(0).documents()).isEmpty();
+        assertRefused(() -> rounds.advance(round, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.ORDERED), whManager), HttpStatus.FORBIDDEN);
         assertThat(rounds.advance(round, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.ORDERED), ceoUser).importStep())
             .isEqualTo(ImportRequestStep.ORDERED);
         assertThat(rounds.list(importUser).rounds().get(0).lots()).extracting(l -> l.importRequestId()).containsExactly(irA);

@@ -17,9 +17,11 @@ import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { AdvanceRoundSheet } from './AdvanceRoundSheet.jsx';
 import { DownloadIrButton } from './DownloadIrButton.jsx';
 import { ImportJobSheet } from './ImportJobSheet.jsx';
+import { IrNo } from './IrNo.jsx';
+import { canAccessPath } from '../../app/permissions.js';
 import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import {
-  compareRoundEta, formatQty, irRows, lotProjectName, lotProduct, lotWho, lotWhoSub, ORIGIN_LABELS, roundIrSummary, roundProjectNames, roundReference, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
+  compareRoundEta, formatQty, irRows, lotProjectName, lotProduct, lotWho, lotWhoSub, ORIGIN_LABELS, roundIrSummary, roundProjectNames, roundArrivalKey, roundReference, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
 } from './shipmentRounds.js';
 import { useRoundUndo } from './useRoundUndo.jsx';
 
@@ -27,20 +29,17 @@ import { useRoundUndo } from './useRoundUndo.jsx';
 const WAITING_GRID = 'grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,1.6fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,1fr)]';
 const ROUNDS_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_minmax(11rem,0.8fr)]';
 
-/** An IR number that opens its page: the deal's for a sales job, the งานนำเข้า page otherwise. */
-function IrLink({ row }) {
-  const to = row.ticketId == null ? `/fulfilment/jobs/${row.importRequestId}` : `/import/deals/${row.ticketId}`;
-  return <Link to={to} className="text-info underline"><code>{row.docNumber}</code></Link>;
-}
+const arrivalText = (r) => (r.facts?.arrivedOn ? `ถึงไทยแล้ว ${formatThaiDate(r.facts.arrivedOn)}`
+  : r.facts?.etaOn ? formatThaiDate(r.facts.etaOn) : 'ยังไม่ระบุ');
 
 /** A round's IR numbers; past `limit` the rest stay one tap away. */
-function IrChips({ rows, limit }) {
+function IrChips({ rows, limit, openJob }) {
   const [open, setOpen] = useState(false);
   const shown = open ? rows : rows.slice(0, limit);
   const hidden = rows.length - shown.length;
   return (
     <span className="flex flex-wrap items-center gap-1">
-      {shown.map((row) => (row.ticketId == null
+      {shown.map((row) => (row.ticketId == null && openJob
         ? (
           <Link key={row.key} to={`/fulfilment/jobs/${row.key}`} className="max-w-full break-all rounded-sm bg-surface-subtle px-1.5 text-xs text-info underline">
             <code>{row.docNumber}</code>
@@ -62,10 +61,15 @@ function IrChips({ rows, limit }) {
  * advancing it moves every IR on it. ISSUED IRs with quantity on no round wait in "รอจัดรอบขนส่ง" (planning a round
  * comes in a later slice). One request feeds the page (GET /api/shipment-rounds); the IR-level actions (lead time,
  * order email, PDFs) live on each IR's own page, which every IR row links to.
+ * `readOnly`: the warehouse planner reads the rounds (no actions, no legacy-deal list). `embedded`: inside the merged
+ * การขนส่ง page, which owns the title and the leg switch.
  */
-export function ImportFulfilmentPage({ user, showToast }) {
+export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedded = false }) {
   const queryClient = useQueryClient();
-  const editable = user?.role === 'import' || user?.role === 'ceo';
+  const editable = (user?.role === 'import' || user?.role === 'ceo') && !readOnly;
+  const canOpenDeal = canAccessPath('/import/deals/1', user);
+  const canDownloadIr = user?.role !== 'warehouse'; // the stored IR PDF is import's (cost and factory data)
+  const canOpenJob = user?.role !== 'warehouse'; // the server refuses the warehouse a งานนำเข้า (the no-deal request read rule)
   const [step, setStep] = useState('ALL');
   const [waitingPicked, setWaitingPicked] = useState(false);
   const [search, setSearch] = useState('');
@@ -87,6 +91,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
   const ticketsQuery = useQuery({
     queryKey: queryKeys.ticketList(''),
     queryFn: () => api.tickets.list({}).then((r) => r?.tickets ?? []),
+    enabled: !readOnly,
   });
   const rounds = useMemo(() => listQuery.data?.rounds ?? [], [listQuery.data]);
   const waiting = useMemo(() => listQuery.data?.waiting ?? [], [listQuery.data]);
@@ -125,7 +130,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
     {
       key: 'ir',
       header: 'ใบขอซื้อ',
-      render: (w) => <IrLink row={w} />,
+      render: (w) => <IrNo row={w} open={canOpenDeal} openJob={canOpenJob} />,
     },
     {
       key: 'who',
@@ -150,11 +155,13 @@ export function ImportFulfilmentPage({ user, showToast }) {
         <span className="flex flex-col items-start gap-1">
           <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
           <StatusBadge tone="neutral">{ORIGIN_LABELS[w.origin] ?? 'งานขาย'}</StatusBadge>
-          {w.ticketId == null ? <DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
+          {w.ticketId == null ? <DownloadIrButton hidden={!canDownloadIr} importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
         </span>
       ),
     },
   ];
+
+  const newJobButton = editable ? <Button type="button" variant="secondary" onClick={() => setCreatingJob(true)} data-testid="import-job-new">+ สร้างงานนำเข้า</Button> : null;
 
   const advanceButton = (round, className) => (editable && round.importStep !== 'RECEIVED' ? (
     <Button type="button" variant="secondary" className={className} onClick={() => setAdvancing(round)} data-testid={`round-advance-${round.id}`}>เลื่อนขั้นตอน</Button>
@@ -181,15 +188,15 @@ export function ImportFulfilmentPage({ user, showToast }) {
         const shipping = roundSummaryLine(r);
         return (
           <span className="flex flex-col gap-0.5">
-            <span className={r.facts?.etaOn ? 'text-sm font-semibold' : 'text-xs text-text-muted'}>
-              {r.facts?.etaOn ? formatThaiDate(r.facts.etaOn) : 'ยังไม่ระบุ'}
+            <span className={roundArrivalKey(r) ? 'text-sm font-semibold' : 'text-xs text-text-muted'}>
+              {arrivalText(r)}
             </span>
             {shipping && <span className="text-2xs text-text-muted">{shipping}</span>}
           </span>
         );
       },
     },
-    { key: 'irNos', header: 'เลขที่ IR', render: (r) => <IrChips rows={irRows(r)} limit={3} /> },
+    { key: 'irNos', header: 'เลขที่ IR', render: (r) => <IrChips openJob={canOpenJob} rows={irRows(r)} limit={3} /> },
     {
       key: 'qty',
       header: 'จำนวน',
@@ -223,14 +230,14 @@ export function ImportFulfilmentPage({ user, showToast }) {
       <span className="flex min-w-0 flex-col gap-0.5">
         <b className="text-sm">{w.factoryName}</b>
         <small className="text-text-muted">
-          <IrLink row={w} />
+          <IrNo row={w} open={canOpenDeal} openJob={canOpenJob} />
           {' · '}{lotWho(w)} · เหลือ {w.lines.map((l) => `${formatQty(l.remainingQty)} ${l.unit ?? ''}`.trim()).join(', ')}
         </small>
       </span>
       <span className="flex shrink-0 flex-col items-end gap-1">
         <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
         <StatusBadge tone="neutral">{ORIGIN_LABELS[w.origin] ?? 'งานขาย'}</StatusBadge>
-        {w.ticketId == null ? <DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
+        {w.ticketId == null ? <DownloadIrButton hidden={!canDownloadIr} importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
       </span>
     </div>
   );
@@ -248,9 +255,9 @@ export function ImportFulfilmentPage({ user, showToast }) {
           </div>
           <span className="shrink-0"><StatusBadge tone={stepTone(r.importStep)}>{stepPillText(r.importStep)}</StatusBadge></span>
         </div>
-        <p className="m-0 text-sm font-semibold">คาดว่าถึงไทย · {r.facts?.etaOn ? formatThaiDate(r.facts.etaOn) : 'ยังไม่ระบุ'}</p>
+        <p className="m-0 text-sm font-semibold">{r.facts?.arrivedOn ? '' : 'คาดว่าถึงไทย · '}{arrivalText(r)}</p>
         {roundSummaryLine(r) ? <p className="m-0 text-sm text-text-muted">{roundSummaryLine(r)}</p> : null}
-        <IrChips rows={irRows(r)} limit={2} />
+        <IrChips openJob={canOpenJob} rows={irRows(r)} limit={2} />
         <div className="flex items-baseline justify-between gap-3 text-sm">
           <span className="text-text-muted">{sum.mix}</span>
           <b className="text-right tabular-nums">{sum.qty}</b>
@@ -270,19 +277,21 @@ export function ImportFulfilmentPage({ user, showToast }) {
     && (ticketsQuery.data ?? []).every((t) => !['IR_ISSUED', 'IR_SENT', 'SHIPPING'].includes(t.fulfillmentStatus));
   return (
     <PageStack>
-      <ShippingSwitch user={user} current="rounds" />
-      <PageHeader
+      {embedded ? null : <ShippingSwitch user={user} current="rounds" />}
+      {/* Inside the merged การขนส่ง page there is no header of our own, so the create button gets its own row. */}
+      {embedded && editable ? <div className="flex justify-end mobile:flex-col">{newJobButton}</div> : null}
+      {embedded ? null : <PageHeader
         title="การขนส่ง"
         subtitle="เลื่อนทีละรอบ ทุกใบขอซื้อในรอบขยับพร้อมกัน"
         actions={(
           <>
-            {editable ? <Button type="button" variant="secondary" onClick={() => setCreatingJob(true)} data-testid="import-job-new">+ สร้างงานนำเข้า</Button> : null}
+            {newJobButton}
             <Button type="button" variant="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.shipmentRounds() })} title="รีเฟรช" aria-label="รีเฟรช">
               <Icon name="refresh" />
             </Button>
           </>
         )}
-      />
+      />}
 
       {runQuery.isError ? (
         <Panel className="border-warning-border bg-warning-bg" data-testid="sheet-run-error">
@@ -448,7 +457,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
         </>
       )}
 
-      <p className="text-2xs text-text-muted">การส่งมอบสินค้าให้ลูกค้าไม่ได้อยู่ในหน้านี้ — บันทึกที่แท็บ ส่งของ ของงานนั้น</p>
+      {embedded ? null : <p className="text-2xs text-text-muted">การส่งมอบสินค้าให้ลูกค้าไม่ได้อยู่ในหน้านี้ — บันทึกที่แท็บ ส่งของ ของงานนั้น</p>}
 
       {advancing ? (
         <AdvanceRoundSheet

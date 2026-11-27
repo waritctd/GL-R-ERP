@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.auth.ImportStaff;
 import th.co.glr.hr.auth.WarehouseStaff;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.ThaiText;
@@ -61,7 +62,10 @@ public class DeliveryTripService {
     }
 
     public Home home(UserPrincipal actor) {
-        requirePlanner(actor);
+        // Import reads the outbound leg (การขนส่ง); every write below stays the warehouse manager's.
+        if (!ImportStaff.is(actor)) {
+            requirePlanner(actor);
+        }
         LocalDate today = LocalDate.now(BANGKOK);
         LocalDate monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         List<RoundItem> open = trips.unplanned().stream().map(this::withBuyer).toList();
@@ -306,7 +310,7 @@ public class DeliveryTripService {
     }
 
     private void requirePlanner(UserPrincipal actor) {
-        if (!WarehouseStaff.is(actor) || !WarehouseStaff.managerRecipientIds(employees).contains(actor.id())) {
+        if (!WarehouseStaff.isPlanner(actor, employees)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }

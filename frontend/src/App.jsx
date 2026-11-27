@@ -72,8 +72,8 @@ const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/Pr
 const ImportDealPage = lazy(() => import('./features/importDeal/ImportDealPage.jsx').then(toDefault('ImportDealPage')));
 const MyOrdersPage = lazy(() => import('./features/myOrders/MyOrdersPage.jsx').then(toDefault('MyOrdersPage')));
 const ShipmentRoundPage = lazy(() => import('./features/fulfilment/ShipmentRoundPage.jsx').then(toDefault('ShipmentRoundPage')));
-const ImportFulfilmentPage = lazy(() => import('./features/fulfilment/ImportFulfilmentPage.jsx').then(toDefault('ImportFulfilmentPage')));
 const ImportJobPage = lazy(() => import('./features/fulfilment/ImportJobPage.jsx').then(toDefault('ImportJobPage')));
+const ShippingPage = lazy(() => import('./features/fulfilment/ShippingPage.jsx').then(toDefault('ShippingPage')));
 const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
 // Quotation v2 — direct deal quotation. Sibling feature to the PricingRequest chain above, not a
 // replacement.
@@ -534,7 +534,7 @@ export function App() {
                  * Guarded by canActOnFulfilment in PATH_GUARDS; see .design/import-fulfilment/INFORMATION_ARCHITECTURE.md. */}
                 <Route
                   path="/fulfilment"
-                  element={<ImportFulfilmentPage user={user} showToast={showToast} />}
+                  element={<ShippingPage user={user} showToast={showToast} />}
                 />
                 {/* ของที่ฉันสั่ง: the rep's ONE page of all incoming goods (project lots + no-project orders). Guarded by canViewMyOrders. */}
                 <Route path="/my-orders" element={<MyOrdersPage user={user} showToast={showToast} />} />

@@ -30,7 +30,8 @@ function Section({ title, hint, children, testId }) {
 const CARD = 'm-0 list-none divide-y divide-border-subtle overflow-hidden rounded-md border border-border bg-surface p-0';
 const EMPTY = 'm-0 rounded-md border border-border bg-surface px-4 py-3 text-sm text-text-muted';
 
-export function WarehouseHome() {
+/** `readOnly`: import reads the outbound leg (no checkboxes, no trip or pickup buttons). `embedded`: inside the การขนส่ง page, which owns the h1. */
+export function WarehouseHome({ readOnly = false, embedded = false }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [picked, setPicked] = useState([]);
@@ -59,30 +60,35 @@ export function WarehouseHome() {
   const openTrip = trips.find((t) => t.id === openId) ?? (justDone?.id === openId ? justDone : null);
   const toggle = (id) => setPicked((now) => (now.includes(id) ? now.filter((x) => x !== id) : [...now, id]));
   const openForm = (trip) => { save.reset(); setForm({ trip }); };
+  const checkWho = readOnly ? 'รอคลังตรวจ' : 'รอคุณตรวจ';
   const openOrder = (round) => navigate(`/tickets/${round.ticketId}?tab=ship`);
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-5" data-testid="warehouse-home">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="m-0">งานคลัง</h1>
+          {embedded ? null : <h1 className="m-0">งานคลัง</h1>}
           <p className="m-0 text-sm text-text-muted">
-            {formatThaiDate(today)} · รอคุณตรวจ {toCheck.length} · รอจัดรอบส่ง {waiting.length}
+            {formatThaiDate(today)} · {checkWho} {toCheck.length} · รอจัดรอบส่ง {waiting.length}
           </p>
         </div>
       </header>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-5">
-          <Section title="ขอออกใบกำกับแล้ว · รอคุณตรวจ" hint={`${toCheck.length} รายการ`} testId="to-check">
+          <Section title={`ขอออกใบกำกับแล้ว · ${checkWho}`} hint={`${toCheck.length} รายการ`} testId="to-check">
             {toCheck.length ? (
               <ul className={CARD}>
                 {toCheck.map((r) => (
                   <li key={r.roundId}>
-                    <button type="button" className="flex min-h-14 w-full cursor-pointer items-center gap-3 border-0 bg-transparent px-4 py-2 text-left text-text" onClick={() => openOrder(r)}>
-                      <RoundText round={r} handover extra={r.sentAt ? `ส่งเรื่อง ${formatThaiDate(r.sentAt)}` : null} />
-                      <Icon name="chevronRight" size={16} />
-                    </button>
+                    {readOnly ? (
+                      <div className="flex min-h-14 items-center gap-3 px-4 py-2"><RoundText round={r} handover extra={r.sentAt ? `ส่งเรื่อง ${formatThaiDate(r.sentAt)}` : null} /></div>
+                    ) : (
+                      <button type="button" className="flex min-h-14 w-full cursor-pointer items-center gap-3 border-0 bg-transparent px-4 py-2 text-left text-text" onClick={() => openOrder(r)}>
+                        <RoundText round={r} handover extra={r.sentAt ? `ส่งเรื่อง ${formatThaiDate(r.sentAt)}` : null} />
+                        <Icon name="chevronRight" size={16} />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -107,10 +113,10 @@ export function WarehouseHome() {
                 {pickups.map((r) => (
                   <li key={r.roundId} className="flex flex-col gap-1 px-4 py-2">
                     <RoundText round={r} />
-                    <div className="flex flex-wrap items-center gap-2">
+                    {readOnly ? null : <div className="flex flex-wrap items-center gap-2">
                       <Button type="button" variant="primary" className="min-h-12" data-testid={`pickup-done-${r.roundId}`} onClick={() => setPickupRound(r)}>ลูกค้ารับของแล้ว</Button>
                       <Button type="button" variant="text" className="min-h-12" disabled={switchPickup.isPending} onClick={() => switchPickup.mutate({ roundId: r.roundId, pickup: false })}>เปลี่ยนเป็นส่งให้ลูกค้า</Button>
-                    </div>
+                    </div>}
                   </li>
                 ))}
               </ul>
@@ -123,17 +129,17 @@ export function WarehouseHome() {
               <ul className={CARD}>
                 {waiting.map((r) => (
                   <li key={r.roundId}>
-                    <label className="flex min-h-14 cursor-pointer items-start gap-3 px-4 py-2">
-                      <input type="checkbox" className="mt-1 size-5 shrink-0 accent-primary" checked={selected.includes(r.roundId)} onChange={() => toggle(r.roundId)} />
+                    <label className={`flex min-h-14 items-start gap-3 px-4 py-2 ${readOnly ? '' : 'cursor-pointer'}`}>
+                      {readOnly ? null : <input type="checkbox" className="mt-1 size-5 shrink-0 accent-primary" checked={selected.includes(r.roundId)} onChange={() => toggle(r.roundId)} />}
                       <RoundText round={r} />
                       {r.delayed ? <span className="shrink-0 rounded-full bg-warning-bg px-2 py-0.5 text-xs font-bold text-warning-dark">เลื่อนส่ง</span> : null}
                     </label>
-                    <Button type="button" variant="text" className="ml-11 min-h-12" disabled={switchPickup.isPending} onClick={() => switchPickup.mutate({ roundId: r.roundId, pickup: true })}>เปลี่ยนเป็นลูกค้ามารับเอง</Button>
+                    {readOnly ? null : <Button type="button" variant="text" className="ml-11 min-h-12" disabled={switchPickup.isPending} onClick={() => switchPickup.mutate({ roundId: r.roundId, pickup: true })}>เปลี่ยนเป็นลูกค้ามารับเอง</Button>}
                   </li>
                 ))}
               </ul>
             ) : <p className={EMPTY}>ไม่มีออเดอร์ที่รอจัดรอบส่ง</p>}
-            {selected.length ? (
+            {selected.length && !readOnly ? (
               <Button type="button" variant="primary" className="w-full" onClick={() => openForm(null)}>
                 จัดรอบส่ง {selected.length} ออเดอร์ที่เลือก
               </Button>
@@ -167,7 +173,7 @@ export function WarehouseHome() {
         <PickupSheet round={pickupRound} onClose={() => setPickupRound(null)} onDone={() => { setPickupRound(null); refresh(); }} />
       ) : null}
       {openTrip && !form ? (
-        <TripSheet trip={openTrip} today={today} onClose={() => setOpenId(null)} onEdit={() => openForm(openTrip)} onChanged={refresh} onDelivered={setJustDone} onOpenOrder={openOrder} />
+        <TripSheet readOnly={readOnly} trip={openTrip} today={today} onClose={() => setOpenId(null)} onEdit={() => openForm(openTrip)} onChanged={refresh} onDelivered={setJustDone} onOpenOrder={openOrder} />
       ) : null}
       {form ? (
         <TripFormSheet

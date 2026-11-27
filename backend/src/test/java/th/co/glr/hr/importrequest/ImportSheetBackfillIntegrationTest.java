@@ -74,7 +74,7 @@ class ImportSheetBackfillIntegrationTest extends AbstractPostgresIntegrationTest
         FactoryConfigRepository factories = new FactoryConfigRepository(jdbc);
         irService = transactional(new ImportRequestService(new ImportRequestQueryRepository(jdbc), new ImportRequestRenderer(),
             stored, factories, tickets, ticketService, notifications, roundRepo));
-        ShipmentRoundService rounds = transactional(new ShipmentRoundService(roundRepo, stored, irService, tickets, files));
+        ShipmentRoundService rounds = transactional(new ShipmentRoundService(roundRepo, stored, irService, tickets, files, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc)));
         ImportSheetRepository sheet = new ImportSheetRepository(jdbc);
         service = new ImportSheetBackfillService(new ImportSheetPlanner(sheet, factories, roundRepo, json), sheet, stored, roundRepo,
             rounds, factories, new EmployeeAuthRepository(jdbc), transactionManager, json);

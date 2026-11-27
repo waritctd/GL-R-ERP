@@ -79,7 +79,7 @@ class ImportJobIntegrationTest extends AbstractPostgresIntegrationTest {
         FactoryConfigRepository factories = new FactoryConfigRepository(jdbc);
         irService = transactional(new ImportRequestService(new ImportRequestQueryRepository(jdbc), new ImportRequestRenderer(),
             stored, factories, tickets, ticketService, notifications, roundRepo));
-        roundService = transactional(new ShipmentRoundService(roundRepo, stored, irService, tickets, files));
+        roundService = transactional(new ShipmentRoundService(roundRepo, stored, irService, tickets, files, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc)));
         jobs = transactional(new ImportJobService(new ImportJobRepository(jdbc), stored, irService, roundRepo, roundService,
             new ImportSheetRepository(jdbc), factories, new EmployeeAuthRepository(jdbc), notifications,
             new AuditService(new AuditLogRepository(jdbc), json), json));

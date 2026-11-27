@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImportFulfilmentPage } from './ImportFulfilmentPage.jsx';
 import { ShipmentRoundPage } from './ShipmentRoundPage.jsx';
@@ -105,6 +105,7 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     const lots = [unlinked, { ...unlinked, lotId: 2 }, lot({ lotId: 3, projectName: 'อีกโครงการ' })];
     vi.mocked(api.shipmentRounds.list).mockResolvedValue({ waiting: [], rounds: [
       round({ id: 3, facts: { label: 'ยังไม่กำหนด' }, lots: [] }),
+      round({ id: 4, importStep: 'AWAITING_CUSTOMS', facts: { arrivedOn: '2026-12-30' } }),
       round({ id: 2, importStep: 'ORDERED', facts: { etaOn: '2027-01-04' } }),
       round({ id: 1, importStep: 'RECEIVED', facts: { label: 'REF-DEMO', etaOn: '2026-12-28' }, lots }),
     ] });
@@ -115,16 +116,16 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     const titles = () => queue.getAllByRole('row').slice(1).map((row) =>
       within(within(row).getAllByRole('cell')[0]).getByRole('link'));
     await waitFor(() => expect(titles().map((link) => link.getAttribute('href'))).toEqual([
-      '/fulfilment/rounds/1', '/fulfilment/rounds/2', '/fulfilment/rounds/3',
+      '/fulfilment/rounds/1', '/fulfilment/rounds/4', '/fulfilment/rounds/2', '/fulfilment/rounds/3',
     ]));
     fireEvent.click(screen.getByTestId('eta-sort'));
     expect(titles().map((link) => link.getAttribute('href'))).toEqual([
-      '/fulfilment/rounds/2', '/fulfilment/rounds/1', '/fulfilment/rounds/3',
+      '/fulfilment/rounds/2', '/fulfilment/rounds/4', '/fulfilment/rounds/1', '/fulfilment/rounds/3',
     ]);
     fireEvent.click(screen.getByTestId('eta-sort'));
     expect(titles()[0].textContent).toBe('Mar-27 / อีกโครงการ');
-    expect(titles()[2].textContent).toBe('ไม่ระบุโครงการ');
-    expect(queue.getAllByRole('cell', { name: 'Test Stone Co.', exact: true })).toHaveLength(3);
+    expect(titles()[3].textContent).toBe('ไม่ระบุโครงการ');
+    expect(queue.getAllByRole('cell', { name: 'Test Stone Co.', exact: true })).toHaveLength(4);
     for (const term of ['mar-27', 'REF-DEMO']) {
       fireEvent.change(screen.getByTestId('fulfilment-search'), { target: { value: term } });
       expect(titles().map((link) => link.getAttribute('href'))).toEqual(['/fulfilment/rounds/1']);
@@ -312,6 +313,18 @@ describe('รอบขนส่ง page', () => {
     fireEvent.click((await screen.findAllByTestId('lot-manage-1'))[0]);
     fireEvent.click(await screen.findByTestId('lot-remove'));
     await waitFor(() => expect(api.shipmentRounds.removeLot).toHaveBeenCalledWith(7, 1));
+  });
+
+  it('the round page links a งานนำเข้า IR for import and shows the warehouse plain text', async () => {
+    vi.mocked(api.shipmentRounds.get).mockResolvedValue({ round: round({ lots: [lot({ importRequestId: 32, docNumber: 'IR-TEST-032', ticketId: null, ticketCode: null })] }) });
+    const hrefs = () => [...document.querySelectorAll('a')].map((el) => el.getAttribute('href')).filter((h) => h?.startsWith('/fulfilment/jobs/'));
+    renderAt('/fulfilment/rounds/7');
+    await screen.findAllByText('IR-TEST-032');
+    expect(hrefs()).toContain('/fulfilment/jobs/32');
+    cleanup();
+    renderAt('/fulfilment/rounds/7', { id: 6, name: 'คลังสินค้า', role: 'warehouse', canPlanDeliveries: true });
+    await screen.findAllByText('IR-TEST-032');
+    expect(hrefs()).toEqual([]);
   });
 
   it('has no lot actions once the round is in transit', async () => {

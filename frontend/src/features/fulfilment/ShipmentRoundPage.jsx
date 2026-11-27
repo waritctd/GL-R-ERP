@@ -16,6 +16,8 @@ import { formatThaiDate } from '../../utils/format.js';
 import { IMPORT_STEPS, importStepIndex } from '../importProgress/importSteps.js';
 import { AdvanceRoundSheet } from './AdvanceRoundSheet.jsx';
 import { DownloadIrButton } from './DownloadIrButton.jsx';
+import { IrNo } from './IrNo.jsx';
+import { canAccessPath } from '../../app/permissions.js';
 import { LotModal } from './LotModal.jsx';
 import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import { RoundDocuments } from './RoundDocuments.jsx';
@@ -64,6 +66,9 @@ const Kv = ({ k, v }) => (
 export function ShipmentRoundPage({ user, showToast }) {
   const { id } = useParams();
   const editable = user?.role === 'import' || user?.role === 'ceo';
+  const canOpenDeal = canAccessPath('/import/deals/1', user);
+  const canDownloadIr = user?.role !== 'warehouse'; // the stored IR PDF is import's (cost and factory data)
+  const canOpenJob = user?.role !== 'warehouse'; // the server refuses the warehouse a งานนำเข้า (the no-deal request read rule)
   const [advancing, setAdvancing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [planning, setPlanning] = useState(false);
@@ -114,7 +119,7 @@ export function ShipmentRoundPage({ user, showToast }) {
   const returnButton = (l) => (canReturn(l)
     ? <Button type="button" size="sm" variant="secondary" className="mt-1 whitespace-normal" onClick={() => setReturning(l)} data-testid={`lot-return-${l.lotId}`}>ไม่ได้รับของ · กลับไปรอจัดรอบ</Button> : null);
   const lotColumns = [
-    { key: 'ir', header: 'ใบขอซื้อ', render: (l) => (l.ticketId == null ? <span className="flex flex-col items-start gap-1"><Link to={`/fulfilment/jobs/${l.importRequestId}`} className="text-info underline"><code>{l.docNumber}</code></Link><DownloadIrButton importRequestId={l.importRequestId} docNumber={l.docNumber} factoryName={round.factoryName} showToast={showToast} /></span> : <Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link>) },
+    { key: 'ir', header: 'ใบขอซื้อ', render: (l) => (l.ticketId == null ? <span className="flex flex-col items-start gap-1"><IrNo row={l} openJob={canOpenJob} /><DownloadIrButton hidden={!canDownloadIr} importRequestId={l.importRequestId} docNumber={l.docNumber} factoryName={round.factoryName} showToast={showToast} /></span> : <IrNo row={l} open={canOpenDeal} />) },
     { key: 'who', header: 'โครงการ / ลูกค้า', render: (l) => <span className="flex flex-col"><b className="text-sm">{lotWho(l)}</b><small className="text-text-muted">{lotWhoSub(l)}</small></span> },
     { key: 'product', header: 'สินค้า', render: (l) => lotProduct(l) },
     { key: 'qty', header: 'ไปรอบนี้', render: (l) => <span className="flex flex-col tabular-nums"><b>{formatQty(l.qty)} {l.unit ?? ''}</b><small className="text-text-muted">จาก {formatQty(l.itemQty)}</small></span> },
@@ -129,8 +134,8 @@ export function ShipmentRoundPage({ user, showToast }) {
     <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-surface p-3" data-testid="lot-card">
       <span className="flex min-w-0 flex-col gap-0.5">
         <b className="text-sm">{lotWho(l)}</b>
-        {l.ticketId == null ? <DownloadIrButton importRequestId={l.importRequestId} docNumber={l.docNumber} factoryName={round.factoryName} showToast={showToast} /> : null}
-        <small className="text-text-muted">{l.ticketId == null ? <Link to={`/fulfilment/jobs/${l.importRequestId}`} className="text-info underline"><code>{l.docNumber}</code></Link> : <Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link>} · {lotProduct(l)}</small>
+        {l.ticketId == null ? <DownloadIrButton hidden={!canDownloadIr} importRequestId={l.importRequestId} docNumber={l.docNumber} factoryName={round.factoryName} showToast={showToast} /> : null}
+        <small className="text-text-muted"><IrNo row={l} open={canOpenDeal} openJob={canOpenJob} /> · {lotProduct(l)}</small>
         <small className="text-text-muted">{lotLabel(l, round.importStep)}{l.remainingQty > 0 ? ` · เหลือ ${formatQty(l.remainingQty)} รอจัดรอบ` : ''}</small>
         {lotArrivalText(l, round.importStep) ? <small className="font-bold text-danger-dark" data-testid="lot-short">{lotArrivalText(l, round.importStep)}</small> : null}
         {returnButton(l)}

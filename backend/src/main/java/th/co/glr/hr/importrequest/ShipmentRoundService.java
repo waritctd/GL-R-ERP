@@ -17,8 +17,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
+import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.OversightReader;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.auth.WarehouseStaff;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.importrequest.ImportRequestService.StepChange;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.AdvanceShipmentRoundRequest;
@@ -68,15 +70,18 @@ public class ShipmentRoundService {
     private final ImportRequestService irService;
     private final TicketRepository tickets;
     private final FileStorageService files;
+    private final EmployeeAuthRepository employees;
     private Clock clock = Clock.systemUTC();
 
     public ShipmentRoundService(ShipmentRoundRepository rounds, ImportRequestRepository stored,
-                                ImportRequestService irService, TicketRepository tickets, FileStorageService files) {
+                                ImportRequestService irService, TicketRepository tickets, FileStorageService files,
+                                EmployeeAuthRepository employees) {
         this.rounds = rounds;
         this.stored = stored;
         this.irService = irService;
         this.tickets = tickets;
         this.files = files;
+        this.employees = employees;
     }
 
     void useClock(Clock clock) {
@@ -902,7 +907,8 @@ public class ShipmentRoundService {
 
     private void requireRead(UserPrincipal actor) {
         if (!ImportRequestService.ADVANCE_STEP_ROLES.contains(actor.role())
-            && !OversightReader.is(actor, tickets::holdsReadAllSalesGrant)) {
+            && !OversightReader.is(actor, tickets::holdsReadAllSalesGrant)
+            && !WarehouseStaff.isPlanner(actor, employees)) { // the outbound leg's planner reads the inbound rounds (documents stay withheld, see assemble)
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
