@@ -720,15 +720,10 @@ public class DeliveryRequestService {
         tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.DELIVERY_REQUEST_SENT, null, null,
             "ขอออกใบกำกับ รอบส่งที่ " + round.roundNo());
         String link = "/tickets/" + ticketId + "?tab=ship";
-        for (String role : List.of("account", "sales_manager")) {
-            notifications.notifyByRoleAtLink(role, TicketEventKind.DELIVERY_REQUEST_SENT, message, link, actor.id());
-        }
-        // Warehouse staff by the shared effective-role predicate, not by division (a wh person acting as sales is not staff).
-        for (long id : WarehouseStaff.recipientIds(employees)) {
-            if (id != actor.id()) {
-                notifications.notifyEmployeeAtLink(id, TicketEventKind.DELIVERY_REQUEST_SENT, message, link);
-            }
-        }
+        // Only the warehouse manager acts on it (the server-set cc is copied on the mail); the invoice issuer hears on forward.
+        notifications.notifyDocumentCheck(
+            WarehouseStaff.managerRecipientIds(employees).stream().filter(id -> id != actor.id()).toList(),
+            TicketEventKind.DELIVERY_REQUEST_SENT, message, link);
         return toDto(rounds.findById(rid).orElseThrow(), s, true, false, false, VoidCtx.NONE);
     }
 

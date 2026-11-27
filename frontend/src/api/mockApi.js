@@ -17900,10 +17900,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       pushEvent(ticket, user, 'DELIVERY_REQUEST_SENT', null, null, `ขอออกใบกำกับ รอบส่งที่ ${round.roundNo}`);
       const message = `${display} รอบส่งที่ ${round.roundNo} · ฝ่ายขายขอออกใบกำกับ รอคลังตรวจเอกสาร`;
       // Warehouse = effective role 'warehouse' (WarehouseStaff on the server); the mock's user role is already effective.
-      ['warehouse', 'account', 'sales_manager'].forEach((role) => {
-        db.users.filter((u) => u.role === role && u.active && u.id !== user.id)
-          .forEach((u) => addNotification(u.id, ticket.id, ticket.code, 'DELIVERY_REQUEST_SENT', message, `/tickets/${ticket.id}?tab=ship`));
-      });
+      // The warehouse manager only (every warehouse person when nobody has the title).
+      db.users.filter((u) => u.id !== user.id && mockIsTripPlanner(u))
+        .forEach((u) => addNotification(u.id, ticket.id, ticket.code, 'DELIVERY_REQUEST_SENT', message, `/tickets/${ticket.id}?tab=ship`));
       return delay({ round: mockRoundDto(round, ticket, user) });
     },
     // DeliveryRequestService#lockedWarehouseRound: warehouse staff only (403), still SENT (409).

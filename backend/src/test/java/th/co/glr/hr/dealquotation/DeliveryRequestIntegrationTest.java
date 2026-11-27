@@ -771,21 +771,22 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
     }
 
     @Test
-    void send_notifiesWarehouseStaffByEffectiveRole_notByDivisionAlone_andNotTheSender() {
+    void send_notifiesOnlyTheWarehouseManager() {
         EmployeeRepository employees = new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc),
             new EmployeeCodeGenerator(jdbc));
         long actingAsSales = createEmployee(employees, "พนักงานคลัง ขาย", "wh-sales-dr@glr.co.th", "WH", "คลังสินค้า", null);
         jdbc.update("UPDATE hr.employee SET can_create_quotation = TRUE WHERE employee_id = :id", Map.of("id", actingAsSales));
+        long manager = createEmployee(employees, "หัวหน้าคลัง ส่งคำขอ", "wh-mgr-send@glr.co.th", "WH", "คลังสินค้า", "ผู้จัดการ");
+        issuer("issuer-send@glr.co.th");
         long ticketId = confirmedDeal();
         RoundDto draft = rounds.createDraft(ticketId, null, salesActor);
         rounds.send(draft.id(), null, salesActor);
-        List<String> links = jdbc.query("SELECT link FROM hr.notification WHERE employee_id = :e AND type = 'DELIVERY_REQUEST_SENT'",
-            Map.of("e", warehouseEmployeeId), (rs, n) -> rs.getString("link"));
-        assertThat(links).containsExactly("/tickets/" + ticketId + "?tab=ship");
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hr.notification WHERE employee_id = :e AND type = 'DELIVERY_REQUEST_SENT'",
-            Map.of("e", actingAsSales), Integer.class)).as("a wh person acting as sales is not warehouse staff").isZero();
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hr.notification WHERE employee_id = :e AND type = 'DELIVERY_REQUEST_SENT'",
-            Map.of("e", salesActor.id()), Integer.class)).isZero();
+        List<Long> told = jdbc.queryForList("SELECT employee_id FROM hr.notification WHERE type = 'DELIVERY_REQUEST_SENT'",
+            Map.of(), Long.class);
+        // Not plain warehouse staff, the invoice issuer, sales managers, account or the sender.
+        assertThat(told).containsExactly(manager);
+        assertThat(jdbc.queryForObject("SELECT link FROM hr.notification WHERE employee_id = :e AND type = 'DELIVERY_REQUEST_SENT'",
+            Map.of("e", manager), String.class)).isEqualTo("/tickets/" + ticketId + "?tab=ship");
     }
 
     @Test

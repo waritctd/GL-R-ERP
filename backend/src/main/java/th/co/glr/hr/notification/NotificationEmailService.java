@@ -87,6 +87,20 @@ public class NotificationEmailService {
         }
     }
 
+    /** A notification addressed to a post ("เรียน {post},") rather than a person, with a visible cc. */
+    @Async
+    public void sendToPost(String to, List<String> cc, String post, String subject, String body, String link) {
+        String greeting = "เรียน " + post + ",";
+        try {
+            mailer.send(new Mailer.OutgoingEmail(to, cc, "[GL&R Portal] " + subject + subjectSuffix,
+                htmlWithGreeting(escapeHtml(greeting), body, link), textWithGreeting(greeting, body, link),
+                logoInlineImages, List.of()));
+            log.info("Notification email dispatched: to={} cc={}", to, cc.size());
+        } catch (Exception exception) {
+            log.error("Failed to send notification email: to={} error={}", to, exception.getMessage());
+        }
+    }
+
     /**
      * The auto-generated leave-submission email (2026-09): the ใบลา F-HR-020 PDF (plus any medical
      * certificate) mailed to the shared HR inbox ({@code to}) while CC'ing the requester and their
@@ -260,6 +274,10 @@ public class NotificationEmailService {
         String greeting = clean(recipientName).isBlank()
             ? "เรียน ท่านผู้ใช้งาน,"
             : "เรียน คุณ" + clean(recipientName) + ",";
+        return textWithGreeting(greeting, body, link);
+    }
+
+    private String textWithGreeting(String greeting, String body, String link) {
         StringBuilder message = new StringBuilder()
             .append(greeting)
             .append("\n\n")
@@ -286,10 +304,15 @@ public class NotificationEmailService {
         String greeting = cleanName.isBlank()
             ? "เรียน ท่านผู้ใช้งาน,"
             : "เรียน คุณ" + escapeHtml(cleanName) + ",";
+        return htmlWithGreeting(greeting, body, link);
+    }
+
+    /** {@code greetingHtml} is already escaped. */
+    private String htmlWithGreeting(String greetingHtml, String body, String link) {
         String messageHtml = escapeHtml(clean(body)).replace("\r\n", "\n").replace("\n", "<br>");
         String cta = ctaHtml(link);
         return wrapShell(
-            "<p style=\"margin:0 0 16px 0;\">" + greeting + "</p>"
+            "<p style=\"margin:0 0 16px 0;\">" + greetingHtml + "</p>"
                 + "<p style=\"margin:0;\">" + messageHtml + "</p>"
                 + cta);
     }

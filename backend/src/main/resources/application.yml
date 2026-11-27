@@ -191,6 +191,8 @@ app:
     # bean by MailOverrideBeanPostProcessor. Nothing that calls Mailer implements this rule itself
     # (#782 was exactly that: one caller had its own copy, another had none).
     override-to: ${APP_MAIL_OVERRIDE_TO:}
+    # cc on the warehouse document-check mail (comma-separated, blank = none). Set on the deployment only.
+    delivery-check-cc: ${APP_MAIL_DELIVERY_CHECK_CC:}
     # Appended (not prepended) to the subject so a test/UAT deployment never lets a real inbox
     # mistake test mail for real, without putting a bracketed keyword at the FRONT of the subject -
     # a leading "[TEST]"-shaped token is a classic spam-filter trigger. Blank by default so every
