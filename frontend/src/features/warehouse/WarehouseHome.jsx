@@ -30,7 +30,7 @@ function Section({ title, hint, children, testId }) {
 const CARD = 'm-0 list-none divide-y divide-border-subtle overflow-hidden rounded-md border border-border bg-surface p-0';
 const EMPTY = 'm-0 rounded-md border border-border bg-surface px-4 py-3 text-sm text-text-muted';
 
-/** `readOnly`: import reads the outbound leg (no checkboxes, no trip or pickup buttons). `embedded`: inside the การขนส่ง page, which owns the h1. */
+/** `readOnly`: read-only readers of the outbound leg (CEO, sales) (no checkboxes, no trip or pickup buttons). `embedded`: inside the การขนส่ง page, which owns the h1. */
 export function WarehouseHome({ readOnly = false, embedded = false }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -164,7 +164,7 @@ export function WarehouseHome({ readOnly = false, embedded = false }) {
                   </li>
                 ))}
               </ul>
-            ) : <p className={EMPTY}>ยังไม่มีรอบส่ง เลือกออเดอร์ที่รอจัดรอบส่งแล้วกดจัดรอบส่ง</p>}
+            ) : <p className={EMPTY}>{readOnly ? 'ยังไม่มีรอบส่ง' : 'ยังไม่มีรอบส่ง เลือกออเดอร์ที่รอจัดรอบส่งแล้วกดจัดรอบส่ง'}</p>}
           </Section>
         </div>
       </div>

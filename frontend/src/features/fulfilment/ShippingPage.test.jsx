@@ -26,12 +26,11 @@ function show(user, sales = false) {
 }
 
 describe('ShippingPage', () => {
-  it('import reads the outbound leg without any action', async () => {
+  it('import gets its rounds page with no ขาออก leg', async () => {
     show({ id: 1, role: 'import' });
-    fireEvent.click(await screen.findByTestId('leg-out'));
-    expect((await screen.findByTestId('leg-readonly-note')).textContent).toContain('ขาออกดูได้อย่างเดียว');
-    expect(await screen.findByText('ลูกค้า ทดสอบ')).toBeTruthy();
-    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect((await screen.findAllByText('ทั้งหมด')).length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('leg-out')).toBeNull();
+    expect(api.deliveryTrips.home).not.toHaveBeenCalled();
   });
 
   it('the warehouse planner lands on ขาออก with checkboxes, and sees ขาเข้า read-only', async () => {

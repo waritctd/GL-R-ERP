@@ -37,7 +37,7 @@ import th.co.glr.hr.ticket.RoundDeliveryRequest;
 
 /**
  * The warehouse manager's delivery trips. Only the manager (every warehouse person when nobody holds the title) writes
- * them; the home list is also read by {@link OutboundReader} (import, CEO, sales team) for the การขนส่ง page. Delivering reuses the round's record-delivery rule,
+ * them; the home list is also read by {@link OutboundReader} (CEO, sales team) for the การขนส่ง page. Delivering reuses the round's record-delivery rule,
  * one transaction per round, so one blocked order never holds back the rest.
  */
 @Service
@@ -62,7 +62,7 @@ public class DeliveryTripService {
     }
 
     public Home home(UserPrincipal actor) {
-        // Import, the CEO and the sales team read the outbound leg (การขนส่ง); every write below stays the warehouse manager's.
+        // The CEO and the sales team read the outbound leg (การขนส่ง); every write below stays the warehouse manager's.
         if (!OutboundReader.is(actor, employees)) {
             requirePlanner(actor);
         }

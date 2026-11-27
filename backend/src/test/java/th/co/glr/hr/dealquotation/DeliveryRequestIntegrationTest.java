@@ -689,8 +689,8 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         assertThat(trips.home(manager).waiting().get(0).requestedDate()).as("requested dates sort first").isEqualTo(TODAY.plusDays(3));
         refusal(() -> trips.home(warehouse), HttpStatus.FORBIDDEN);
         assertThat(trips.home(salesActor).waiting()).as("the sales team reads the outbound leg").extracting(r -> r.roundId()).contains(rid[0]);
-        UserPrincipal importUser = actor(manager.id(), "import"); // import reads the outbound leg, never writes it
-        assertThat(trips.home(importUser).waiting()).extracting(r -> r.roundId()).contains(rid[0]);
+        UserPrincipal importUser = actor(manager.id(), "import"); // import never sees the outbound leg (Ploy 11-27)
+        refusal(() -> trips.home(importUser), HttpStatus.FORBIDDEN);
         var all = List.of(rid[0], rid[1], rid[2]);
         refusal(() -> trips.create(new th.co.glr.hr.deliverytrip.DeliveryTripDtos.TripRequest(TODAY.minusDays(1), "สายบางนา", null, null, null, all), manager),
             HttpStatus.BAD_REQUEST);
