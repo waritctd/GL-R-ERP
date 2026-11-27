@@ -726,6 +726,41 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         refusal(() -> trips.deliver(trip.id(), manager), HttpStatus.CONFLICT);
     }
 
+    @Test
+    void pickup_skipsTheTrips_needsTheCollectorsName_tellsSales_andOnlyTheManagerMaySwitchIt() throws Exception {
+        EmployeeRepository employees = new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc),
+            new EmployeeCodeGenerator(jdbc));
+        UserPrincipal manager = actor(createEmployee(employees, "หัวหน้าคลัง รับเอง", "wh-mgr-pickup@glr.co.th", "WH", "คลังสินค้า", "ผู้จัดการ"), "warehouse");
+        var trips = transactional(new th.co.glr.hr.deliverytrip.DeliveryTripService(new th.co.glr.hr.deliverytrip.DeliveryTripRepository(jdbc),
+            rounds, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP), transactionManager));
+        UserPrincipal issuer = issuer("issuer-pickup@glr.co.th");
+        long ticket = confirmedDeal();
+        long rid = rounds.createDraft(ticket, null, salesActor).id();
+        assertThat(rounds.update(rid, new UpdateRequest(null, null, null, null, null, true), salesActor).customerPickup()).isTrue();
+        rounds.send(rid, null, salesActor);
+        rounds.forward(rid, warehouse);
+        invoice(rid, "IV2611-950", "1000", issuer);
+        jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'GOODS_RECEIVED' WHERE ticket_id = :t", Map.of("t", ticket));
+        new TicketRepository(jdbc).addEvent(ticket, salesActor.id(), "เจ้าของ", "GOODS_RECEIVED", null, null, null);
+
+        assertThat(trips.home(manager).waiting()).extracting(r -> r.roundId()).doesNotContain(rid);
+        assertThat(trips.home(manager).pickups()).extracting(r -> r.roundId()).contains(rid);
+        refusal(() -> trips.create(new th.co.glr.hr.deliverytrip.DeliveryTripDtos.TripRequest(TODAY.plusDays(1), "สายบางนา", null, null, null,
+            List.of(rid)), manager), HttpStatus.CONFLICT);
+        refusal(() -> rounds.setPickup(rid, false, warehouse), HttpStatus.FORBIDDEN);
+        assertThat(rounds.setPickup(rid, false, manager).customerPickup()).isFalse();
+        assertThat(trips.home(manager).waiting()).extracting(r -> r.roundId()).contains(rid);
+        assertThat(rounds.setPickup(rid, true, manager).customerPickup()).isTrue();
+
+        refusal(() -> rounds.recordDelivery(rid, new th.co.glr.hr.ticket.RoundDeliveryRequest(null, true, null, "  ", null, null), manager), HttpStatus.BAD_REQUEST);
+        rounds.recordDelivery(rid, new th.co.glr.hr.ticket.RoundDeliveryRequest(null, true, null, "คุณสมชาย", null, null), manager);
+        assertThat(notices(salesActor.id(), "DELIVERY_TRIP")).singleElement().satisfies(m -> assertThat(m).contains("คุณสมชาย"));
+        assertThat(rounds.list(ticket, salesActor).rounds().get(0).collected().by()).isEqualTo("คุณสมชาย");
+        assertThat(notices(salesActor.id(), "DELIVERY_RECORDED")).as("one notice, not two").isEmpty();
+        assertThat(trips.home(manager).pickups()).extracting(r -> r.roundId()).doesNotContain(rid);
+        refusal(() -> rounds.setPickup(rid, false, manager), HttpStatus.CONFLICT);
+    }
+
     private void invoice(long rid, String number, String total, UserPrincipal issuer) throws Exception {
         rounds.attachTaxInvoice(rid, new MockMultipartFile("file", number + ".pdf", "application/pdf",
             TaxInvoicePdfReaderTest.pdf("No. " + number, "Grand Total " + total)), issuer);

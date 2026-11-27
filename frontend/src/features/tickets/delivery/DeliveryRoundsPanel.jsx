@@ -202,8 +202,13 @@ function OpenRound({ round, orderLabel, warehouse = null, onVoid = null, onRecor
         {orderLabel}รอบส่งที่ {round.roundNo}
         {qty ? <span className="font-normal text-text-muted">{qty}</span> : null}
       </h3>
-      <TripPlan trip={round.trip} />
-      {round.requestedDate && round.trip?.state !== 'PLANNED' ? <p className="m-0 text-sm text-text-muted">ต้องการให้ส่ง {formatThaiDate(round.requestedDate)}</p> : null}
+      {round.customerPickup ? (
+        <p role="status" className="m-0 rounded-md border border-border bg-surface px-3 py-2 text-sm" data-testid="pickup-plan">
+          <b className="block text-base">{round.status === 'INVOICED' ? 'รอลูกค้ามารับ' : 'ลูกค้ามารับเอง'}</b>
+          {round.status === 'INVOICED' && round.requestedDate ? <span className="text-text-muted">วันที่ลูกค้าจะมารับ {formatThaiDate(round.requestedDate)}</span> : null}
+        </p>
+      ) : <TripPlan trip={round.trip} />}
+      {!round.customerPickup && round.requestedDate && round.trip?.state !== 'PLANNED' ? <p className="m-0 text-sm text-text-muted">ต้องการให้ส่ง {formatThaiDate(round.requestedDate)}</p> : null}
       {round.status === 'INVOICED' ? (
         <div role="status" className="rounded-md border border-success bg-success-bg px-3 py-2 text-sm text-text" data-testid="invoiced-callout">
           <b className="block text-base">ออกใบกำกับแล้ว ส่งของได้</b>
@@ -280,7 +285,9 @@ function PastRound({ round }) {
         <span className="flex min-w-0 flex-1 flex-col">
           <b className="text-base">รอบส่งที่ {round.roundNo} <span className="font-normal text-text-muted">{roundQtyText(round)}</span></b>
           <small className="text-xs text-text-muted">
-            ส่งของแล้ว · ใบกำกับ {round.invoice?.number ?? '-'}
+            {round.customerPickup && round.collected
+              ? `ลูกค้ารับของแล้ว · ${formatThaiDate(round.collected.on)} · โดย ${round.collected.by}`
+              : `ส่งของแล้ว · ใบกำกับ ${round.invoice?.number ?? '-'}`}
           </small>
         </span>
         <span className="rounded-full bg-success-bg px-2.5 py-0.5 text-xs font-bold text-success">เสร็จ</span>

@@ -4309,7 +4309,7 @@ function mockPlanner() {
 function mockTripRoundItem(round, state = null) {
   const ticket = findTicketRaw(round.ticketId);
   return {
-    roundId: round.id, ticketId: round.ticketId, roundNo: round.roundNo, status: round.status, requestedDate: round.requestedDate ?? null,
+    roundId: round.id, ticketId: round.ticketId, roundNo: round.roundNo, status: round.status, requestedDate: round.requestedDate ?? null, customerPickup: round.customerPickup ?? false,
     displayCode: mockRoundOrderRef(ticket).displayCode, customerName: ticket.customerName ?? null,
     projectName: mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null, ownerName: ticket.createdByName ?? null,
     note: round.note ?? null, sentAt: round.sentAt ?? null, forwardedAt: round.forwardedAt ?? null,
@@ -4341,6 +4341,7 @@ function mockOpenTrip(id) {
 }
 
 function mockTripSetRow(trip, roundId, state) {
+  if (state === 'PLANNED' && mockRoundOf(roundId).customerPickup) fail('ออเดอร์นี้ลูกค้ามารับเอง ไม่ต้องจัดรอบส่ง', 409);
   const row = trip.rows.find((r) => r.roundId === roundId);
   const at = Date.now();
   if (row) Object.assign(row, { state, at });
@@ -4521,6 +4522,7 @@ function mockRoundDto(round, ticket, user) {
       receiptId: user.role === 'warehouse' ? null : round.invoice.receiptId,
     } : null,
     lines, untickedDocs: round.untickedDocs ?? [], requestedDate: round.requestedDate ?? null,
+    customerPickup: round.customerPickup ?? false, collected: round.customerPickup ? round.collected ?? null : null,
     files: mockAttachments.filter((a) => a.deliveryRequestId === round.id).map((a) => ({
       attachmentId: a.id, fileName: a.fileName, mimeType: a.mimeType, fileSize: a.fileSize, kind: a.attachType,
       uploaderSide: a.uploaderSide ?? 'SYSTEM', uploadedById: a.uploadedBy, uploadedByName: db.users.find((u) => u.id === a.uploadedBy)?.name ?? null,
@@ -17706,7 +17708,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         today,
         toCheck: free.filter((r) => r.status === 'SENT'),
         toInvoice: free.filter((r) => r.status === 'FORWARDED'),
-        waiting: free.filter((r) => r.status === 'INVOICED' && r.remaining > 0),
+        waiting: free.filter((r) => r.status === 'INVOICED' && r.remaining > 0 && !r.customerPickup),
+        pickups: free.filter((r) => r.status === 'INVOICED' && r.remaining > 0 && r.customerPickup),
         trips: mockTrips.filter((t) => t.status !== 'CANCELLED').map(mockTripDto),
         routes: [...new Set(mockTrips.map((t) => t.route).reverse())].slice(0, 6),
       });
@@ -17819,6 +17822,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const wanted = payload?.requestedDate || null;
       if (wanted && wanted !== round.requestedDate && wanted < bangkokTodayIso()) fail('วันที่ต้องการให้ส่งต้องไม่เป็นวันย้อนหลัง');
       if (wanted || payload?.clearRequestedDate) round.requestedDate = wanted;
+      if (typeof payload?.customerPickup === 'boolean') round.customerPickup = payload.customerPickup;
       if (Array.isArray(payload?.untickedDocs)) round.untickedDocs = mockRoundValidUnticked(ticket.id, payload.untickedDocs);
       return delay({ round: mockRoundDto(round, ticket, user) });
     },
@@ -18048,6 +18052,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       }
       requireActive(ticket);
+      const collector = String(body?.recipientName ?? '').trim();
+      if (round.customerPickup && !collector) fail('ระบุชื่อผู้มารับของ', 400);
       const source = body?.source || (ticket.fulfillmentStatus === 'FROM_STOCK' ? 'STOCK' : 'WAREHOUSE');
       if (body?.complete === true) {
         mockCompleteRound(ticket, user, round.id, body, source);
@@ -18056,6 +18062,26 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
           source, note: body?.note ?? null, recipientName: body?.recipientName ?? null, lines: body?.lines ?? [],
           deliveredOn: body?.deliveredOn ?? null, deliveryRequestId: round.id, noInvoiceNote: body?.noInvoiceNote ?? null,
         });
+      }
+      if (round.customerPickup) {
+        round.collected = { on: body?.deliveredOn || bangkokTodayIso(), by: collector };
+        const message = `${mockRoundOrderRef(ticket).displayCode} รอบส่งที่ ${round.roundNo} · ลูกค้ามารับของแล้ว โดย ${collector} · บันทึกโดย ${user.name}`;
+        new Set([ticket.createdById, ticket.keyedById, round.requestedById].filter((id) => id != null && id !== user.id)).forEach((id) => addNotification(
+          id, ticket.id, ticket.code, 'DELIVERY_TRIP', message, `/tickets/${ticket.id}?tab=ship`,
+        ));
+      }
+      return delay({ round: mockRoundDto(round, ticket, user) });
+    },
+    // DeliveryRequestService#setPickup: the warehouse manager only.
+    async setPickup(rid, customerPickup) {
+      const user = mockPlanner();
+      const round = mockRoundOf(rid);
+      const ticket = findTicketRaw(round.ticketId);
+      const pickup = customerPickup === true;
+      if (Boolean(round.customerPickup) !== pickup) {
+        if (!mockRoundRecordable(round, ticket, user)) fail('เปลี่ยนวิธีรับของได้เฉพาะรอบที่ออกใบกำกับแล้วและยังมีของเหลือ', 409);
+        if (pickup && mockTrips.some((t) => t.rows.some((r) => r.roundId === round.id && r.state === 'PLANNED'))) fail('ออเดอร์นี้อยู่ในรอบส่ง กรุณานำออกจากรอบส่งก่อน', 409);
+        round.customerPickup = pickup;
       }
       return delay({ round: mockRoundDto(round, ticket, user) });
     },

@@ -2602,6 +2602,12 @@ public class TicketRepository {
             Map.of("r", rid, "t", ticketId), (rs, n) -> rs.getString(1)).stream().findFirst();
     }
 
+    /** A customer-pickup round tells the sales people itself (DeliveryRequestService), so the generic delivery notice skips it. */
+    public boolean isCustomerPickupRound(Long rid) {
+        return rid != null && Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT customer_pickup FROM sales.delivery_request WHERE delivery_request_id = :r", Map.of("r", rid), Boolean.class));
+    }
+
     /** The order's INVOICED rounds, oldest first, each with covered and delivered quantities per line. */
     public List<InvoicedRound> findInvoicedRounds(long ticketId) {
         return findRounds(ticketId, null);

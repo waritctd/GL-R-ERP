@@ -188,7 +188,7 @@ public class DeliveryRequestService {
         List<RoundDto> dtos = r.rounds().stream().map(d -> new RoundDto(d.id(), d.roundNo(), d.status(), d.quotationId(),
             d.quotationNumber(), d.note(), d.returnReasonCodes(), d.returnReasonText(), d.requestedByName(), d.sentAt(),
             d.forwardedByName(), d.forwardedAt(), priceFree(d.invoice()), d.lines(), List.of(), d.untickedDocs(), d.viewer(),
-            d.customerName(), d.taxId(), d.branch(), d.customerFromDeal(), d.trip(), d.requestedDate())).toList();
+            d.customerName(), d.taxId(), d.branch(), d.customerFromDeal(), d.trip(), d.requestedDate(), d.customerPickup(), d.collected())).toList();
         return new RoundsResponse(r.order(), dtos, r.approvedQuotations(), r.canStart(), r.startBlockedReason(), null);
     }
 
@@ -238,12 +238,54 @@ public class DeliveryRequestService {
                 throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
             }
         }
+        String collector = request == null || request.recipientName() == null ? "" : request.recipientName().trim();
+        if (round.customerPickup() && collector.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ระบุชื่อผู้มารับของ");
+        }
         ticketService.recordRoundDelivery(round.ticketId(), rid, request, actor);
+        if (round.customerPickup()) {
+            tellPickup(round, collector, actor);
+        }
         if (WarehouseStaff.is(actor)) {
             boolean grant = holdsGrant(actor);
             return toDto(rounds.findById(rid).orElseThrow(), summary(round.ticketId()), false, true, grant, voidCtx(round.ticketId(), grant));
         }
         return listFor(round.ticketId(), actor).rounds().stream().filter(d -> d.id() == rid).findFirst().orElseThrow();
+    }
+
+    /** The order's sales people hear that the customer collected the goods (TicketService leaves its own notice out for a pickup round). */
+    private void tellPickup(DeliveryRequestRepository.Row round, String collector, UserPrincipal actor) {
+        TicketSummaryDto s = summary(round.ticketId());
+        String message = displayCode(s) + " รอบส่งที่ " + round.roundNo() + " · " + buyerName(s, round.quotationNumber())
+            + " · ลูกค้ามารับของแล้ว โดย " + collector + " · บันทึกโดย " + actor.name();
+        rounds.salesPeople(round.id()).stream().filter(id -> id != actor.id()).forEach(id ->
+            notifications.notifyEmployeeAtLinkTitled(id, "DELIVERY_TRIP", "ลูกค้ามารับของแล้ว", message,
+                "/tickets/" + round.ticketId() + "?tab=ship"));
+    }
+
+    /** The warehouse manager switches an INVOICED round with goods left between pickup and delivery (the customer changed
+     * their mind). A round on an open trip must leave the trip before it becomes a pickup. */
+    @Transactional
+    public RoundDto setPickup(long rid, boolean pickup, UserPrincipal actor) {
+        if (!WarehouseStaff.is(actor) || !WarehouseStaff.managerRecipientIds(employees).contains(actor.id())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
+        }
+        var round = rounds.findById(rid).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรอบส่งที่ขอ"));
+        TicketSummaryDto s = summary(round.ticketId());
+        tickets.lockTicketForUpdate(round.ticketId());
+        round = rounds.findById(rid).orElseThrow();
+        if (round.customerPickup() != pickup) {
+            boolean goodsLeft = rounds.lines(rid).stream().anyMatch(l -> l.coveredQty().compareTo(l.deliveredQty()) > 0);
+            if (!DeliveryRequestDtos.INVOICED.equals(round.status()) || !DealLifecycle.ACTIVE.equals(s.lifecycle()) || !goodsLeft) {
+                throw new ApiException(HttpStatus.CONFLICT, "เปลี่ยนวิธีรับของได้เฉพาะรอบที่ออกใบกำกับแล้วและยังมีของเหลือ");
+            }
+            if (pickup && rounds.onOpenTrip(rid)) {
+                throw new ApiException(HttpStatus.CONFLICT, "ออเดอร์นี้อยู่ในรอบส่ง กรุณานำออกจากรอบส่งก่อน");
+            }
+            rounds.setCustomerPickup(rid, pickup);
+        }
+        boolean grant = holdsGrant(actor);
+        return toDto(rounds.findById(rid).orElseThrow(), s, false, true, grant, voidCtx(round.ticketId(), grant));
     }
 
     @Transactional
@@ -283,6 +325,9 @@ public class DeliveryRequestService {
         rounds.updateDraft(rid, quotationId, note, validUnticked(round.ticketId(), request.untickedDocs()));
         if (wanted != null || Boolean.TRUE.equals(request.clearRequestedDate())) {
             rounds.setRequestedDate(rid, wanted);
+        }
+        if (request.customerPickup() != null) {
+            rounds.setCustomerPickup(rid, request.customerPickup());
         }
         return toDto(rounds.findById(rid).orElseThrow(), s, true, false, false, VoidCtx.NONE);
     }
@@ -951,7 +996,7 @@ public class DeliveryRequestService {
                 canRecord, invoiced && vctx.scope() && voidBlock == null, invoiced && vctx.scope() ? voidBlock : null,
                 recordBlock),
             buyer.name(), warehouse ? null : buyer.taxId(), warehouse ? null : buyer.branch(), buyer.fromDeal(), rounds.tripPlan(r.id()),
-            r.requestedDate());
+            r.requestedDate(), r.customerPickup(), r.customerPickup() ? rounds.handover(r.id()) : null);
     }
 
     /**

@@ -33,7 +33,7 @@ public class DeliveryRequestRepository {
                       Instant sentAt, String forwardedByName, Instant forwardedAt, List<String> untickedDocs,
                       Long requestedById, String invoiceNumber, java.time.LocalDate invoiceDate, BigDecimal invoiceTotal,
                       BigDecimal recordedAmount, Long receiptId, Long invoiceAttachmentId, String invoicedByName,
-                      Instant invoicedAt, java.time.LocalDate requestedDate) {}
+                      Instant invoicedAt, java.time.LocalDate requestedDate, boolean customerPickup) {}
 
     /** One ticket_item's coverage facts for a new round (see {@link #coverage}). */
     public record Coverage(long itemId, String description, String unit, BigDecimal qty, BigDecimal remaining) {}
@@ -43,7 +43,7 @@ public class DeliveryRequestRepository {
                r.note, r.return_reason_codes, r.return_reason_text, %s AS requested_by_name, r.sent_at,
                %s AS forwarded_by_name, r.forwarded_at, r.unticked_docs, r.requested_by,
                r.invoice_number, r.invoice_date, r.invoice_total, r.recorded_amount, r.receipt_id,
-               r.invoice_attachment_id, %s AS invoiced_by_name, r.invoiced_at, r.requested_date
+               r.invoice_attachment_id, %s AS invoiced_by_name, r.invoiced_at, r.requested_date, r.customer_pickup
           FROM sales.delivery_request r
           LEFT JOIN sales.quotation q ON q.quotation_id = r.quotation_id
           LEFT JOIN hr.employee rb ON rb.employee_id = r.requested_by
@@ -107,6 +107,32 @@ public class DeliveryRequestRepository {
             new MapSqlParameterSource().addValue("id", id).addValue("d", date));
     }
 
+    public void setCustomerPickup(long id, boolean pickup) {
+        jdbc.update("UPDATE sales.delivery_request SET customer_pickup = :p WHERE delivery_request_id = :id",
+            new MapSqlParameterSource().addValue("id", id).addValue("p", pickup));
+    }
+
+    /** The order's owner, keyer and the person who sent the round: the sales people to tell (the trip notices' rule). */
+    public java.util.Set<Long> salesPeople(long id) {
+        var ids = new java.util.LinkedHashSet<Long>();
+        jdbc.query("""
+            SELECT t.created_by, t.keyed_by, r.requested_by FROM sales.delivery_request r
+              JOIN sales.ticket t ON t.ticket_id = r.ticket_id WHERE r.delivery_request_id = :id
+            """, Map.of("id", id), rs -> {
+                for (int i = 1; i <= 3; i++) {
+                    long v = rs.getLong(i);
+                    if (!rs.wasNull()) ids.add(v);
+                }
+            });
+        return ids;
+    }
+
+    public boolean onOpenTrip(long id) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.delivery_trip_round WHERE delivery_request_id = :id AND state = 'PLANNED')
+            """, Map.of("id", id), Boolean.class));
+    }
+
     public void markSent(long id, long by) {
         jdbc.update("""
             UPDATE sales.delivery_request SET status = 'SENT', sent_at = now(), requested_by = :by,
@@ -163,6 +189,14 @@ public class DeliveryRequestRepository {
     }
 
     /** The latest trip row of a round: its PLANNED one when there is one. */
+    public DeliveryRequestDtos.HandoverDto handover(long roundId) {
+        return jdbc.query("""
+            SELECT CAST(delivered_at AT TIME ZONE 'Asia/Bangkok' AS date) AS on_day, recipient_name
+              FROM sales.delivery_record WHERE delivery_request_id = :id ORDER BY delivery_id DESC LIMIT 1
+            """, Map.of("id", roundId), (rs, n) -> new DeliveryRequestDtos.HandoverDto(
+                rs.getObject("on_day", java.time.LocalDate.class), rs.getString("recipient_name"))).stream().findFirst().orElse(null);
+    }
+
     public DeliveryRequestDtos.TripPlanDto tripPlan(long roundId) {
         return jdbc.query("""
             SELECT x.state, d.delivery_date, d.route, d.time_slot, d.vehicle, d.note
@@ -488,6 +522,6 @@ public class DeliveryRequestRepository {
             invDate == null ? null : invDate.toLocalDate(), rs.getBigDecimal("invoice_total"),
             rs.getBigDecimal("recorded_amount"), receiptId, invoiceAttachmentId, rs.getString("invoiced_by_name"),
             invoicedAt == null ? null : invoicedAt.toInstant(),
-            rs.getObject("requested_date", java.time.LocalDate.class));
+            rs.getObject("requested_date", java.time.LocalDate.class), rs.getBoolean("customer_pickup"));
     }
 }

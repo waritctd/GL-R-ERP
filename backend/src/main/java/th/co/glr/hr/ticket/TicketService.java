@@ -2163,7 +2163,7 @@ public class TicketService {
         tickets.addEventWithDocument(s.id(), actor.id(), actor.name(),
             TicketEventKind.DELIVERY_RECORDED, updatedSummary.status(), updatedSummary.status(), message,
             RelatedDocumentType.DELIVERY_RECORD, deliveryId);
-        if (s.createdById() != actor.id()) {
+        if (s.createdById() != actor.id() && !tickets.isCustomerPickupRound(target.linkId())) {
             BigDecimal total = normalized.stream().map(RecordDeliveryRequest.Line::qty).reduce(BigDecimal.ZERO, BigDecimal::add);
             notifications.notifyEmployeeAtLink(s.createdById(), TicketEventKind.DELIVERY_RECORDED,
                 "ส่งของแล้ว " + qtyText(total) + " แผ่น\n" + DealNoticeText.dealLabel(s.code(), s.customerName())

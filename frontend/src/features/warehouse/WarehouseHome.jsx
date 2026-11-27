@@ -11,6 +11,7 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import { TripFormSheet } from './TripFormSheet.jsx';
+import { PickupSheet } from './PickupSheet.jsx';
 import { TripSheet } from './TripSheet.jsx';
 import { RoundText, tripDayLabel } from './tripText.jsx';
 
@@ -35,9 +36,14 @@ export function WarehouseHome() {
   const [picked, setPicked] = useState([]);
   const [form, setForm] = useState(null); // { trip } to edit, { trip: null } to create
   const [openId, setOpenId] = useState(null);
+  const [pickupRound, setPickupRound] = useState(null);
   const [justDone, setJustDone] = useState(null); // an old trip leaves the list once done; its result must stay on screen
   const query = useQuery({ queryKey: queryKeys.deliveryTripsHome(), queryFn: () => api.deliveryTrips.home() });
   const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.deliveryTripsHome() });
+  const switchPickup = useMutation({
+    mutationFn: ({ roundId, pickup }) => api.deliveryRequests.setPickup(roundId, pickup),
+    onSettled: refresh,
+  });
   const save = useMutation({
     mutationFn: ({ id, body }) => (id ? api.deliveryTrips.update(id, body) : api.deliveryTrips.create(body)),
     onSuccess: () => { setForm(null); setPicked([]); },
@@ -48,7 +54,7 @@ export function WarehouseHome() {
   if (query.isError) {
     return <StatePanel title="โหลดข้อมูลงานคลังไม่สำเร็จ" description={query.error.message} action={<Button type="button" variant="secondary" onClick={() => query.refetch()}>ลองอีกครั้ง</Button>} />;
   }
-  const { today, toCheck, toInvoice, waiting, trips, routes } = query.data;
+  const { today, toCheck, toInvoice, waiting, pickups, trips, routes } = query.data;
   const selected = picked.filter((id) => waiting.some((r) => r.roundId === id));
   const openTrip = trips.find((t) => t.id === openId) ?? (justDone?.id === openId ? justDone : null);
   const toggle = (id) => setPicked((now) => (now.includes(id) ? now.filter((x) => x !== id) : [...now, id]));
@@ -74,7 +80,7 @@ export function WarehouseHome() {
                 {toCheck.map((r) => (
                   <li key={r.roundId}>
                     <button type="button" className="flex min-h-14 w-full cursor-pointer items-center gap-3 border-0 bg-transparent px-4 py-2 text-left text-text" onClick={() => openOrder(r)}>
-                      <RoundText round={r} extra={r.sentAt ? `ส่งเรื่อง ${formatThaiDate(r.sentAt)}` : null} />
+                      <RoundText round={r} handover extra={r.sentAt ? `ส่งเรื่อง ${formatThaiDate(r.sentAt)}` : null} />
                       <Icon name="chevronRight" size={16} />
                     </button>
                   </li>
@@ -88,12 +94,29 @@ export function WarehouseHome() {
               <ul className={CARD}>
                 {toInvoice.map((r) => (
                   <li key={r.roundId} className="px-4 py-2">
-                    <RoundText round={r} extra={r.forwardedAt ? `ส่งต่อแล้ว ${formatThaiDate(r.forwardedAt)}` : null} />
+                    <RoundText round={r} handover extra={r.forwardedAt ? `ส่งต่อแล้ว ${formatThaiDate(r.forwardedAt)}` : null} />
                   </li>
                 ))}
               </ul>
             </Section>
           ) : null}
+
+          <Section title="ลูกค้ามารับเอง" hint={`${pickups.length} ออเดอร์`} testId="pickups">
+            {pickups.length ? (
+              <ul className={CARD}>
+                {pickups.map((r) => (
+                  <li key={r.roundId} className="flex flex-col gap-1 px-4 py-2">
+                    <RoundText round={r} />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button type="button" variant="primary" className="min-h-12" data-testid={`pickup-done-${r.roundId}`} onClick={() => setPickupRound(r)}>ลูกค้ารับของแล้ว</Button>
+                      <Button type="button" variant="text" className="min-h-12" disabled={switchPickup.isPending} onClick={() => switchPickup.mutate({ roundId: r.roundId, pickup: false })}>เปลี่ยนเป็นส่งให้ลูกค้า</Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : <p className={EMPTY}>ไม่มีออเดอร์ที่รอลูกค้ามารับ</p>}
+            {switchPickup.error ? <p role="alert" className="m-0 px-1 text-sm text-danger">{switchPickup.error.message}</p> : null}
+          </Section>
 
           <Section title="ได้ใบกำกับแล้ว · รอจัดรอบส่ง" hint={selected.length ? `เลือกแล้ว ${selected.length} จาก ${waiting.length}` : `${waiting.length} ออเดอร์`} testId="waiting">
             {waiting.length ? (
@@ -105,6 +128,7 @@ export function WarehouseHome() {
                       <RoundText round={r} />
                       {r.delayed ? <span className="shrink-0 rounded-full bg-warning-bg px-2 py-0.5 text-xs font-bold text-warning-dark">เลื่อนส่ง</span> : null}
                     </label>
+                    <Button type="button" variant="text" className="ml-11 min-h-12" disabled={switchPickup.isPending} onClick={() => switchPickup.mutate({ roundId: r.roundId, pickup: true })}>เปลี่ยนเป็นลูกค้ามารับเอง</Button>
                   </li>
                 ))}
               </ul>
@@ -139,6 +163,9 @@ export function WarehouseHome() {
         </div>
       </div>
 
+      {pickupRound ? (
+        <PickupSheet round={pickupRound} onClose={() => setPickupRound(null)} onDone={() => { setPickupRound(null); refresh(); }} />
+      ) : null}
       {openTrip && !form ? (
         <TripSheet trip={openTrip} today={today} onClose={() => setOpenId(null)} onEdit={() => openForm(openTrip)} onChanged={refresh} onDelivered={setJustDone} onOpenOrder={openOrder} />
       ) : null}
