@@ -1258,6 +1258,11 @@ public class ImportRequestService {
      * notice. The IR rows must already hold their new steps. The ticket is locked FIRST, before any event insert:
      * the event's FK takes a KEY SHARE lock on the ticket, and two callers upgrading to FOR UPDATE would deadlock. */
     public boolean afterStepChanges(long ticketId, List<StepChange> changes, UserPrincipal actor, String note) {
+        return afterStepChanges(ticketId, changes, actor, note, true);
+    }
+
+    /** {@code notify} false is the sheet backfill: the same events and rollup, with no bell and no email to anyone. */
+    public boolean afterStepChanges(long ticketId, List<StepChange> changes, UserPrincipal actor, String note, boolean notify) {
         String noteSuffix = note != null && !note.isBlank() ? " — " + note : "";
         tickets.lockTicketForUpdate(ticketId);
         for (StepChange c : changes) {
@@ -1272,10 +1277,13 @@ public class ImportRequestService {
         if (received != null && allFactoriesReceived(ticketId)) {
             boolean alreadyAnnounced = tickets.hasReceivedGoods(ticketId); // a lot returned, then the line marked, arrives here again
             ticketService.applyImportRequestRollup(ticketId, actor);
-            if (!alreadyAnnounced) {
+            if (!alreadyAnnounced && notify) {
                 notifyAllGoodsReceived(ticketId, received.ir().docNumber(), received.ir().factoryName());
             }
             return !alreadyAnnounced; // already told: the arrival of this lot still gets its own bell
+        }
+        if (!notify) {
+            return false;
         }
         List<Long> nothingArrived = rounds.nothingArrivedIrIds(ticketId); // "latest step: received" would be a false arrival notice
         StepChange started = changes.stream().filter(c -> ImportRequestStep.CONTACTED.equals(c.from())

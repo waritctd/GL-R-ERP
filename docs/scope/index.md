@@ -49,6 +49,8 @@ Code pointers are short. `hr/<package>` means `backend/src/main/java/th/co/glr/h
 | 34 | Document generators follow the quotation editor | Slice 2 | planned |
 | 35 | Weekly report replacement | Slice 3 | in-progress |
 | 36 | Import adds or moves a line on a contacted factory | Slice 4 | in-progress |
+| 37 | Import sheet backfill, import jobs and shared IR progress | Slice 4 | in-progress |
+| 38 | Link a loaded IR to a job | Slice 4 | planned |
 
 ## Epics
 
@@ -56,13 +58,15 @@ Code pointers are short. `hr/<package>` means `backend/src/main/java/th/co/glr/h
 - [HR](hr.md): features 10 to 15, all existing.
 - [Payroll](payroll.md): features 16 to 19, all existing.
 - [Sales](sales.md): features 20 to 26 existing, 33 to 35 planned, 36 in progress.
-- [Import and fulfilment](import-fulfilment.md): features 27 to 29 existing, 30 in progress.
+- [Import and fulfilment](import-fulfilment.md): features 27 to 29 existing, 30 and 37 in progress, 38 planned.
 - [Finance](finance.md): features 31 and 32, both existing.
 
 ## Deferred
 
 Out of scope for the current build pass, kept so the plan stays honest.
 - **Visit plan and key accounts**: the last step of the weekly report work, after the report and the manager view.
+- **Import cost columns**: a home in the portal for the import sheet's goods value, exchange rate and cost estimate (from spec 0001).
+- **Old received rounds on การขนส่ง**: hide received no job rounds after a while (from spec 0001).
 
 ## Legend
 

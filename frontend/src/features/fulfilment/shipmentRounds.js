@@ -50,6 +50,8 @@ export const ALL_FACT_FIELDS = [
   { key: 'goodsReadyOn', label: 'ของพร้อมที่โรงงาน', type: 'date' },
   { key: 'etdPlannedOn', label: 'เรือออกตามแผน', type: 'date' },
   { key: 'etdActualOn', label: 'เรือออกจริง', type: 'date' },
+  { key: 'transshipEtaOn', label: 'ETA ท่าเปลี่ยนเรือ', type: 'date' },
+  { key: 'insuredOn', label: 'วันที่ทำประกัน', type: 'date' },
   { key: 'etaOn', label: 'คาดว่าถึงไทย', type: 'date' },
   { key: 'port', label: 'ท่าเรือ', type: 'text' },
   { key: 'arrivedOn', label: 'วันที่ของถึงไทย', type: 'date' },
@@ -120,6 +122,8 @@ export const lotProduct = (lot) => [[lot.brand, lot.model].filter(Boolean).join(
 
 /** Who the lot is for: the deal's customer/project. */
 export const PURPOSE_LABELS = { SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก', PROJECT: 'โครงการ' };
+/** Where an import request came from, on การขนส่ง. */
+export const ORIGIN_LABELS = { JOB: 'งานขาย', SALES_ORDER: 'ฝ่ายขายสั่ง', IMPORT: 'ฝ่ายนำเข้าสร้าง', BACKFILL: 'จากตารางของเข้า' };
 
 /** Who a lot (or a waiting IR) is for: the deal's project/customer, or for an order with no project "ตัวอย่าง · requester". */
 export const lotWho = (lot) => lotProjectName(lot) || (lot.ticketId == null
@@ -152,8 +156,8 @@ export function roundDatesLine(round) {
 }
 
 /** Under a round's name on the desktop table: its first proforma number, else the goods-receipt number. */
-export const roundSubline = (round) => (round.documents ?? []).find((d) => d.kind === 'PROFORMA' && d.docNo)?.docNo
-  ?? round.facts?.grNumber ?? '';
+export const roundSubline = (round) => [round.source === 'BACKFILL' ? 'จากตารางของเข้า' : null,
+  (round.documents ?? []).find((d) => d.kind === 'PROFORMA' && d.docNo)?.docNo ?? round.facts?.grNumber].filter(Boolean).join(' · ');
 
 /** What tells two rounds of one project apart: the round label and the proforma (or GR) number. */
 export const roundReference = (round) => [...new Set([round.facts?.label, roundSubline(round)].filter(Boolean))].join(' · ');

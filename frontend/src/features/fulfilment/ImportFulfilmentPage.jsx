@@ -8,6 +8,7 @@ import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -15,11 +16,12 @@ import { cn } from '../../utils/cn.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { AdvanceRoundSheet } from './AdvanceRoundSheet.jsx';
 import { DownloadIrButton } from './DownloadIrButton.jsx';
+import { ImportJobSheet } from './ImportJobSheet.jsx';
 import { IrNo } from './IrNo.jsx';
 import { canAccessPath } from '../../app/permissions.js';
 import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import {
-  compareRoundEta, formatQty, irRows, lotProjectName, lotProduct, lotWho, lotWhoSub, roundIrSummary, roundProjectNames, roundArrivalKey, roundReference, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
+  compareRoundEta, formatQty, irRows, lotProjectName, lotProduct, lotWho, lotWhoSub, ORIGIN_LABELS, roundIrSummary, roundProjectNames, roundArrivalKey, roundReference, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
 } from './shipmentRounds.js';
 import { useRoundUndo } from './useRoundUndo.jsx';
 
@@ -31,13 +33,19 @@ const arrivalText = (r) => (r.facts?.arrivedOn ? `ถึงไทยแล้ว
   : r.facts?.etaOn ? formatThaiDate(r.facts.etaOn) : 'ยังไม่ระบุ');
 
 /** A round's IR numbers; past `limit` the rest stay one tap away. */
-function IrChips({ rows, limit }) {
+function IrChips({ rows, limit, openJob }) {
   const [open, setOpen] = useState(false);
   const shown = open ? rows : rows.slice(0, limit);
   const hidden = rows.length - shown.length;
   return (
     <span className="flex flex-wrap items-center gap-1">
-      {shown.map((row) => <code key={row.key} className="max-w-full break-all rounded-sm bg-surface-subtle px-1.5 text-xs text-text-secondary">{row.docNumber}</code>)}
+      {shown.map((row) => (row.ticketId == null && openJob
+        ? (
+          <Link key={row.key} to={`/fulfilment/jobs/${row.key}`} className="max-w-full break-all rounded-sm bg-surface-subtle px-1.5 text-xs text-info underline">
+            <code>{row.docNumber}</code>
+          </Link>
+        )
+        : <code key={row.key} className="max-w-full break-all rounded-sm bg-surface-subtle px-1.5 text-xs text-text-secondary">{row.docNumber}</code>))}
       {hidden > 0 ? (
         <button type="button" onClick={() => setOpen(true)} aria-label={`แสดงเลขที่ IR อีก ${hidden} ใบ`}
           className="inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-xs font-bold text-primary hover:bg-surface-hover">
@@ -61,12 +69,15 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
   const editable = (user?.role === 'import' || user?.role === 'ceo') && !readOnly;
   const canOpenDeal = canAccessPath('/import/deals/1', user);
   const canDownloadIr = user?.role !== 'warehouse'; // the stored IR PDF is import's (cost and factory data)
+  const canOpenJob = user?.role !== 'warehouse'; // the server refuses the warehouse a งานนำเข้า (the no-deal request read rule)
   const [step, setStep] = useState('ALL');
   const [waitingPicked, setWaitingPicked] = useState(false);
   const [search, setSearch] = useState('');
   const [etaDescending, setEtaDescending] = useState(false);
   const [advancing, setAdvancing] = useState(null);
   const [planning, setPlanning] = useState(false);
+  const [creatingJob, setCreatingJob] = useState(false);
+  const [showChecks, setShowChecks] = useState(false);
   const navigate = useNavigate();
   const undo = useRoundUndo({ showToast });
 
@@ -84,6 +95,9 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
   });
   const rounds = useMemo(() => listQuery.data?.rounds ?? [], [listQuery.data]);
   const waiting = useMemo(() => listQuery.data?.waiting ?? [], [listQuery.data]);
+  // What the one time load of the import team's sheet did, and what it left for import to check. Null until it has run.
+  const runQuery = useQuery({ queryKey: queryKeys.importSheetRun(), queryFn: () => api.importJobs.latestRun(), enabled: editable, retry: false });
+  const run = runQuery.data;
   const chip = waitingPicked && waiting.length > 0 ? 'WAITING' : step;
 
   const counts = useMemo(() => {
@@ -102,12 +116,12 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
         || (a.customerName ?? a.code ?? '').localeCompare(b.customerName ?? b.code ?? '', 'th'));
   }, [ticketsQuery.data, rounds, waiting, term]);
   const visibleWaiting = useMemo(() => (chip === 'ALL' || chip === 'WAITING' ? waiting : [])
-    .filter((w) => !term || [w.factoryName, w.docNumber, w.ticketCode, w.customerName, lotProjectName(w)]
+    .filter((w) => !term || [w.factoryName, w.docNumber, w.ticketCode, w.customerName, lotProjectName(w), w.purposeNote, w.requesterName]
       .some((f) => (f ?? '').toLowerCase().includes(term))), [waiting, chip, term]);
   const visibleRounds = useMemo(() => rounds
     .filter((r) => chip === 'ALL' || chip === r.importStep)
     .filter((r) => !term || [roundTitle(r), r.facts?.label, r.facts?.vessel, r.facts?.proformaNo, r.facts?.invoiceNo, ...(r.documents ?? []).map((d) => d.docNo),
-      ...r.lots.flatMap((l) => [l.docNumber, l.ticketCode, l.customerName, l.projectName])]
+      ...r.lots.flatMap((l) => [l.docNumber, l.ticketCode, l.customerName, l.projectName, l.purposeNote, l.requesterName])]
       .some((f) => (f ?? '').toLowerCase().includes(term)))
     .sort((a, b) => compareRoundEta(a, b, etaDescending)), [rounds, chip, term, etaDescending]);
 
@@ -116,7 +130,7 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
     {
       key: 'ir',
       header: 'ใบขอซื้อ',
-      render: (w) => (w.ticketId == null ? <code>{w.docNumber}</code> : <IrNo row={w} open={canOpenDeal} />),
+      render: (w) => <IrNo row={w} open={canOpenDeal} openJob={canOpenJob} />,
     },
     {
       key: 'who',
@@ -140,11 +154,14 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
       render: (w) => (
         <span className="flex flex-col items-start gap-1">
           <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
+          <StatusBadge tone="neutral">{ORIGIN_LABELS[w.origin] ?? 'งานขาย'}</StatusBadge>
           {w.ticketId == null ? <DownloadIrButton hidden={!canDownloadIr} importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
         </span>
       ),
     },
   ];
+
+  const newJobButton = editable ? <Button type="button" variant="secondary" onClick={() => setCreatingJob(true)} data-testid="import-job-new">+ สร้างงานนำเข้า</Button> : null;
 
   const advanceButton = (round, className) => (editable && round.importStep !== 'RECEIVED' ? (
     <Button type="button" variant="secondary" className={className} onClick={() => setAdvancing(round)} data-testid={`round-advance-${round.id}`}>เลื่อนขั้นตอน</Button>
@@ -179,7 +196,7 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
         );
       },
     },
-    { key: 'irNos', header: 'เลขที่ IR', render: (r) => <IrChips rows={irRows(r)} limit={3} /> },
+    { key: 'irNos', header: 'เลขที่ IR', render: (r) => <IrChips openJob={canOpenJob} rows={irRows(r)} limit={3} /> },
     {
       key: 'qty',
       header: 'จำนวน',
@@ -213,12 +230,13 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
       <span className="flex min-w-0 flex-col gap-0.5">
         <b className="text-sm">{w.factoryName}</b>
         <small className="text-text-muted">
-          {w.ticketId == null ? <code>{w.docNumber}</code> : <IrNo row={w} open={canOpenDeal} />}
+          <IrNo row={w} open={canOpenDeal} openJob={canOpenJob} />
           {' · '}{lotWho(w)} · เหลือ {w.lines.map((l) => `${formatQty(l.remainingQty)} ${l.unit ?? ''}`.trim()).join(', ')}
         </small>
       </span>
       <span className="flex shrink-0 flex-col items-end gap-1">
         <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
+        <StatusBadge tone="neutral">{ORIGIN_LABELS[w.origin] ?? 'งานขาย'}</StatusBadge>
         {w.ticketId == null ? <DownloadIrButton hidden={!canDownloadIr} importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
       </span>
     </div>
@@ -239,7 +257,7 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
         </div>
         <p className="m-0 text-sm font-semibold">{r.facts?.arrivedOn ? '' : 'คาดว่าถึงไทย · '}{arrivalText(r)}</p>
         {roundSummaryLine(r) ? <p className="m-0 text-sm text-text-muted">{roundSummaryLine(r)}</p> : null}
-        <IrChips rows={irRows(r)} limit={2} />
+        <IrChips openJob={canOpenJob} rows={irRows(r)} limit={2} />
         <div className="flex items-baseline justify-between gap-3 text-sm">
           <span className="text-text-muted">{sum.mix}</span>
           <b className="text-right tabular-nums">{sum.qty}</b>
@@ -260,15 +278,45 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
   return (
     <PageStack>
       {embedded ? null : <ShippingSwitch user={user} current="rounds" />}
+      {/* Inside the merged การขนส่ง page there is no header of our own, so the create button gets its own row. */}
+      {embedded && editable ? <div className="flex justify-end mobile:flex-col">{newJobButton}</div> : null}
       {embedded ? null : <PageHeader
         title="การขนส่ง"
         subtitle="เลื่อนทีละรอบ ทุกใบขอซื้อในรอบขยับพร้อมกัน"
         actions={(
-          <Button type="button" variant="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.shipmentRounds() })} title="รีเฟรช" aria-label="รีเฟรช">
-            <Icon name="refresh" />
-          </Button>
+          <>
+            {newJobButton}
+            <Button type="button" variant="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.shipmentRounds() })} title="รีเฟรช" aria-label="รีเฟรช">
+              <Icon name="refresh" />
+            </Button>
+          </>
         )}
       />}
+
+      {runQuery.isError ? (
+        <Panel className="border-warning-border bg-warning-bg" data-testid="sheet-run-error">
+          <p className="m-0 flex flex-wrap items-center gap-3 text-sm">
+            โหลดผลการนำเข้าจากตารางของเข้าไม่สำเร็จ — {runQuery.error?.message || 'ลองอีกครั้ง'}
+            <Button type="button" size="sm" variant="secondary" onClick={() => runQuery.refetch()}>ลองอีกครั้ง</Button>
+          </p>
+        </Panel>
+      ) : null}
+      {run ? (
+        <Panel className={cn('flex flex-wrap items-center justify-between gap-3', run.blocksFailed > 0 ? 'border-warning-border bg-warning-bg' : 'border-info-border bg-info-bg')} data-testid="sheet-run-banner">
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <b className="text-sm">{run.blocksFailed > 0 ? 'นำสถานะจากตารางของเข้ามาไว้ในระบบแล้วบางส่วน' : 'นำสถานะจากตารางของเข้ามาไว้ในระบบแล้ว'}</b>
+            <span className="text-xs text-text-secondary">
+              เมื่อ {formatThaiDate(run.finishedAt)} · {run.roundsCreated} รอบขนส่ง · {run.irsCreated} งานนำเข้าที่ยังไม่มีงานขาย
+              {run.blocksFailed > 0
+                ? ` · ${run.blocksFailed} กลุ่มแถวบันทึกไม่สำเร็จ ยังไม่อยู่ในระบบ ดูรายการที่ต้องตรวจ`
+                : ' · ตั้งแต่นี้แก้ไขและสร้างงานนำเข้าในระบบได้เลย ไม่ต้องกลับไปแก้ในตาราง'}
+            </span>
+          </span>
+          {run.needsCheck?.length > 0 ? (
+            <Button type="button" size="sm" variant="secondary" onClick={() => setShowChecks(true)} data-testid="sheet-run-checks">ดู {run.needsCheck.length} รายการที่ต้องตรวจ</Button>
+          ) : null}
+        </Panel>
+      ) : null}
 
       {waiting.length > 0 ? (
         <section className="flex flex-wrap items-center gap-3 rounded-md border border-warning-border bg-warning-bg-soft px-4 py-2.5 mobile:flex-col mobile:items-stretch" data-testid="waiting-banner">
@@ -426,6 +474,22 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
           onClose={() => setPlanning(false)}
           onDone={(round) => { setPlanning(false); if (round?.id) navigate(`/fulfilment/rounds/${round.id}`); }}
         />
+      ) : null}
+      {creatingJob ? (
+        <ImportJobSheet showToast={showToast} onClose={() => setCreatingJob(false)}
+          onSaved={(job) => { setCreatingJob(false); navigate(`/fulfilment/jobs/${job.importRequest.id}`); }} />
+      ) : null}
+      {showChecks && run ? (
+        <Modal title="รายการที่ต้องตรวจ" subtitle="จากการนำเข้าตารางของเข้า" onClose={() => setShowChecks(false)} placement="sheet-on-phone" testId="sheet-run-checks-sheet">
+          <ul className="m-0 flex list-none flex-col p-0">
+            {run.needsCheck.map((c) => (
+              <li key={`${c.row}-${c.what}`} className="flex flex-col gap-0.5 border-t border-border-subtle py-2 first:border-t-0">
+                <b className="text-sm">{c.row > 0 ? `แถว ${c.row} · ` : ''}{c.what}</b>
+                <span className="text-xs text-text-muted">{c.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </Modal>
       ) : null}
       {undo.snackbar}
     </PageStack>

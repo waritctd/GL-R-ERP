@@ -125,7 +125,8 @@ public class NoProjectOrderService {
     @Transactional
     public ImportRequestDto withdraw(long id, UserPrincipal actor) {
         var meta = stored.findNoProjectMeta(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอสั่งของนี้"));
-        boolean requester = actor.id() == meta.requesterId();
+        // A job import created, or one from the sheet, is theirs to take back even when a rep is named on it.
+        boolean requester = actor.id() == meta.requesterId() && "PORTAL".equals(meta.source());
         if (!requester && !"import".equals(actor.role()) && !"ceo".equals(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
@@ -136,7 +137,7 @@ public class NoProjectOrderService {
         }
         if (requester && !"import".equals(actor.role())) {
             notifications.notifyByRoleAtLink("import", "IMPORT_ORDER_WITHDRAWN",
-                actor.name() + " ยกเลิกคำขอสั่งของ " + row.docNumber() + " (" + PURPOSE_LABELS.get(meta.purpose()) + " · "
+                actor.name() + " ยกเลิกคำขอสั่งของ " + row.docNumber() + " (" + ImportJobService.PURPOSE_LABELS.get(meta.purpose()) + " · "
                     + meta.purposeNote() + ")\nสิ่งที่ต้องทำต่อ: ไม่ต้องสั่งซื้อรายการนี้", "/fulfilment");
         }
         return stored.findById(id).orElseThrow();

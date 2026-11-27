@@ -304,6 +304,15 @@ export const API_ROUTES = {
   // สั่งของไม่มีโครงการ (create) and ของที่ฉันสั่ง (every incoming lot of the caller's orders and project deals).
   noProjectOrders: { create: '/api/no-project-orders', withdraw: (id) => `/api/no-project-orders/${id}/withdraw` },
   myIncoming: { get: '/api/my-incoming' },
+  // งานนำเข้า (ImportJobController): an issued IR with no sales job. Writes are import and the CEO only.
+  importJobs: {
+    list: '/api/import-jobs',
+    repOptions: '/api/import-jobs/rep-options',
+    detail: (id) => `/api/import-jobs/${id}`,
+    items: (id) => `/api/import-jobs/${id}/items`,
+    item: (id, itemId) => `/api/import-jobs/${id}/items/${itemId}`,
+    latestRun: '/api/import-sheet/backfill-runs/latest',
+  },
   // Shipment rounds (ShipmentRoundController): import's queue and round page. Documents and their files are import/CEO only.
   shipmentRounds: {
     list: () => '/api/shipment-rounds',

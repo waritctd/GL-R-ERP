@@ -159,6 +159,10 @@ export const queryKeys = {
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],
   // ของที่ฉันสั่ง (GET /api/my-incoming).
   myIncoming: () => ['myIncoming'],
+  // งานนำเข้า (GET /api/import-jobs/{id}), who it can be named for, and what the sheet load left to check.
+  importJob: (id) => ['importJobs', 'detail', Number(id)],
+  importJobReps: () => ['importJobs', 'reps'],
+  importSheetRun: () => ['importJobs', 'latestRun'],
   // ของกำลังมา on the deal's ส่งของ tab (GET /api/tickets/{id}/incoming).
   ticketIncoming: (id) => ['tickets', 'incoming', Number(id)],
   // Which brands a deal needs a ใบขอซื้อ for — one F-SM-001 per brand.

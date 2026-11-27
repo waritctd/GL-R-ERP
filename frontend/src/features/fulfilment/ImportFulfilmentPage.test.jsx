@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImportFulfilmentPage } from './ImportFulfilmentPage.jsx';
 import { ShipmentRoundPage } from './ShipmentRoundPage.jsx';
@@ -140,7 +140,7 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     expect(screen.queryByText('ยังไม่มีรอบขนส่ง')).toBeNull();
   });
 
-  it('an order with no project reads "ตัวอย่าง · requester" and "ไม่มีโครงการ", with no deal link', async () => {
+  it('an order with no project reads "ตัวอย่าง · requester" and "ไม่มีโครงการ", opening its import job, not a deal', async () => {
     vi.mocked(api.shipmentRounds.list).mockResolvedValue({ rounds: [], waiting: [{
       importRequestId: 31, docNumber: 'IR-TEST-031', factoryId: 2, factoryName: 'Waiting Ceramics', ticketId: null, ticketCode: null,
       customerName: null, projectName: null, orderPurpose: 'SAMPLE', purposeNote: 'ให้ผู้ออกแบบ (ทดสอบ)', requesterName: 'คุณ ทดสอบ',
@@ -148,7 +148,7 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     renderAt('/fulfilment');
     expect((await screen.findAllByText('ตัวอย่าง · คุณ ทดสอบ')).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/ไม่มีโครงการ/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('IR-TEST-031')[0].closest('a')).toBeNull(); // no deal to open
+    expect(screen.getAllByText('IR-TEST-031')[0].closest('a').getAttribute('href')).toBe('/fulfilment/jobs/31'); // no deal: it opens its งานนำเข้า
     expect(screen.getAllByTestId('ir-pdf-31').length).toBeGreaterThan(0); // import gets the order form to send
     expect(screen.queryByTestId('waiting-toggle')).toBeNull(); // no rounds: the list is the page, nothing to hide it for
   });
@@ -313,6 +313,18 @@ describe('รอบขนส่ง page', () => {
     fireEvent.click((await screen.findAllByTestId('lot-manage-1'))[0]);
     fireEvent.click(await screen.findByTestId('lot-remove'));
     await waitFor(() => expect(api.shipmentRounds.removeLot).toHaveBeenCalledWith(7, 1));
+  });
+
+  it('the round page links a งานนำเข้า IR for import and shows the warehouse plain text', async () => {
+    vi.mocked(api.shipmentRounds.get).mockResolvedValue({ round: round({ lots: [lot({ importRequestId: 32, docNumber: 'IR-TEST-032', ticketId: null, ticketCode: null })] }) });
+    const hrefs = () => [...document.querySelectorAll('a')].map((el) => el.getAttribute('href')).filter((h) => h?.startsWith('/fulfilment/jobs/'));
+    renderAt('/fulfilment/rounds/7');
+    await screen.findAllByText('IR-TEST-032');
+    expect(hrefs()).toContain('/fulfilment/jobs/32');
+    cleanup();
+    renderAt('/fulfilment/rounds/7', { id: 6, name: 'คลังสินค้า', role: 'warehouse', canPlanDeliveries: true });
+    await screen.findAllByText('IR-TEST-032');
+    expect(hrefs()).toEqual([]);
   });
 
   it('has no lot actions once the round is in transit', async () => {

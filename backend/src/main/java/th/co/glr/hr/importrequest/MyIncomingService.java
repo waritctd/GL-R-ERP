@@ -66,8 +66,10 @@ public class MyIncomingService {
         for (List<MyLine> item : byItem.values()) {
             MyLine first = item.get(0);
             boolean noLots = !irsWithLots.contains(first.importRequestId());
+            // only a rep's own order, or the CEO: a job import created, or one loaded from the sheet, is theirs to take back
             boolean canWithdraw = first.ticketId() == null && noLots
-                && (actor.id() == (first.requesterId() == null ? -1L : first.requesterId()) || manager && "ceo".equals(role));
+                && ("PORTAL".equals(first.source()) && actor.id() == (first.requesterId() == null ? -1L : first.requesterId())
+                    || manager && "ceo".equals(role));
             List<MyLine> withLot = item.stream().filter(l -> l.lot() != null).toList();
             BigDecimal placed = withLot.stream().map(l -> l.lot().qty()).reduce(BigDecimal.ZERO, BigDecimal::add);
             BigDecimal remaining = first.itemQty().subtract(placed);

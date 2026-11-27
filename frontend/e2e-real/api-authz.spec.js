@@ -90,6 +90,14 @@ const GATES = [
     // this narrower, purpose-built list — the same asymmetry the row above's comment calls out.
     source: 'CommissionController#reps / CommissionService.MANUAL_CREATE_ROLES',
   },
+  {
+    name: 'GET /api/import-jobs/rep-options — who a งานนำเข้า can be named for',
+    path: '/api/import-jobs/rep-options',
+    allowed: ['import', 'ceo'],
+    // The same gate as every import job write, so a rep cannot list colleagues through it.
+    denied: except('import', 'ceo'),
+    source: 'ImportJobService#repOptions',
+  },
 ];
 
 test.describe('backend authorization (real Java services)', () => {

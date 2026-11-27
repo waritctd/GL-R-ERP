@@ -1,5 +1,6 @@
 package th.co.glr.hr.importrequest;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -533,15 +534,75 @@ public class ImportRequestRepository {
     // ── orders with no project (สั่งของไม่มีโครงการ) ─────────────────────────────────────────────────
 
     /** What makes an import request a no-project order: its purpose, requester, who/where note and wanted-by date. */
-    public record NoProjectMeta(String purpose, long requesterId, String purposeNote, LocalDate wantedBy) {}
+    /** {@code requesterId} is 0 for an import job with no named rep. */
+    public record NoProjectMeta(String purpose, long requesterId, String purposeNote, LocalDate wantedBy, String source) {}
 
     /** Empty for a deal IR (and for an unknown id). */
     public Optional<NoProjectMeta> findNoProjectMeta(long id) {
         return jdbc.query("""
-            SELECT order_purpose, requester_id, purpose_note, wanted_by FROM sales.import_request
+            SELECT order_purpose, requester_id, purpose_note, wanted_by, source FROM sales.import_request
              WHERE import_request_id = :id AND ticket_id IS NULL
             """, Map.of("id", id), (rs, n) -> new NoProjectMeta(rs.getString(1), rs.getLong(2), rs.getString(3),
-                localDate(rs, "wanted_by"))).stream().findFirst();
+                localDate(rs, "wanted_by"), rs.getString("source"))).stream().findFirst();
+    }
+
+    /** One issued import request with no deal, made by import or by the sheet backfill. */
+    public record NewImportJob(long factoryId, String factoryName, String purpose, String purposeLabel, Long requesterId,
+                               String requesterName, String purposeNote, LocalDate wantedBy, String requiredByText,
+                               String docNumber, LocalDate issueDate, LocalDate depositReceivedOn, long actorId,
+                               String actorName, String actorEmail, String source) {}
+
+    public long insertImportJob(NewImportJob j) {
+        KeyHolder keys = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO sales.import_request
+                (ticket_id, factory_id, factory_name, brand, version, status, doc_number, issue_date, first_issued_date,
+                 customer_name, project_name, requested_by_name, required_by_note, deposit_received_date,
+                 created_by_id, created_by_name, issued_by_id, issued_by_name, issued_by_email, issued_at,
+                 import_step, import_step_at, import_step_by_id, import_step_by_name,
+                 order_purpose, requester_id, purpose_note, wanted_by, source)
+            VALUES (NULL, :f, :fn, :brand, 1, 'ISSUED', :doc, :issue, :issue,
+                    :customer, :label, :requester, :wantedText, :deposit,
+                    :actor, :actorName, :actor, :actorName, :actorEmail, now(),
+                    'CONTACTED', :issue, :actor, :actorName,
+                    :purpose, :requesterId, :note, :wantedBy, :source)
+            """, new MapSqlParameterSource("f", j.factoryId()).addValue("fn", j.factoryName())
+                .addValue("brand", ImportSheetParser.cut(j.factoryName(), 120)).addValue("doc", j.docNumber())
+                .addValue("issue", j.issueDate()).addValue("customer", ImportSheetParser.cut(j.purposeNote(), 200))
+                .addValue("label", j.purposeLabel()).addValue("requester", ImportSheetParser.cut(j.requesterName(), 200))
+                .addValue("wantedText", ImportSheetParser.cut(j.requiredByText(), 200))
+                .addValue("deposit", j.depositReceivedOn()).addValue("actor", j.actorId())
+                .addValue("actorName", j.actorName()).addValue("actorEmail", j.actorEmail())
+                .addValue("purpose", j.purpose()).addValue("requesterId", j.requesterId())
+                .addValue("note", ImportSheetParser.cut(j.purposeNote(), 255)).addValue("wantedBy", j.wantedBy())
+                .addValue("source", j.source()),
+            keys, new String[] {"import_request_id"});
+        return keys.getKey().longValue();
+    }
+
+    /** Adds one line after the existing ones and returns its id. */
+    public long appendItem(long importRequestId, String code, String size, BigDecimal qty, String unit, String note) {
+        return jdbc.queryForObject("""
+            INSERT INTO sales.import_request_item (import_request_id, seq, code, size, qty, unit, note)
+            VALUES (:ir, (SELECT COALESCE(max(seq), 0) + 1 FROM sales.import_request_item WHERE import_request_id = :ir),
+                    :code, :size, :qty, :unit, :note)
+            RETURNING import_request_item_id
+            """, new MapSqlParameterSource("ir", importRequestId).addValue("code", code).addValue("size", size)
+                .addValue("qty", qty).addValue("unit", unit).addValue("note", note), Long.class);
+    }
+
+    /** Moves the portal's IR counter past a number written by hand, so it never mints that number again. A number that
+     * is not of the {@code IR<yy><nnn>} shape has no place in the counter and is left alone. */
+    public void raiseDocSequence(String docNumber) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^IR(\\d{2})(\\d{3,4})(-\\d{1,2})?$").matcher(docNumber);
+        if (!m.matches()) {
+            return;
+        }
+        jdbc.update("""
+            INSERT INTO sales.document_sequence (doc_type, year_th, last_seq)
+            VALUES ('IMPORT_REQUEST', :y, :seq)
+            ON CONFLICT (doc_type, year_th) DO UPDATE SET last_seq = GREATEST(sales.document_sequence.last_seq, EXCLUDED.last_seq)
+            """, Map.of("y", 2500 + Integer.parseInt(m.group(1)), "seq", Integer.parseInt(m.group(2))));
     }
 
     /** One ISSUED, numbered IR at CONTACTED with no deal. The form's "สั่งมาให้" carries the who/where note and its

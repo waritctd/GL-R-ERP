@@ -15,7 +15,16 @@ public final class ShipmentRoundDtos {
                                 String containerNos, String port, LocalDate goodsReadyOn, LocalDate etdPlannedOn,
                                 LocalDate etdActualOn, LocalDate etaOn, LocalDate arrivedOn,
                                 LocalDate customsReleasedOn, String grNumber, Boolean completePerInvoice,
-                                String completeNote, String note) {}
+                                String completeNote, String note, LocalDate transshipEtaOn, LocalDate insuredOn) {
+        public ShipmentFacts(String label, String transportMode, String vessel, String voyage, String forwarder,
+                             String containerNos, String port, LocalDate goodsReadyOn, LocalDate etdPlannedOn,
+                             LocalDate etdActualOn, LocalDate etaOn, LocalDate arrivedOn,
+                             LocalDate customsReleasedOn, String grNumber, Boolean completePerInvoice,
+                             String completeNote, String note) {
+            this(label, transportMode, vessel, voyage, forwarder, containerNos, port, goodsReadyOn, etdPlannedOn, etdActualOn,
+                etaOn, arrivedOn, customsReleasedOn, grNumber, completePerInvoice, completeNote, note, null, null);
+        }
+    }
 
     /** A document of a round: a number, a file, or both. */
     public record ShipmentDocumentDto(long id, String kind, String docNo, LocalDate docDate, String note,
@@ -29,7 +38,9 @@ public final class ShipmentRoundDtos {
                          String customerName, String projectName, long itemId, String code, String brand,
                          String model, String size, String unit, BigDecimal qty, BigDecimal itemQty,
                          int lotNo, int lotCount, BigDecimal remainingQty, BigDecimal receivedQty, String orderPurpose,
-                         String purposeNote, String requesterName) {}
+                         String purposeNote, String requesterName,
+                         /** JOB, SALES_ORDER, IMPORT or BACKFILL: where this lot's import request came from. */
+                         String origin) {}
 
     public record ShipmentRoundDto(long id, Long factoryId, String factoryName, String source, String importStep,
                            LocalDate contactedOn, LocalDate orderedOn, LocalDate pickedUpOn, LocalDate inTransitOn,
@@ -43,7 +54,9 @@ public final class ShipmentRoundDtos {
 
     public record ShipmentWaitingDto(long importRequestId, String docNumber, Long factoryId, String factoryName,
                              Long ticketId, String ticketCode, String customerName, String projectName,
-                             List<ShipmentWaitingLine> lines, String orderPurpose, String purposeNote, String requesterName) {}
+                             List<ShipmentWaitingLine> lines, String orderPurpose, String purposeNote, String requesterName,
+                             /** JOB, SALES_ORDER, IMPORT or BACKFILL: where this import request came from. */
+                             String origin) {}
 
     public record ShipmentRoundsResponse(List<ShipmentRoundDto> rounds, List<ShipmentWaitingDto> waiting) {}
 
