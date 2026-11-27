@@ -15918,7 +15918,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async list() {
       const user = requireSession();
       const mayRead = ['import', 'ceo', 'sales_manager'].includes(user.role)
-        || (user.readAllSales === true && user.role !== 'account');
+        || (user.readAllSales === true && user.role !== 'account')
+        || (user.role === 'warehouse' && mockIsTripPlanner(user));
       if (!mayRead) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       mockEnsureMigratedRounds();
       const waiting = mockImportRequests.filter((r) => r.status === 'ISSUED' && mockIrActive(r)).flatMap((ir) => {
@@ -15943,7 +15944,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async get(id) {
       const user = requireSession();
       const mayRead = ['import', 'ceo', 'sales_manager'].includes(user.role)
-        || (user.readAllSales === true && user.role !== 'account');
+        || (user.readAllSales === true && user.role !== 'account')
+        || (user.role === 'warehouse' && mockIsTripPlanner(user));
       if (!mayRead) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ round: mockShipmentDto(mockFindShipment(id)) });
     },
@@ -17698,7 +17700,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   // Mirrors DeliveryTripController + DeliveryTripService (deliverytrip/). No bells or email in the mock.
   deliveryTrips: {
     async home() {
-      mockPlanner();
+      // Import reads the outbound leg too; every write below stays the planner's.
+      if (requireSession().role !== 'import') mockPlanner();
       const today = bangkokTodayIso();
       const planned = new Set(mockTrips.flatMap((t) => t.rows.filter((r) => r.state === 'PLANNED').map((r) => r.roundId)));
       mockTrips.forEach((t) => t.rows.filter((r) => r.state === 'DELIVERED').forEach((r) => planned.add(r.roundId)));

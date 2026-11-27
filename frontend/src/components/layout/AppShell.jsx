@@ -180,7 +180,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // การขนส่ง: ONE item for everyone. Import / CEO / readers land on the rounds (/fulfilment); a rep or a grant holder on the
     // team's list (/my-orders, v2.5.0). A person who may open both gets a switch inside the page (ShippingSwitch).
     { path: canAccessPath('/fulfilment', user) ? '/fulfilment' : '/my-orders', match: ['/fulfilment', '/my-orders'], label: 'การขนส่ง', helper: 'Shipments — rounds for import, incoming orders for sales', icon: 'building', group: 'sales',
-      show: (hasPermission(user.role, 'canActOnFulfilment') || hasPermission(user.role, 'canViewMyOrders') || reader || Boolean(user.canCreateQuotation) || Boolean(user.canSeeShowroomOrders)) && SALES_ENABLED },
+      show: (hasPermission(user.role, 'canActOnFulfilment') || hasPermission(user.role, 'canViewMyOrders') || reader || Boolean(user.canCreateQuotation) || Boolean(user.canSeeShowroomOrders) || Boolean(user.canPlanDeliveries)) && SALES_ENABLED },
     // Account has NO ค่าคอมมิชชัน nav item: the invoice+commission step (บันทึกใบกำกับ /
     // create-from-deal at close) is the LAST STAGE of the งานการเงิน money lifecycle + the
     // Overview worklist (รับมัดจำ → รับชำระส่วนที่เหลือ → ยืนยันพร้อมปิดงาน → บันทึกใบกำกับ), not a

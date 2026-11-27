@@ -61,7 +61,10 @@ public class DeliveryTripService {
     }
 
     public Home home(UserPrincipal actor) {
-        requirePlanner(actor);
+        // Import reads the outbound leg (การขนส่ง); every write below stays the warehouse manager's.
+        if (!"import".equals(actor.role())) {
+            requirePlanner(actor);
+        }
         LocalDate today = LocalDate.now(BANGKOK);
         LocalDate monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         List<RoundItem> open = trips.unplanned().stream().map(this::withBuyer).toList();
