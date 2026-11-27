@@ -15,6 +15,8 @@ import { cn } from '../../utils/cn.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { AdvanceRoundSheet } from './AdvanceRoundSheet.jsx';
 import { DownloadIrButton } from './DownloadIrButton.jsx';
+import { IrNo } from './IrNo.jsx';
+import { canAccessPath } from '../../app/permissions.js';
 import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import {
   compareRoundEta, formatQty, irRows, lotProjectName, lotProduct, lotWho, lotWhoSub, roundIrSummary, roundProjectNames, roundArrivalKey, roundReference, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
@@ -57,6 +59,8 @@ function IrChips({ rows, limit }) {
 export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedded = false }) {
   const queryClient = useQueryClient();
   const editable = (user?.role === 'import' || user?.role === 'ceo') && !readOnly;
+  const canOpenDeal = canAccessPath('/import/deals/1', user);
+  const canDownloadIr = user?.role !== 'warehouse'; // the stored IR PDF is import's (cost and factory data)
   const [step, setStep] = useState('ALL');
   const [waitingPicked, setWaitingPicked] = useState(false);
   const [search, setSearch] = useState('');
@@ -112,7 +116,7 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
     {
       key: 'ir',
       header: 'ใบขอซื้อ',
-      render: (w) => (w.ticketId == null ? <code>{w.docNumber}</code> : <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>),
+      render: (w) => (w.ticketId == null ? <code>{w.docNumber}</code> : <IrNo row={w} open={canOpenDeal} />),
     },
     {
       key: 'who',
@@ -136,7 +140,7 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
       render: (w) => (
         <span className="flex flex-col items-start gap-1">
           <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
-          {w.ticketId == null ? <DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
+          {w.ticketId == null ? <DownloadIrButton hidden={!canDownloadIr} importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
         </span>
       ),
     },
@@ -209,13 +213,13 @@ export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedd
       <span className="flex min-w-0 flex-col gap-0.5">
         <b className="text-sm">{w.factoryName}</b>
         <small className="text-text-muted">
-          {w.ticketId == null ? <code>{w.docNumber}</code> : <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>}
+          {w.ticketId == null ? <code>{w.docNumber}</code> : <IrNo row={w} open={canOpenDeal} />}
           {' · '}{lotWho(w)} · เหลือ {w.lines.map((l) => `${formatQty(l.remainingQty)} ${l.unit ?? ''}`.trim()).join(', ')}
         </small>
       </span>
       <span className="flex shrink-0 flex-col items-end gap-1">
         <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
-        {w.ticketId == null ? <DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
+        {w.ticketId == null ? <DownloadIrButton hidden={!canDownloadIr} importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
       </span>
     </div>
   );

@@ -19,6 +19,11 @@ public final class WarehouseStaff {
         return actor != null && ROLE.equals(actor.role());
     }
 
+    /** The delivery planner: warehouse staff who are the warehouse manager. The ONE definition (trip writes, the inbound-round read). */
+    public static boolean isPlanner(UserPrincipal actor, EmployeeAuthRepository employees) {
+        return is(actor) && managerRecipientIds(employees).contains(actor.id());
+    }
+
     public static boolean is(EmployeeLoginRecord employee) {
         return employee != null && employee.active() && ROLE.equals(DivisionAccessPolicy.roleFor(employee));
     }

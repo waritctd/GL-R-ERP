@@ -60,6 +60,7 @@ export function WarehouseHome({ readOnly = false, embedded = false }) {
   const openTrip = trips.find((t) => t.id === openId) ?? (justDone?.id === openId ? justDone : null);
   const toggle = (id) => setPicked((now) => (now.includes(id) ? now.filter((x) => x !== id) : [...now, id]));
   const openForm = (trip) => { save.reset(); setForm({ trip }); };
+  const checkWho = readOnly ? 'รอคลังตรวจ' : 'รอคุณตรวจ';
   const openOrder = (round) => navigate(`/tickets/${round.ticketId}?tab=ship`);
 
   return (
@@ -68,14 +69,14 @@ export function WarehouseHome({ readOnly = false, embedded = false }) {
         <div>
           {embedded ? null : <h1 className="m-0">งานคลัง</h1>}
           <p className="m-0 text-sm text-text-muted">
-            {formatThaiDate(today)} · รอคุณตรวจ {toCheck.length} · รอจัดรอบส่ง {waiting.length}
+            {formatThaiDate(today)} · {checkWho} {toCheck.length} · รอจัดรอบส่ง {waiting.length}
           </p>
         </div>
       </header>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-5">
-          <Section title="ขอออกใบกำกับแล้ว · รอคุณตรวจ" hint={`${toCheck.length} รายการ`} testId="to-check">
+          <Section title={`ขอออกใบกำกับแล้ว · ${checkWho}`} hint={`${toCheck.length} รายการ`} testId="to-check">
             {toCheck.length ? (
               <ul className={CARD}>
                 {toCheck.map((r) => (

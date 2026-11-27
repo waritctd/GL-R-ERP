@@ -1,8 +1,10 @@
 import { useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
+import { Button } from '../../components/common/Button.jsx';
+import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack } from '../../components/common/Layout.jsx';
 import { cn } from '../../utils/cn.js';
@@ -20,6 +22,7 @@ const READ_ONLY_NOTE = {
  * the trips); the other side reads. A person with only the inbound leg (CEO, readers) gets the page as before, with no rail.
  */
 export function ShippingPage({ user, showToast }) {
+  const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
   const planner = Boolean(user.canPlanDeliveries);
   const importer = user.role === 'import';
@@ -35,13 +38,22 @@ export function ShippingPage({ user, showToast }) {
 
   const readOnly = { in: !hasPermission(user.role, 'canActOnFulfilment'), out: !planner };
   const meta = {
-    in: { title: 'ขาเข้า', sub: 'โรงงาน → โกดัง · ฝ่ายนำเข้า', count: rounds.data ? `${rounds.data.rounds.length} รอบ · รอจัดรอบ ${rounds.data.waiting.length}` : '…' },
-    out: { title: 'ขาออก', sub: 'โกดัง → ลูกค้า · ฝ่ายคลังสินค้า', count: home.data ? `รอตรวจ ${home.data.toCheck.length} · รอจัดรอบส่ง ${home.data.waiting.length}` : '…' },
+    in: { title: 'ขาเข้า', sub: 'โรงงาน → โกดัง · ฝ่ายนำเข้า', count: rounds.isError ? '—' : rounds.data ? `${rounds.data.rounds.length} รอบ · รอจัดรอบ ${rounds.data.waiting.length}` : '…' },
+    out: { title: 'ขาออก', sub: 'โกดัง → ลูกค้า · ฝ่ายคลังสินค้า', count: home.isError ? '—' : home.data ? `รอตรวจ ${home.data.toCheck.length} · รอจัดรอบส่ง ${home.data.waiting.length}` : '…' },
   };
 
   return (
     <PageStack>
-      <PageHeader title="การขนส่ง" subtitle="ของเข้าโกดังและของออกถึงลูกค้า อยู่ในหน้าเดียว" />
+      <PageHeader
+        title="การขนส่ง"
+        subtitle="ของเข้าโกดังและของออกถึงลูกค้า อยู่ในหน้าเดียว"
+        actions={(
+          <Button type="button" variant="icon" title="รีเฟรช" aria-label="รีเฟรช"
+            onClick={() => Promise.all([queryClient.invalidateQueries({ queryKey: queryKeys.shipmentRounds() }), queryClient.invalidateQueries({ queryKey: queryKeys.deliveryTripsHome() })])}>
+            <Icon name="refresh" />
+          </Button>
+        )}
+      />
       <div role="group" aria-label="ขาของการขนส่ง" className="grid grid-cols-2 gap-2 min-[1041px]:grid-cols-[6fr_4fr] min-[1041px]:gap-0 min-[1041px]:overflow-hidden min-[1041px]:rounded-md min-[1041px]:border min-[1041px]:border-border">
         {['in', 'out'].map((key) => (
           <button

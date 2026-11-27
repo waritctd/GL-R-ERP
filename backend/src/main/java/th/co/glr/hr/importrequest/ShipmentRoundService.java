@@ -893,13 +893,9 @@ public class ShipmentRoundService {
     private void requireRead(UserPrincipal actor) {
         if (!ImportRequestService.ADVANCE_STEP_ROLES.contains(actor.role())
             && !OversightReader.is(actor, tickets::holdsReadAllSalesGrant)
-            && !isWarehouseManager(actor)) { // the outbound leg's planner reads the inbound rounds (documents stay withheld, see assemble)
+            && !WarehouseStaff.isPlanner(actor, employees)) { // the outbound leg's planner reads the inbound rounds (documents stay withheld, see assemble)
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-    }
-
-    private boolean isWarehouseManager(UserPrincipal actor) {
-        return WarehouseStaff.is(actor) && WarehouseStaff.managerRecipientIds(employees).contains(actor.id());
     }
 
     private static void requireWrite(UserPrincipal actor) {
