@@ -20,7 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.auth.ImportStaff;
+import th.co.glr.hr.auth.OutboundReader;
 import th.co.glr.hr.auth.WarehouseStaff;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.ThaiText;
@@ -36,8 +36,8 @@ import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.ticket.RoundDeliveryRequest;
 
 /**
- * The warehouse manager's delivery trips. Only the manager (every warehouse person when nobody holds the title) reads or
- * writes them; sales sees a trip only through its own order's rounds. Delivering reuses the round's record-delivery rule,
+ * The warehouse manager's delivery trips. Only the manager (every warehouse person when nobody holds the title) writes
+ * them; the home list is also read by {@link OutboundReader} (CEO, sales team) for the การขนส่ง page. Delivering reuses the round's record-delivery rule,
  * one transaction per round, so one blocked order never holds back the rest.
  */
 @Service
@@ -62,8 +62,8 @@ public class DeliveryTripService {
     }
 
     public Home home(UserPrincipal actor) {
-        // Import reads the outbound leg (การขนส่ง); every write below stays the warehouse manager's.
-        if (!ImportStaff.is(actor)) {
+        // The CEO and the sales team read the outbound leg (การขนส่ง); every write below stays the warehouse manager's.
+        if (!OutboundReader.is(actor, employees)) {
             requirePlanner(actor);
         }
         LocalDate today = LocalDate.now(BANGKOK);
