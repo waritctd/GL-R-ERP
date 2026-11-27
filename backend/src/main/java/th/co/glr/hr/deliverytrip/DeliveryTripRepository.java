@@ -42,7 +42,7 @@ public class DeliveryTripRepository {
     private static final String ITEM_COLUMNS = """
         r.delivery_request_id, r.ticket_id, r.round_no, r.status, %s AS display_code, t.customer_name,
         p.name AS project_name, NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS owner_name,
-        r.note, r.sent_at, r.forwarded_at, r.requested_date, %s AS remaining""".formatted(DISPLAY_CODE, REMAINING);
+        r.note, r.sent_at, r.forwarded_at, r.requested_date, r.customer_pickup, %s AS remaining""".formatted(DISPLAY_CODE, REMAINING);
 
     private static final String ITEM_FROM = """
         FROM sales.delivery_request r
@@ -50,7 +50,7 @@ public class DeliveryTripRepository {
         LEFT JOIN customers.project p ON p.project_id = t.project_id
         LEFT JOIN hr.employee e ON e.employee_id = t.created_by""";
 
-    /** Every SENT, FORWARDED and INVOICED round of a live deal that is on no open trip, oldest first. */
+    /** Every SENT, FORWARDED and INVOICED round of a live deal that is on no open trip, by requested date. */
     public List<RoundItem> unplanned() {
         return jdbc.query("SELECT " + ITEM_COLUMNS + """
             , EXISTS (SELECT 1 FROM sales.delivery_trip_round x
@@ -104,10 +104,15 @@ public class DeliveryTripRepository {
             Map.of(), String.class));
     }
 
-    /** INVOICED, on a live deal, with goods left: the only rounds a trip may take. */
+    public boolean isPickup(long roundId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT customer_pickup FROM sales.delivery_request WHERE delivery_request_id = :id", Map.of("id", roundId), Boolean.class));
+    }
+
+    /** INVOICED, on a live deal, with goods left, not a customer pickup: the only rounds a trip may take. */
     public boolean plannable(long roundId) {
         return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS (SELECT 1 " + ITEM_FROM
-            + " WHERE r.delivery_request_id = :id AND r.status = 'INVOICED' AND t.lifecycle = 'ACTIVE' AND " + REMAINING
+            + " WHERE r.delivery_request_id = :id AND r.status = 'INVOICED' AND NOT r.customer_pickup AND t.lifecycle = 'ACTIVE' AND " + REMAINING
             + " > 0)", Map.of("id", roundId), Boolean.class));
     }
 
@@ -185,7 +190,7 @@ public class DeliveryTripRepository {
             rs.getString("status"), rs.getString("display_code"), rs.getString("customer_name"), rs.getString("project_name"),
             rs.getString("owner_name"), rs.getString("note"), instant(rs.getTimestamp("sent_at")),
             instant(rs.getTimestamp("forwarded_at")), remaining, rs.getBoolean("delayed"), rs.getString("state"),
-            rs.getObject("requested_date", LocalDate.class));
+            rs.getObject("requested_date", LocalDate.class), rs.getBoolean("customer_pickup"));
     }
 
     private static Instant instant(Timestamp ts) {

@@ -499,6 +499,7 @@ export const API_ROUTES = {
     confirmInvoice: (rid) => `/api/delivery-requests/${rid}/confirm-invoice`,
     voidInvoice: (rid) => `/api/delivery-requests/${rid}/void-invoice`,
     recordDelivery: (rid) => `/api/delivery-requests/${rid}/deliveries`,
+    pickup: (rid) => `/api/delivery-requests/${rid}/pickup`,
   },
   attachments: {
     list: (ticketId) => `/api/tickets/${ticketId}/attachments`,

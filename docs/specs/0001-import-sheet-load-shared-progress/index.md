@@ -3,7 +3,7 @@
 **Date**: 2026-11-23 (revised the same day after the owner changed direction)
 **Status**: In Progress
 
-> **Reworked 2026-11-23 onto develop 2.5.0.** Sales now read the whole team's imports through develop's `/api/my-incoming`, so the ทั้งบริษัท switch and `/api/incoming/all` (AC-26 to AC-30 as first written) are not built. The sheet's customer jobs use develop's `PROJECT` purpose instead of a `CUSTOMER` purpose, and the migration is V250 (V244 to V249 are develop's payer, delivery trip and requested date migrations). Read those ACs and every `CUSTOMER` and V242 mention below with that in mind.
+> **Reworked 2026-11-23 onto develop 2.5.0.** Sales now read the whole team's imports through develop's `/api/my-incoming`, so the ทั้งบริษัท switch and `/api/incoming/all` (AC-26 to AC-30 as first written) are not built. The sheet's customer jobs use develop's `PROJECT` purpose instead of a `CUSTOMER` purpose, and the migration is V251 (V244 to V250 are develop's payer, delivery trip, requested date and customer pickup migrations). Read those ACs and every `CUSTOMER` and V242 mention below with that in mind.
 
 ## Summary
 

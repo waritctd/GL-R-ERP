@@ -13,6 +13,11 @@ public interface SalesNotificationMailer {
     /** A sales-pipeline notification was addressed at one employee. */
     void emailForEmployee(long employeeId, String title, String message, String link);
 
+    /** The warehouse's document check, to its manager(s). */
+    default void emailDocumentCheck(List<Long> managerIds, String title, String message, String link) {
+        managerIds.forEach(id -> emailForEmployee(id, title, message, link));
+    }
+
     /** In-app only — writes the notification row and sends nothing. Exists for the integration tests that assert on
      * hr.notification rows and have no interest in mail. */
     SalesNotificationMailer NO_OP = new SalesNotificationMailer() {

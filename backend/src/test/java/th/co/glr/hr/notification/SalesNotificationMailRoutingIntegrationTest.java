@@ -109,6 +109,22 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         assertThat(mailer.last().textBody()).contains("เรียน คุณประพันธ์,");
     }
 
+    @Test
+    void documentCheckMailGreetsThePostAndCopiesTheConfiguredAddress() {
+        long warehouse = insertDivision("WH", "คลังสินค้า");
+        long manager = insertEmployee("WH-1", warehouse, "manager.wh@example.com");
+        SalesNotificationMailRouter router = new SalesNotificationMailRouter(
+            new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.test.glr"),
+            new SalesMailRecipientRepository(jdbc), " cc.person@example.com ");
+
+        new NotificationRepository(jdbc, router)
+            .notifyDocumentCheck(List.of(manager), "DELIVERY_REQUEST_SENT", "รอคลังตรวจเอกสาร", "/tickets/1?tab=ship");
+
+        assertThat(mailer.recipients()).containsExactly("manager.wh@example.com");
+        assertThat(mailer.last().cc()).containsExactly("cc.person@example.com");
+        assertThat(mailer.last().textBody()).startsWith("เรียน ผู้จัดการฝ่ายคลัง,");
+    }
+
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────
 
     private Long countNotificationRows() {
@@ -171,7 +187,11 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
      * assertions here are about the exact recipient string and the rendered body/subject, and a captor chain over
      * four overloads reads far worse than a list of records. */
     private static final class CapturingMailer implements Mailer {
-        record SentMail(String to, String subject, String htmlBody, String textBody) {}
+        record SentMail(String to, List<String> cc, String subject, String htmlBody, String textBody) {
+            SentMail(String to, String subject, String htmlBody, String textBody) {
+                this(to, List.of(), subject, htmlBody, textBody);
+            }
+        }
 
         private final List<SentMail> sent = new ArrayList<>();
 
@@ -186,6 +206,11 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         SentMail last() {
             assertThat(sent).as("expected at least one email to have been sent").isNotEmpty();
             return sent.get(sent.size() - 1);
+        }
+
+        @Override
+        public void send(OutgoingEmail email) {
+            sent.add(new SentMail(email.to(), email.cc(), email.subject(), email.htmlBody(), email.textBody()));
         }
 
         @Override

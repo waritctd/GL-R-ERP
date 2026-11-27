@@ -2602,6 +2602,27 @@ public class TicketRepository {
             Map.of("r", rid, "t", ticketId), (rs, n) -> rs.getString(1)).stream().findFirst();
     }
 
+    /** The order's owner, keyer and the person who sent the round: the sales people told of a pickup (the trip notices' rule). */
+    public java.util.Set<Long> roundSalesPeople(long rid) {
+        var ids = new java.util.LinkedHashSet<Long>();
+        jdbc.query("""
+            SELECT t.created_by, t.keyed_by, r.requested_by FROM sales.delivery_request r
+              JOIN sales.ticket t ON t.ticket_id = r.ticket_id WHERE r.delivery_request_id = :r
+            """, Map.of("r", rid), rs -> {
+                for (int i = 1; i <= 3; i++) {
+                    long v = rs.getLong(i);
+                    if (!rs.wasNull()) ids.add(v);
+                }
+            });
+        return ids;
+    }
+
+    /** A customer-pickup round (ลูกค้ามารับเอง): its delivery must name the collector, and the sales people hear it. */
+    public boolean isCustomerPickupRound(Long rid) {
+        return rid != null && Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT customer_pickup FROM sales.delivery_request WHERE delivery_request_id = :r", Map.of("r", rid), Boolean.class));
+    }
+
     /** The order's INVOICED rounds, oldest first, each with covered and delivered quantities per line. */
     public List<InvoicedRound> findInvoicedRounds(long ticketId) {
         return findRounds(ticketId, null);

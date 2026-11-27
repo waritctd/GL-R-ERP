@@ -62,7 +62,10 @@ public final class DeliveryRequestDtos {
                            Instant sentAt, String forwardedByName, Instant forwardedAt, InvoiceDto invoice,
                            List<LineDto> lines, List<FileDto> files, List<String> untickedDocs, ViewerDto viewer,
                            String customerName, String taxId, String branch, boolean customerFromDeal, TripPlanDto trip,
-                           java.time.LocalDate requestedDate) {}
+                           java.time.LocalDate requestedDate, boolean customerPickup, HandoverDto collected) {}
+
+    /** The last goods recorded against a customer-pickup round: the day and who collected them. */
+    public record HandoverDto(java.time.LocalDate on, String by) {}
 
     /** The warehouse's plan for this round (V248), null when it was never on a trip. {@code state}: PLANNED, DELAYED,
      * REMOVED or DELIVERED. */
@@ -97,9 +100,17 @@ public final class DeliveryRequestDtos {
     /** {@code requestedDate}: when sales would like the goods delivered; null keeps what is stored, so a save from an old
      * screen never wipes it. {@code clearRequestedDate} true removes it. */
     public record UpdateRequest(Long quotationId, String note, List<String> untickedDocs, java.time.LocalDate requestedDate,
-                                Boolean clearRequestedDate) {
+                                Boolean clearRequestedDate, Boolean customerPickup) {
         public UpdateRequest(Long quotationId, String note, List<String> untickedDocs) {
-            this(quotationId, note, untickedDocs, null, null);
+            this(quotationId, note, untickedDocs, null, null, null);
+        }
+
+        public UpdateRequest(Long quotationId, String note, List<String> untickedDocs, java.time.LocalDate requestedDate,
+                             Boolean clearRequestedDate) {
+            this(quotationId, note, untickedDocs, requestedDate, clearRequestedDate, null);
         }
     }
+
+    /** PATCH /delivery-requests/{rid}/pickup: the warehouse manager switches an invoiced round between pickup and delivery. */
+    public record PickupRequest(Boolean customerPickup) {}
 }

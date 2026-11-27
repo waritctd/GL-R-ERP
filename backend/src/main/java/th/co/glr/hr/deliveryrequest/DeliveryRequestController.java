@@ -94,6 +94,11 @@ public class DeliveryRequestController {
         return new RoundResponse(service.recordDelivery(rid, request, sessions.requireUser(session)));
     }
 
+    @PatchMapping("/delivery-requests/{rid}/pickup")
+    RoundResponse setPickup(@PathVariable long rid, @RequestBody DeliveryRequestDtos.PickupRequest request, HttpSession session) {
+        return new RoundResponse(service.setPickup(rid, Boolean.TRUE.equals(request.customerPickup()), sessions.requireUser(session)));
+    }
+
     @PostMapping("/delivery-requests/{rid}/return")
     RoundResponse sendBack(@PathVariable long rid, @RequestBody ReturnRequest request, HttpSession session) {
         return new RoundResponse(service.sendBack(rid, request, sessions.requireUser(session)));

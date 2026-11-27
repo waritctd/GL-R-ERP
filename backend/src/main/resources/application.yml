@@ -73,6 +73,7 @@ app:
       # Monday 08:30 account digest + per-rep recap. Off until the deployer turns it on.
       enabled: ${APP_DIGEST_WEEKLY_ENABLED:false}
       account-to: ${APP_DIGEST_WEEKLY_ACCOUNT_TO:account@glr.co.th}
+      import-to: ${APP_DIGEST_WEEKLY_IMPORT_TO:import@glr.co.th}
   feedback:
     # Comma-separated addresses BCC'd on ONE "new feedback submitted" email (the first admin's). Empty = none.
     submitted-bcc: ${APP_FEEDBACK_SUBMITTED_BCC:}
@@ -190,6 +191,8 @@ app:
     # bean by MailOverrideBeanPostProcessor. Nothing that calls Mailer implements this rule itself
     # (#782 was exactly that: one caller had its own copy, another had none).
     override-to: ${APP_MAIL_OVERRIDE_TO:}
+    # cc on the warehouse document-check mail (comma-separated, blank = none). Set on the deployment only.
+    delivery-check-cc: ${APP_MAIL_DELIVERY_CHECK_CC:}
     # Appended (not prepended) to the subject so a test/UAT deployment never lets a real inbox
     # mistake test mail for real, without putting a bracketed keyword at the FRONT of the subject -
     # a leading "[TEST]"-shaped token is a classic spam-filter trigger. Blank by default so every

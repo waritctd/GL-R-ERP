@@ -68,7 +68,10 @@ public class DeliveryTripService {
         return new Home(today,
             open.stream().filter(r -> DeliveryRequestDtos.SENT.equals(r.status())).toList(),
             open.stream().filter(r -> DeliveryRequestDtos.FORWARDED.equals(r.status())).toList(),
-            open.stream().filter(r -> DeliveryRequestDtos.INVOICED.equals(r.status()) && r.remaining().signum() > 0).toList(),
+            open.stream().filter(r -> DeliveryRequestDtos.INVOICED.equals(r.status()) && r.remaining().signum() > 0
+                && !r.customerPickup()).toList(),
+            open.stream().filter(r -> DeliveryRequestDtos.INVOICED.equals(r.status()) && r.remaining().signum() > 0
+                && r.customerPickup()).toList(),
             trips.trips(monday, monday.plusDays(6)).stream().map(this::withBuyers).toList(), trips.recentRoutes());
     }
 
@@ -191,7 +194,7 @@ public class DeliveryTripService {
     private RoundItem withBuyer(RoundItem r) {
         return new RoundItem(r.roundId(), r.ticketId(), r.roundNo(), r.status(), r.displayCode(),
             deliveryRequests.buyerNameOfRound(r.roundId()), r.projectName(), r.ownerName(), r.note(), r.sentAt(),
-            r.forwardedAt(), r.remaining(), r.delayed(), r.state(), r.requestedDate());
+            r.forwardedAt(), r.remaining(), r.delayed(), r.state(), r.requestedDate(), r.customerPickup());
     }
 
     private Trip withBuyers(Trip t) {
@@ -200,6 +203,9 @@ public class DeliveryTripService {
     }
 
     private void add(long tripId, long roundId) {
+        if (trips.isPickup(roundId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "ออเดอร์นี้ลูกค้ามารับเอง ไม่ต้องจัดรอบส่ง");
+        }
         if (!trips.plannable(roundId)) {
             throw new ApiException(HttpStatus.CONFLICT, "มีออเดอร์ที่ยังจัดรอบส่งไม่ได้ กรุณาโหลดหน้าใหม่");
         }

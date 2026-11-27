@@ -250,6 +250,15 @@ public class NotificationRepository {
         notifyEmployeeAt(employeeId, type, message, link);
     }
 
+    /** The warehouse's document check: a bell per manager, and a mail addressed to the post with the configured cc. */
+    public void notifyDocumentCheck(List<Long> managerIds, String type, String message, String link) {
+        if (managerIds.isEmpty()) {
+            return;
+        }
+        managerIds.forEach(id -> insertEmployeeNotification(id, type, message, link));
+        salesMailer.emailDocumentCheck(managerIds, ticketEventTitle(type), message, link);
+    }
+
     /** Every active employee holding the can_issue_tax_invoice grant (read live, any role but import). */
     public List<Long> taxInvoiceIssuerIds() {
         return jdbc.queryForList("SELECT e.employee_id FROM hr.employee e LEFT JOIN hr.division d ON d.division_id = e.division_id"

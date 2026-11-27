@@ -188,7 +188,7 @@ public class DeliveryRequestService {
         List<RoundDto> dtos = r.rounds().stream().map(d -> new RoundDto(d.id(), d.roundNo(), d.status(), d.quotationId(),
             d.quotationNumber(), d.note(), d.returnReasonCodes(), d.returnReasonText(), d.requestedByName(), d.sentAt(),
             d.forwardedByName(), d.forwardedAt(), priceFree(d.invoice()), d.lines(), List.of(), d.untickedDocs(), d.viewer(),
-            d.customerName(), d.taxId(), d.branch(), d.customerFromDeal(), d.trip(), d.requestedDate())).toList();
+            d.customerName(), d.taxId(), d.branch(), d.customerFromDeal(), d.trip(), d.requestedDate(), d.customerPickup(), d.collected())).toList();
         return new RoundsResponse(r.order(), dtos, r.approvedQuotations(), r.canStart(), r.startBlockedReason(), null);
     }
 
@@ -246,6 +246,31 @@ public class DeliveryRequestService {
         return listFor(round.ticketId(), actor).rounds().stream().filter(d -> d.id() == rid).findFirst().orElseThrow();
     }
 
+    /** The warehouse manager switches an INVOICED round with goods left between pickup and delivery (the customer changed
+     * their mind). A round on an open trip must leave the trip before it becomes a pickup. */
+    @Transactional
+    public RoundDto setPickup(long rid, boolean pickup, UserPrincipal actor) {
+        if (!WarehouseStaff.is(actor) || !WarehouseStaff.managerRecipientIds(employees).contains(actor.id())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
+        }
+        var round = rounds.findById(rid).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรอบส่งที่ขอ"));
+        TicketSummaryDto s = summary(round.ticketId());
+        tickets.lockTicketForUpdate(round.ticketId());
+        round = rounds.findById(rid).orElseThrow();
+        if (round.customerPickup() != pickup) {
+            boolean goodsLeft = rounds.lines(rid).stream().anyMatch(l -> l.coveredQty().compareTo(l.deliveredQty()) > 0);
+            if (!DeliveryRequestDtos.INVOICED.equals(round.status()) || !DealLifecycle.ACTIVE.equals(s.lifecycle()) || !goodsLeft) {
+                throw new ApiException(HttpStatus.CONFLICT, "เปลี่ยนวิธีรับของได้เฉพาะรอบที่ออกใบกำกับแล้วและยังมีของเหลือ");
+            }
+            if (pickup && rounds.onOpenTrip(rid)) {
+                throw new ApiException(HttpStatus.CONFLICT, "ออเดอร์นี้อยู่ในรอบส่ง กรุณานำออกจากรอบส่งก่อน");
+            }
+            rounds.setCustomerPickup(rid, pickup);
+        }
+        boolean grant = holdsGrant(actor);
+        return toDto(rounds.findById(rid).orElseThrow(), s, false, true, grant, voidCtx(round.ticketId(), grant));
+    }
+
     @Transactional
     public RoundDto createDraft(long ticketId, Long quotationId, UserPrincipal actor) {
         TicketSummaryDto s = summary(ticketId);
@@ -283,6 +308,9 @@ public class DeliveryRequestService {
         rounds.updateDraft(rid, quotationId, note, validUnticked(round.ticketId(), request.untickedDocs()));
         if (wanted != null || Boolean.TRUE.equals(request.clearRequestedDate())) {
             rounds.setRequestedDate(rid, wanted);
+        }
+        if (request.customerPickup() != null) {
+            rounds.setCustomerPickup(rid, request.customerPickup());
         }
         return toDto(rounds.findById(rid).orElseThrow(), s, true, false, false, VoidCtx.NONE);
     }
@@ -720,15 +748,10 @@ public class DeliveryRequestService {
         tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.DELIVERY_REQUEST_SENT, null, null,
             "ขอออกใบกำกับ รอบส่งที่ " + round.roundNo());
         String link = "/tickets/" + ticketId + "?tab=ship";
-        for (String role : List.of("account", "sales_manager")) {
-            notifications.notifyByRoleAtLink(role, TicketEventKind.DELIVERY_REQUEST_SENT, message, link, actor.id());
-        }
-        // Warehouse staff by the shared effective-role predicate, not by division (a wh person acting as sales is not staff).
-        for (long id : WarehouseStaff.recipientIds(employees)) {
-            if (id != actor.id()) {
-                notifications.notifyEmployeeAtLink(id, TicketEventKind.DELIVERY_REQUEST_SENT, message, link);
-            }
-        }
+        // Only the warehouse manager acts on it (the server-set cc is copied on the mail); the invoice issuer hears on forward.
+        notifications.notifyDocumentCheck(
+            WarehouseStaff.managerRecipientIds(employees).stream().filter(id -> id != actor.id()).toList(),
+            TicketEventKind.DELIVERY_REQUEST_SENT, message, link);
         return toDto(rounds.findById(rid).orElseThrow(), s, true, false, false, VoidCtx.NONE);
     }
 
@@ -956,7 +979,7 @@ public class DeliveryRequestService {
                 canRecord, invoiced && vctx.scope() && voidBlock == null, invoiced && vctx.scope() ? voidBlock : null,
                 recordBlock),
             buyer.name(), warehouse ? null : buyer.taxId(), warehouse ? null : buyer.branch(), buyer.fromDeal(), rounds.tripPlan(r.id()),
-            r.requestedDate());
+            r.requestedDate(), r.customerPickup(), r.customerPickup() ? rounds.handover(r.id()) : null);
     }
 
     /**

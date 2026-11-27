@@ -13,6 +13,7 @@ import org.mockito.Mockito;
 import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.digest.WeeklyDigestMail.SalesWeek;
 import th.co.glr.hr.digest.WeeklyDigestRepository.AccountItem;
+import th.co.glr.hr.digest.WeeklyDigestRepository.ImportItem;
 import th.co.glr.hr.digest.WeeklyDigestRepository.PendingNote;
 import th.co.glr.hr.digest.WeeklyDigestRepository.StaleDeal;
 import th.co.glr.hr.mail.Mailer;
@@ -34,6 +35,10 @@ class WeeklyDigestMailTest {
         assertThat(r.html()).contains("อัปเดตขั้นงาน 3 ครั้ง", "฿125,000.50", "และอีก 2 งาน", "งาน &lt;b&gt;A&lt;/b&gt;")
             .doesNotContain("<b>A</b>").doesNotContain("งานตัวอย่าง 12");
         assertThat(r.html()).doesNotContain("ดีล");
+        assertThat(WeeklyDigestMail.weekRange(LocalDate.of(2026, 11, 30), LocalDate.of(2026, 12, 6)))
+            .isEqualTo("30 พ.ย. 2569 – 6 ธ.ค. 2569");
+        assertThat(WeeklyDigestMail.weekRange(LocalDate.of(2026, 12, 28), LocalDate.of(2027, 1, 3)))
+            .isEqualTo("28 ธ.ค. 2569 – 3 ม.ค. 2570");
     }
 
     @Test
@@ -70,6 +75,12 @@ class WeeklyDigestMailTest {
         var pending = WeeklyDigestMail.pending("สมศรี ตัวอย่าง", List.of(
             new PendingNote("มีคำขอจัดส่งสินค้าใหม่รอจัดรอบรถ", "/warehouse/deliveries", 2),
             new PendingNote("ใบแจ้งหนี้รอออกใบกำกับภาษี", null, 5)), LocalDate.of(2026, 11, 30), shell::portalUrl);
+        var imports = WeeklyDigestMail.imports(List.of(
+            new ImportItem(301, "โครงการบ้านตัวอย่าง E", "บริษัท ตัวอย่าง จำกัด", "สมหญิง ตัวอย่าง",
+                "อัปเดตสถานะนำเข้า", "/fulfilment", 12),
+            new ImportItem(302, "โรงแรมตัวอย่าง F", "คุณตัวอย่าง", "สมชาย ตัวอย่าง",
+                "บันทึกออกเดินทาง", "/import/deals/302", 4)), LocalDate.of(2026, 11, 30), shell::portalUrl);
+        Files.writeString(Path.of(dir, "import.html"), shell.renderShell(imports.html()));
         Files.writeString(Path.of(dir, "pending.html"), shell.renderShell(pending.html()));
     }
 }

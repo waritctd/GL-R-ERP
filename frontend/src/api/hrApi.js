@@ -996,6 +996,7 @@ export const api = {
     // Cancels a confirmed invoice before any delivery (issuer grant or account); body { reason }; the round goes back to FORWARDED.
     voidInvoice: (rid, body) => apiRequest(API_ROUTES.deliveryRequests.voidInvoice(rid), { method: 'POST', body }),
     recordDelivery: (rid, body) => apiRequest(API_ROUTES.deliveryRequests.recordDelivery(rid), { method: 'POST', body }),
+    setPickup: (rid, customerPickup) => apiRequest(API_ROUTES.deliveryRequests.pickup(rid), { method: 'PATCH', body: { customerPickup } }),
   },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
