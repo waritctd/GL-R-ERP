@@ -70,7 +70,6 @@ const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.js
 const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
 const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/PricingRequestQueuePage.jsx').then(toDefault('PricingRequestQueuePage')));
 const ImportDealPage = lazy(() => import('./features/importDeal/ImportDealPage.jsx').then(toDefault('ImportDealPage')));
-const MyOrdersPage = lazy(() => import('./features/myOrders/MyOrdersPage.jsx').then(toDefault('MyOrdersPage')));
 const ShipmentRoundPage = lazy(() => import('./features/fulfilment/ShipmentRoundPage.jsx').then(toDefault('ShipmentRoundPage')));
 const ShippingPage = lazy(() => import('./features/fulfilment/ShippingPage.jsx').then(toDefault('ShippingPage')));
 const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
@@ -535,8 +534,8 @@ export function App() {
                   path="/fulfilment"
                   element={<ShippingPage user={user} showToast={showToast} />}
                 />
-                {/* ของที่ฉันสั่ง: the rep's ONE page of all incoming goods (project lots + no-project orders). Guarded by canViewMyOrders. */}
-                <Route path="/my-orders" element={<MyOrdersPage user={user} showToast={showToast} />} />
+                {/* การขนส่ง for the sales team: ขาเข้า = their incoming goods (MyOrdersPage), ขาออก = the warehouse queue, read only. Guarded by canViewMyOrders. */}
+                <Route path="/my-orders" element={<ShippingPage user={user} showToast={showToast} sales />} />
                 {/* One shipment round (N02/ND2): steps with real dates, shipment facts, the IRs on it. */}
                 <Route
                   path="/fulfilment/rounds/:id"

@@ -10,18 +10,19 @@ globalThis.React = React;
 
 vi.mock('../../api/index.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  api: { tickets: { list: vi.fn() }, shipmentRounds: { list: vi.fn() }, deliveryTrips: { home: vi.fn() } },
+  api: { tickets: { list: vi.fn() }, shipmentRounds: { list: vi.fn() }, deliveryTrips: { home: vi.fn() }, myIncoming: { get: vi.fn() } },
 }));
 
 const waitingRound = { roundId: 5, ticketId: 9, roundNo: 1, status: 'INVOICED', displayCode: 'PR-TEST-0009', customerName: 'ลูกค้า ทดสอบ', remaining: 10, state: null };
 const home = { today: '2026-11-27', toCheck: [], toInvoice: [], waiting: [waitingRound], pickups: [], trips: [], routes: [] };
 
-function show(user) {
+function show(user, sales = false) {
   vi.clearAllMocks();
   vi.mocked(api.shipmentRounds.list).mockResolvedValue({ rounds: [], waiting: [] });
   vi.mocked(api.tickets.list).mockResolvedValue({ tickets: [] });
   vi.mocked(api.deliveryTrips.home).mockResolvedValue(home);
-  render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><ShippingPage user={user} showToast={() => {}} /></MemoryRouter></QueryClientProvider>);
+  vi.mocked(api.myIncoming.get).mockResolvedValue({ rows: [] });
+  render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><ShippingPage user={user} showToast={() => {}} sales={sales} /></MemoryRouter></QueryClientProvider>);
 }
 
 describe('ShippingPage', () => {
@@ -41,5 +42,15 @@ describe('ShippingPage', () => {
     expect((await screen.findByTestId('leg-readonly-note')).textContent).toContain('ขาเข้าดูได้อย่างเดียว');
     expect(screen.queryByTestId('plan-round')).toBeNull();
     expect(api.tickets.list).not.toHaveBeenCalled();
+  });
+
+  it('a sales rep lands on their own ขาเข้า list and reads ขาออก without any action', async () => {
+    show({ id: 3, role: 'sales' }, true);
+    expect(await screen.findByText('ยังไม่มีของที่สั่ง')).toBeTruthy();
+    expect(api.shipmentRounds.list).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('leg-out'));
+    expect((await screen.findByTestId('leg-readonly-note')).textContent).toContain('แท็บ ส่งของ');
+    expect(await screen.findByText('ลูกค้า ทดสอบ')).toBeTruthy();
+    expect(screen.queryByRole('checkbox')).toBeNull();
   });
 });
