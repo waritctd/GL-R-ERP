@@ -322,6 +322,11 @@ export function isReaderPath(path) {
   return READER_PATH_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
+// Reads the outbound leg of การขนส่ง (the warehouse queue and trips). Mirrors auth/OutboundReader; the planner writes it.
+export function canReadOutbound(user) {
+  return ['import', 'ceo', 'sales'].includes(user?.role) || isOversightReader(user) || Boolean(user?.canPlanDeliveries);
+}
+
 // /my-orders for a plain employee holding the no-project-order or showroom grant, which the page's own guard admits.
 export function isMyOrdersGrantUser(user) {
   return Boolean(user?.canCreateQuotation || user?.canSeeShowroomOrders);

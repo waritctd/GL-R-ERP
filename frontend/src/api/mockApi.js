@@ -17933,8 +17933,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   // Mirrors DeliveryTripController + DeliveryTripService (deliverytrip/). No bells or email in the mock.
   deliveryTrips: {
     async home() {
-      // Import reads the outbound leg too; every write below stays the planner's.
-      if (requireSession().role !== 'import') mockPlanner();
+      // Mirrors auth/OutboundReader: import, the CEO and the sales team read the outbound leg; every write stays the planner's.
+      const reader = requireSession();
+      if (!['import', 'ceo', 'sales'].includes(reader.role) && !isMockOversightReader(reader)) mockPlanner();
       const today = bangkokTodayIso();
       const planned = new Set(mockTrips.flatMap((t) => t.rows.filter((r) => r.state === 'PLANNED').map((r) => r.roundId)));
       mockTrips.forEach((t) => t.rows.filter((r) => r.state === 'DELIVERED').forEach((r) => planned.add(r.roundId)));

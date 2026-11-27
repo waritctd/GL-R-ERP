@@ -10,7 +10,7 @@ globalThis.React = React;
 
 vi.mock('../../api/index.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  api: { tickets: { list: vi.fn() }, shipmentRounds: { list: vi.fn() }, deliveryTrips: { home: vi.fn() }, importJobs: { latestRun: vi.fn() } },
+  api: { tickets: { list: vi.fn() }, shipmentRounds: { list: vi.fn() }, deliveryTrips: { home: vi.fn() }, myIncoming: { get: vi.fn() }, importJobs: { latestRun: vi.fn() } },
 }));
 
 const waitingRound = { roundId: 5, ticketId: 9, roundNo: 1, status: 'INVOICED', displayCode: 'PR-TEST-0009', customerName: 'ลูกค้า ทดสอบ', remaining: 10, state: null };
@@ -27,13 +27,14 @@ const importer = { id: 1, role: 'import' };
 const planner = { id: 2, role: 'warehouse', canPlanDeliveries: true };
 const jobHrefs = () => [...document.querySelectorAll('a')].map((a) => a.getAttribute('href')).filter((h) => h?.startsWith('/fulfilment/jobs/'));
 
-function show(user, shipping = { rounds: [], waiting: [] }) {
+function show(user, { sales = false, shipping = { rounds: [], waiting: [] } } = {}) {
   vi.clearAllMocks();
   vi.mocked(api.shipmentRounds.list).mockResolvedValue(shipping);
   vi.mocked(api.importJobs.latestRun).mockResolvedValue({ run: null });
   vi.mocked(api.tickets.list).mockResolvedValue({ tickets: [] });
   vi.mocked(api.deliveryTrips.home).mockResolvedValue(home);
-  render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><ShippingPage user={user} showToast={() => {}} /></MemoryRouter></QueryClientProvider>);
+  vi.mocked(api.myIncoming.get).mockResolvedValue({ rows: [] });
+  render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><ShippingPage user={user} showToast={() => {}} sales={sales} /></MemoryRouter></QueryClientProvider>);
 }
 
 describe('ShippingPage', () => {
@@ -68,7 +69,7 @@ describe('ShippingPage', () => {
   });
 
   it('import opens a งานนำเข้า from its IR number, waiting or on a round', async () => {
-    show(importer, { rounds: [jobRound], waiting: [jobWaiting] });
+    show(importer, { shipping: { rounds: [jobRound], waiting: [jobWaiting] } });
     await screen.findAllByText('IR-TEST-032'); // the round queue
     expect(jobHrefs()).toContain('/fulfilment/jobs/32');
     fireEvent.click(screen.getByTestId('waiting-toggle'));
@@ -77,12 +78,27 @@ describe('ShippingPage', () => {
   });
 
   it('the warehouse planner reads those IR numbers as plain text: the job page is not theirs to open', async () => {
-    show(planner, { rounds: [jobRound], waiting: [jobWaiting] });
+    show(planner, { shipping: { rounds: [jobRound], waiting: [jobWaiting] } });
     fireEvent.click(await screen.findByTestId('leg-in'));
     await screen.findAllByText('IR-TEST-032');
     expect(jobHrefs()).toEqual([]);
     fireEvent.click(screen.getByTestId('waiting-toggle'));
     await screen.findAllByText('IR-TEST-031');
     expect(jobHrefs()).toEqual([]);
+  });
+
+  it('the CEO can create a งานนำเข้า from ขาเข้า on the merged page', async () => {
+    show({ id: 4, role: 'ceo' });
+    expect(await screen.findByTestId('import-job-new')).toBeTruthy();
+  });
+
+  it('a sales rep lands on their own ขาเข้า list and reads ขาออก without any action', async () => {
+    show({ id: 3, role: 'sales' }, { sales: true });
+    expect(await screen.findByText('ยังไม่มีของที่สั่ง')).toBeTruthy();
+    expect(api.shipmentRounds.list).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('leg-out'));
+    expect((await screen.findByTestId('leg-readonly-note')).textContent).toContain('แท็บ ส่งของ');
+    expect(await screen.findByText('ลูกค้า ทดสอบ')).toBeTruthy();
+    expect(screen.queryByRole('checkbox')).toBeNull();
   });
 });

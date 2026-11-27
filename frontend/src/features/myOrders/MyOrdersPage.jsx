@@ -45,7 +45,7 @@ const qtyText = (r) => {
  * no-project orders (sample / showroom / stock), with unplanned quantity as a รอจัดรอบ row. A project row opens that deal's
  * ส่งของ tab; a no-project row opens the lot sheet. The sales manager sees the team's; the showroom grant sees SHOWROOM orders.
  */
-export function MyOrdersPage({ user, showToast }) {
+export function MyOrdersPage({ user, showToast, embedded = false }) {
   const [chip, setChip] = useState('ALL');
   const [search, setSearch] = useState('');
   const [rep, setRep] = useState('');
@@ -122,6 +122,7 @@ export function MyOrdersPage({ user, showToast }) {
       <span className="flex shrink-0 flex-col items-end gap-1 text-right"><b className="tabular-nums">{qtyText(r)}</b>{openControl(r)}</span>
     </div>
   );
+  const newOrder = canCreate && !sidePanel ? <Button type="button" variant="primary" onClick={() => setCreating(true)} data-testid="new-order">+ สั่งของไม่มีโครงการ</Button> : null;
   const table = (list, title, testId) => (list.length > 0 ? (
     <section className="flex flex-col gap-2" data-testid={testId}>
       <h2 className="m-0 flex items-baseline gap-2 text-base font-bold">{title}<span className="text-2xs font-normal text-text-muted">{list.length} รายการ</span></h2>
@@ -131,12 +132,12 @@ export function MyOrdersPage({ user, showToast }) {
 
   return (
     <PageStack>
-      <ShippingSwitch user={user} current="orders" />
-      <PageHeader
+      {embedded ? null : <ShippingSwitch user={user} current="orders" />}
+      {embedded ? (newOrder ? <div className="flex justify-end">{newOrder}</div> : null) : <PageHeader
         title="การขนส่ง"
         subtitle="ของนำเข้าของทั้งทีมขายในที่เดียว กรองดูตามผู้ดูแล โครงการ หรือสถานะได้"
-        actions={canCreate && !sidePanel ? <Button type="button" variant="primary" onClick={() => setCreating(true)} data-testid="new-order">+ สั่งของไม่มีโครงการ</Button> : null}
-      />
+        actions={newOrder}
+      />}
       <div className={cn('grid grid-cols-1 gap-4', sidePanel && 'min-[1041px]:grid-cols-[minmax(0,1fr)_24rem] min-[1041px]:items-start')}>
         <div className="flex min-w-0 flex-col gap-4">
       <FilterBar>

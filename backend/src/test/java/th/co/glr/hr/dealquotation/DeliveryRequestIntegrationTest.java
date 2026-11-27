@@ -688,7 +688,7 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         assertThat(trips.home(manager).waiting()).extracting(r -> r.roundId()).contains(rid[0], rid[1], rid[2]);
         assertThat(trips.home(manager).waiting().get(0).requestedDate()).as("requested dates sort first").isEqualTo(TODAY.plusDays(3));
         refusal(() -> trips.home(warehouse), HttpStatus.FORBIDDEN);
-        refusal(() -> trips.home(salesActor), HttpStatus.FORBIDDEN);
+        assertThat(trips.home(salesActor).waiting()).as("the sales team reads the outbound leg").extracting(r -> r.roundId()).contains(rid[0]);
         UserPrincipal importUser = actor(manager.id(), "import"); // import reads the outbound leg, never writes it
         assertThat(trips.home(importUser).waiting()).extracting(r -> r.roundId()).contains(rid[0]);
         var all = List.of(rid[0], rid[1], rid[2]);
@@ -696,6 +696,7 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
             HttpStatus.BAD_REQUEST);
         var request = new th.co.glr.hr.deliverytrip.DeliveryTripDtos.TripRequest(TODAY.plusDays(1), "สายบางนา", "เช้า", null, null, all);
         refusal(() -> trips.create(request, importUser), HttpStatus.FORBIDDEN);
+        refusal(() -> trips.create(request, salesActor), HttpStatus.FORBIDDEN);
         var trip = trips.create(request, manager);
         assertThat(trips.home(manager).waiting()).extracting(r -> r.roundId()).doesNotContain(rid[0], rid[1], rid[2]);
         refusal(() -> trips.create(request, manager), HttpStatus.CONFLICT);
