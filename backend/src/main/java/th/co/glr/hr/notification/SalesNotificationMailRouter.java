@@ -1,8 +1,13 @@
 package th.co.glr.hr.notification;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import th.co.glr.hr.notification.SalesMailRecipientRepository.SalesMailRecipient;
 
@@ -90,10 +95,41 @@ public class SalesNotificationMailRouter implements SalesNotificationMailer {
     private final NotificationEmailService emailService;
     private final SalesMailRecipientRepository recipients;
 
+    /** Copied on the warehouse's document-check mail; comma-separated, set on the deployment only. */
+    private final List<String> documentCheckCc;
+
+    @Autowired
     public SalesNotificationMailRouter(NotificationEmailService emailService,
-                                       SalesMailRecipientRepository recipients) {
+                                       SalesMailRecipientRepository recipients,
+                                       @Value("${app.mail.delivery-check-cc:}") String documentCheckCc) {
         this.emailService = emailService;
         this.recipients = recipients;
+        this.documentCheckCc = Arrays.stream(documentCheckCc.split(",")).map(String::trim)
+            .filter(a -> !a.isEmpty()).toList();
+    }
+
+    public SalesNotificationMailRouter(NotificationEmailService emailService,
+                                       SalesMailRecipientRepository recipients) {
+        this(emailService, recipients, "");
+    }
+
+    @Override
+    public void emailDocumentCheck(List<Long> managerIds, String title, String message, String link) {
+        AfterCommit.run(() -> {
+            // One mail, one To: the first manager with an address; any others join the cc.
+            List<String> addresses = managerIds.stream()
+                .map(id -> recipients.findRecipient(id)
+                    .map(r -> r.hasOwnEmail() ? r.email() : r.hasManagerEmail() ? r.managerEmail() : null)
+                    .orElse(null))
+                .filter(Objects::nonNull)
+                .toList();
+            List<String> all = Stream.concat(addresses.stream(), documentCheckCc.stream()).distinct().toList();
+            if (all.isEmpty()) {
+                log.error("Document-check email DROPPED: no manager or cc address — link={}", link);
+                return;
+            }
+            emailService.sendToPost(all.get(0), all.subList(1, all.size()), "ผู้จัดการฝ่ายคลัง", title, message, link);
+        });
     }
 
     @Override

@@ -55,6 +55,30 @@ function QuotationChoice({ quotations, value, onChange }) {
   );
 }
 
+const HANDOVER = [
+  [false, 'ส่งให้ลูกค้า', 'คลังจัดรอบส่งตามวันที่ที่ขอ'],
+  [true, 'ลูกค้ามารับเอง', 'ไม่ต้องจัดรอบส่ง ลูกค้ามารับที่คลัง'],
+];
+
+/** วิธีรับของ: delivery (the default) or the customer collects it. */
+function HandoverChoice({ value, disabled, onChange }) {
+  return (
+    <fieldset className="m-0 flex flex-col gap-2 border-0 p-0" data-testid="handover-choice">
+      <legend className={cn(SECTION_LABEL, 'mb-2 w-full p-0')}>วิธีรับของ</legend>
+      {HANDOVER.map(([pickup, label, hint]) => (
+        // eslint-disable-next-line jsx-a11y/label-has-associated-control -- the radio is nested in its label
+        <label key={label} className={cn('flex min-h-14 cursor-pointer items-center gap-3 rounded-md border-[1.5px] px-3 py-2', value === pickup ? 'border-primary bg-primary-bg' : 'border-border-input bg-surface')}>
+          <input type="radio" name="delivery-handover" className="size-5 accent-[var(--color-primary)]" checked={value === pickup} disabled={disabled} onChange={() => onChange(pickup)} />
+          <span className="flex min-w-0 flex-col">
+            <b className="text-[0.9375rem]">{label}</b>
+            <small className="text-xs text-text-muted">{hint}</small>
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 /**
  * `order`: the response's order ref; `approvedQuotations`: its approved quotations; `summary`: the deal's summary.
  * `onCreateIr`: opens the IR generator (the host closes the sheet first and brings the rep back). Closing keeps the draft.
@@ -263,6 +287,12 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
           />
         ) : null}
 
+        <HandoverChoice
+          value={Boolean(round?.customerPickup)}
+          disabled={!round}
+          onChange={(pickup) => { setRound((r) => (r ? { ...r, customerPickup: pickup } : r)); savePatch.mutate({ customerPickup: pickup }); }}
+        />
+
         {order.unconfirmed ? (
           <p className="m-0 text-sm text-text-secondary" data-testid="lines-from-quotation">รายการสินค้าจะมาจากใบเสนอราคาที่เลือกเมื่อกดส่ง</p>
         ) : null}
@@ -384,7 +414,7 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
         </section>
 
         <label htmlFor="round-requested-date" className="grid gap-1.5">
-          <span className={SECTION_LABEL}>วันที่ต้องการให้ส่ง <span className="font-normal text-text-muted">ไม่บังคับ</span></span>
+          <span className={SECTION_LABEL}>{round?.customerPickup ? 'วันที่ลูกค้าจะมารับ' : 'วันที่ต้องการให้ส่ง'} <span className="font-normal text-text-muted">ไม่บังคับ</span></span>
           <ThaiDateInput
             id="round-requested-date"
             min={bangkokTodayIso()}

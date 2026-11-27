@@ -12,14 +12,16 @@ public final class DeliveryTripDtos {
      * {@code remaining}: pieces still to deliver. */
     public record RoundItem(long roundId, long ticketId, int roundNo, String status, String displayCode, String customerName,
                             String projectName, String ownerName, String note, Instant sentAt, Instant forwardedAt,
-                            java.math.BigDecimal remaining, boolean delayed, String state, LocalDate requestedDate) {}
+                            java.math.BigDecimal remaining, boolean delayed, String state, LocalDate requestedDate,
+                            boolean customerPickup) {}
 
     public record Trip(long id, LocalDate deliveryDate, String route, String timeSlot, String vehicle, String note,
                        String status, List<RoundItem> rounds) {}
 
-    /** {@code waiting}: invoiced, goods left to deliver, on no open trip. {@code trips}: every open trip plus this week's. */
+    /** {@code waiting}: invoiced, goods left to deliver, on no open trip, to be delivered. {@code pickups}: the same for
+     * rounds the customer collects (ลูกค้ามารับเอง), which never take a trip. {@code trips}: every open trip plus this week's. */
     public record Home(LocalDate today, List<RoundItem> toCheck, List<RoundItem> toInvoice, List<RoundItem> waiting,
-                       List<Trip> trips, List<String> routes) {}
+                       List<RoundItem> pickups, List<Trip> trips, List<String> routes) {}
 
     public record TripRequest(LocalDate deliveryDate, String route, String timeSlot, String vehicle, String note,
                               List<Long> roundIds) {}
