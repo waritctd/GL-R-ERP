@@ -1,0 +1,45 @@
+import React from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { ShippingPage } from './ShippingPage.jsx';
+import { api } from '../../api/index.js';
+
+globalThis.React = React;
+
+vi.mock('../../api/index.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  api: { tickets: { list: vi.fn() }, shipmentRounds: { list: vi.fn() }, deliveryTrips: { home: vi.fn() } },
+}));
+
+const waitingRound = { roundId: 5, ticketId: 9, roundNo: 1, status: 'INVOICED', displayCode: 'PR-TEST-0009', customerName: 'ลูกค้า ทดสอบ', remaining: 10, state: null };
+const home = { today: '2026-11-27', toCheck: [], toInvoice: [], waiting: [waitingRound], pickups: [], trips: [], routes: [] };
+
+function show(user) {
+  vi.clearAllMocks();
+  vi.mocked(api.shipmentRounds.list).mockResolvedValue({ rounds: [], waiting: [] });
+  vi.mocked(api.tickets.list).mockResolvedValue({ tickets: [] });
+  vi.mocked(api.deliveryTrips.home).mockResolvedValue(home);
+  render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><ShippingPage user={user} showToast={() => {}} /></MemoryRouter></QueryClientProvider>);
+}
+
+describe('ShippingPage', () => {
+  it('import reads the outbound leg without any action', async () => {
+    show({ id: 1, role: 'import' });
+    fireEvent.click(await screen.findByTestId('leg-out'));
+    expect((await screen.findByTestId('leg-readonly-note')).textContent).toContain('ขาออกดูได้อย่างเดียว');
+    expect(await screen.findByText('ลูกค้า ทดสอบ')).toBeTruthy();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('the warehouse planner lands on ขาออก with checkboxes, and sees ขาเข้า read-only', async () => {
+    show({ id: 2, role: 'warehouse', canPlanDeliveries: true });
+    expect((await screen.findAllByRole('checkbox')).length).toBe(1);
+    expect(screen.queryByTestId('leg-readonly-note')).toBeNull();
+    fireEvent.click(screen.getByTestId('leg-in'));
+    expect((await screen.findByTestId('leg-readonly-note')).textContent).toContain('ขาเข้าดูได้อย่างเดียว');
+    expect(screen.queryByTestId('plan-round')).toBeNull();
+    expect(api.tickets.list).not.toHaveBeenCalled();
+  });
+});

@@ -159,7 +159,7 @@ const PATH_GUARDS = [
   // TicketService.FULFILMENT_ROLES {import, ceo}.
   // ของที่ฉันสั่ง: MyIncomingService serves sales, sales_manager, ceo and read-all holders (OversightReader).
   { test: (p) => p === '/my-orders', can: (u) => hasPermission(u.role, 'canViewMyOrders') || isOversightReader(u) || Boolean(u.canCreateQuotation) || Boolean(u.canSeeShowroomOrders) },
-  { test: (p) => p === '/fulfilment' || p.startsWith('/fulfilment/'), can: (u) => hasPermission(u.role, 'canActOnFulfilment') || isOversightReader(u) },
+  { test: (p) => p === '/fulfilment' || p.startsWith('/fulfilment/'), can: (u) => hasPermission(u.role, 'canActOnFulfilment') || isOversightReader(u) || Boolean(u.canPlanDeliveries) },
   // Matches the launcher's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
   // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD).
@@ -339,6 +339,8 @@ const LOCK_EXEMPTIONS = [
   { test: isReaderPath, can: (u) => isOversightReader(u) },
   // The grants that open ของที่ฉันสั่ง (no-project orders, showroom orders): this one path, no reader pages.
   { test: (p) => p.split(/[?#]/)[0] === '/my-orders', can: isMyOrdersGrantUser },
+  // The warehouse planner reads the inbound rounds on the merged การขนส่ง page (the backend lets the planner read them, never write).
+  { test: (p) => p === '/fulfilment' || p.startsWith('/fulfilment/'), can: (u) => Boolean(u.canPlanDeliveries) },
 ];
 
 export function canAccessPath(path, user) {

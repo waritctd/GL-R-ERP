@@ -15,15 +15,20 @@ import { cn } from '../../utils/cn.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { AdvanceRoundSheet } from './AdvanceRoundSheet.jsx';
 import { DownloadIrButton } from './DownloadIrButton.jsx';
+import { IrNo } from './IrNo.jsx';
+import { canAccessPath } from '../../app/permissions.js';
 import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import {
-  compareRoundEta, formatQty, irRows, lotProjectName, lotProduct, lotWho, lotWhoSub, roundIrSummary, roundProjectNames, roundReference, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
+  compareRoundEta, formatQty, irRows, lotProjectName, lotProduct, lotWho, lotWhoSub, roundIrSummary, roundProjectNames, roundArrivalKey, roundReference, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
 } from './shipmentRounds.js';
 import { useRoundUndo } from './useRoundUndo.jsx';
 
 // Whole literals (Tailwind JIT), one track per column: the waiting table has 6, the rounds table 7.
 const WAITING_GRID = 'grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,1.6fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,1fr)]';
 const ROUNDS_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_minmax(11rem,0.8fr)]';
+
+const arrivalText = (r) => (r.facts?.arrivedOn ? `ถึงไทยแล้ว ${formatThaiDate(r.facts.arrivedOn)}`
+  : r.facts?.etaOn ? formatThaiDate(r.facts.etaOn) : 'ยังไม่ระบุ');
 
 /** A round's IR numbers; past `limit` the rest stay one tap away. */
 function IrChips({ rows, limit }) {
@@ -48,10 +53,14 @@ function IrChips({ rows, limit }) {
  * advancing it moves every IR on it. ISSUED IRs with quantity on no round wait in "รอจัดรอบขนส่ง" (planning a round
  * comes in a later slice). One request feeds the page (GET /api/shipment-rounds); the IR-level actions (lead time,
  * order email, PDFs) live on each IR's own page, which every IR row links to.
+ * `readOnly`: the warehouse planner reads the rounds (no actions, no legacy-deal list). `embedded`: inside the merged
+ * การขนส่ง page, which owns the title and the leg switch.
  */
-export function ImportFulfilmentPage({ user, showToast }) {
+export function ImportFulfilmentPage({ user, showToast, readOnly = false, embedded = false }) {
   const queryClient = useQueryClient();
-  const editable = user?.role === 'import' || user?.role === 'ceo';
+  const editable = (user?.role === 'import' || user?.role === 'ceo') && !readOnly;
+  const canOpenDeal = canAccessPath('/import/deals/1', user);
+  const canDownloadIr = user?.role !== 'warehouse'; // the stored IR PDF is import's (cost and factory data)
   const [step, setStep] = useState('ALL');
   const [waitingPicked, setWaitingPicked] = useState(false);
   const [search, setSearch] = useState('');
@@ -71,6 +80,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
   const ticketsQuery = useQuery({
     queryKey: queryKeys.ticketList(''),
     queryFn: () => api.tickets.list({}).then((r) => r?.tickets ?? []),
+    enabled: !readOnly,
   });
   const rounds = useMemo(() => listQuery.data?.rounds ?? [], [listQuery.data]);
   const waiting = useMemo(() => listQuery.data?.waiting ?? [], [listQuery.data]);
@@ -106,7 +116,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
     {
       key: 'ir',
       header: 'ใบขอซื้อ',
-      render: (w) => (w.ticketId == null ? <code>{w.docNumber}</code> : <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>),
+      render: (w) => (w.ticketId == null ? <code>{w.docNumber}</code> : <IrNo row={w} open={canOpenDeal} />),
     },
     {
       key: 'who',
@@ -130,7 +140,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
       render: (w) => (
         <span className="flex flex-col items-start gap-1">
           <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
-          {w.ticketId == null ? <DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
+          {w.ticketId == null ? <DownloadIrButton hidden={!canDownloadIr} importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
         </span>
       ),
     },
@@ -161,8 +171,8 @@ export function ImportFulfilmentPage({ user, showToast }) {
         const shipping = roundSummaryLine(r);
         return (
           <span className="flex flex-col gap-0.5">
-            <span className={r.facts?.etaOn ? 'text-sm font-semibold' : 'text-xs text-text-muted'}>
-              {r.facts?.etaOn ? formatThaiDate(r.facts.etaOn) : 'ยังไม่ระบุ'}
+            <span className={roundArrivalKey(r) ? 'text-sm font-semibold' : 'text-xs text-text-muted'}>
+              {arrivalText(r)}
             </span>
             {shipping && <span className="text-2xs text-text-muted">{shipping}</span>}
           </span>
@@ -203,13 +213,13 @@ export function ImportFulfilmentPage({ user, showToast }) {
       <span className="flex min-w-0 flex-col gap-0.5">
         <b className="text-sm">{w.factoryName}</b>
         <small className="text-text-muted">
-          {w.ticketId == null ? <code>{w.docNumber}</code> : <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>}
+          {w.ticketId == null ? <code>{w.docNumber}</code> : <IrNo row={w} open={canOpenDeal} />}
           {' · '}{lotWho(w)} · เหลือ {w.lines.map((l) => `${formatQty(l.remainingQty)} ${l.unit ?? ''}`.trim()).join(', ')}
         </small>
       </span>
       <span className="flex shrink-0 flex-col items-end gap-1">
         <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
-        {w.ticketId == null ? <DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
+        {w.ticketId == null ? <DownloadIrButton hidden={!canDownloadIr} importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
       </span>
     </div>
   );
@@ -227,7 +237,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
           </div>
           <span className="shrink-0"><StatusBadge tone={stepTone(r.importStep)}>{stepPillText(r.importStep)}</StatusBadge></span>
         </div>
-        <p className="m-0 text-sm font-semibold">คาดว่าถึงไทย · {r.facts?.etaOn ? formatThaiDate(r.facts.etaOn) : 'ยังไม่ระบุ'}</p>
+        <p className="m-0 text-sm font-semibold">{r.facts?.arrivedOn ? '' : 'คาดว่าถึงไทย · '}{arrivalText(r)}</p>
         {roundSummaryLine(r) ? <p className="m-0 text-sm text-text-muted">{roundSummaryLine(r)}</p> : null}
         <IrChips rows={irRows(r)} limit={2} />
         <div className="flex items-baseline justify-between gap-3 text-sm">
@@ -249,8 +259,8 @@ export function ImportFulfilmentPage({ user, showToast }) {
     && (ticketsQuery.data ?? []).every((t) => !['IR_ISSUED', 'IR_SENT', 'SHIPPING'].includes(t.fulfillmentStatus));
   return (
     <PageStack>
-      <ShippingSwitch user={user} current="rounds" />
-      <PageHeader
+      {embedded ? null : <ShippingSwitch user={user} current="rounds" />}
+      {embedded ? null : <PageHeader
         title="การขนส่ง"
         subtitle="เลื่อนทีละรอบ ทุกใบขอซื้อในรอบขยับพร้อมกัน"
         actions={(
@@ -258,7 +268,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
             <Icon name="refresh" />
           </Button>
         )}
-      />
+      />}
 
       {waiting.length > 0 ? (
         <section className="flex flex-wrap items-center gap-3 rounded-md border border-warning-border bg-warning-bg-soft px-4 py-2.5 mobile:flex-col mobile:items-stretch" data-testid="waiting-banner">
@@ -399,7 +409,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
         </>
       )}
 
-      <p className="text-2xs text-text-muted">การส่งมอบสินค้าให้ลูกค้าไม่ได้อยู่ในหน้านี้ — บันทึกที่แท็บ ส่งของ ของงานนั้น</p>
+      {embedded ? null : <p className="text-2xs text-text-muted">การส่งมอบสินค้าให้ลูกค้าไม่ได้อยู่ในหน้านี้ — บันทึกที่แท็บ ส่งของ ของงานนั้น</p>}
 
       {advancing ? (
         <AdvanceRoundSheet

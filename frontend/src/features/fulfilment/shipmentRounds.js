@@ -94,12 +94,15 @@ export function roundTitle(round) {
   return [round.factoryName, roundProjectNames(round), round.facts?.label].filter(Boolean).join(' · ') || `รอบขนส่ง #${round.id}`;
 }
 
-/** Orders rounds by Thailand ETA; rounds with no ETA stay last in either direction. */
+/** The date a round is placed by: the day it reached Thailand, else its ETA. */
+export const roundArrivalKey = (r) => r.facts?.arrivedOn || r.facts?.etaOn || null;
+
+/** Orders rounds by arrival (arrivedOn, else ETA); rounds with neither stay last in either direction; ties by id. */
 export function compareRoundEta(a, b, descending = false) {
-  const first = a.facts?.etaOn;
-  const second = b.facts?.etaOn;
-  if (!first || !second) return Number(!first) - Number(!second);
-  return descending ? second.localeCompare(first) : first.localeCompare(second);
+  const first = roundArrivalKey(a);
+  const second = roundArrivalKey(b);
+  if (!first || !second) return Number(!first) - Number(!second) || a.id - b.id;
+  return (descending ? second.localeCompare(first) : first.localeCompare(second)) || a.id - b.id;
 }
 
 /** "ล็อต 1 จาก 2" when the line is split (or part of it still waits for a round), else "ครบทั้งใบ". */

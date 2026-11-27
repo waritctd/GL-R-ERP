@@ -8,7 +8,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import { RoundText, tripDayLabel } from './tripText.jsx';
 
-export function TripSheet({ trip, today, onClose, onEdit, onChanged, onDelivered, onOpenOrder }) {
+export function TripSheet({ readOnly = false, trip, today, onClose, onEdit, onChanged, onDelivered, onOpenOrder }) {
   const [confirm, setConfirm] = useState(null); // 'deliver' | 'cancel'
   const [results, setResults] = useState([]);
   const delay = useMutation({
@@ -25,7 +25,7 @@ export function TripSheet({ trip, today, onClose, onEdit, onChanged, onDelivered
     onSuccess: onClose,
     onSettled: () => { setConfirm(null); return onChanged(); },
   });
-  const open = trip.status === 'OPEN';
+  const open = trip.status === 'OPEN' && !readOnly;
   const planned = trip.rounds.filter((r) => r.state === 'PLANNED');
   const delivered = results.filter((r) => r.delivered).length;
   const blocked = results.filter((r) => !r.delivered);
@@ -77,7 +77,7 @@ export function TripSheet({ trip, today, onClose, onEdit, onChanged, onDelivered
                   </div>
                   {refused ? <p role="alert" className="m-0 text-sm text-danger">ยังส่งไม่ได้: {refused.reason}</p> : null}
                   <div className="flex justify-between gap-2">
-                    <Button type="button" variant="text" className="min-h-11" onClick={() => onOpenOrder(r)}>ดูเอกสาร</Button>
+                    {readOnly ? <span /> : <Button type="button" variant="text" className="min-h-11" onClick={() => onOpenOrder(r)}>ดูเอกสาร</Button>}
                     {open && r.state === 'PLANNED' ? (
                       <Button type="button" variant="secondary" disabled={busy} onClick={() => delay.mutate({ roundId: r.roundId, delayed: true })}>เลื่อนส่ง</Button>
                     ) : null}
