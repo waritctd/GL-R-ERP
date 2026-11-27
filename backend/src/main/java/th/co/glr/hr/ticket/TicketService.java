@@ -2094,6 +2094,12 @@ public class TicketService {
         // Malformed input (an empty list, a day outside the window) is a 400 before the business refusal below.
         java.time.Instant deliveredAt = backDatedDeliveryInstant(request.deliveredOn(), s.id());
         DeliveryTarget target = resolveDeliveryTarget(s.id(), request.deliveryRequestId(), request.noInvoiceNote());
+        // A customer-pickup round (ลูกค้ามารับเอง) records who collected, whichever endpoint reached it.
+        boolean pickup = tickets.isCustomerPickupRound(target.linkId());
+        String collector = request.recipientName() == null ? "" : request.recipientName().trim();
+        if (pickup && collector.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ระบุชื่อผู้มารับของ");
+        }
         TicketRepository.InvoicedRound round = target.invoiced();
         String noInvoiceNote = round == null ? requireNoInvoiceNote(request.noInvoiceNote()) : null;
         String source = request.source() == null ? "" : request.source().trim().toUpperCase();
@@ -2163,7 +2169,14 @@ public class TicketService {
         tickets.addEventWithDocument(s.id(), actor.id(), actor.name(),
             TicketEventKind.DELIVERY_RECORDED, updatedSummary.status(), updatedSummary.status(), message,
             RelatedDocumentType.DELIVERY_RECORD, deliveryId);
-        if (s.createdById() != actor.id() && !tickets.isCustomerPickupRound(target.linkId())) {
+        if (pickup) {
+            String collected = DealNoticeText.dealLabel(s.code(), s.customerName())
+                + (round == null ? "" : " · รอบส่งที่ " + round.roundNo())
+                + " · ลูกค้ามารับของแล้ว โดย " + collector + " · บันทึกโดย " + actor.name();
+            tickets.roundSalesPeople(target.linkId()).stream().filter(id -> id != actor.id()).forEach(id ->
+                notifications.notifyEmployeeAtLinkTitled(id, "DELIVERY_TRIP", "ลูกค้ามารับของแล้ว", collected,
+                    "/tickets/" + s.id() + "?tab=ship"));
+        } else if (s.createdById() != actor.id()) {
             BigDecimal total = normalized.stream().map(RecordDeliveryRequest.Line::qty).reduce(BigDecimal.ZERO, BigDecimal::add);
             notifications.notifyEmployeeAtLink(s.createdById(), TicketEventKind.DELIVERY_RECORDED,
                 "ส่งของแล้ว " + qtyText(total) + " แผ่น\n" + DealNoticeText.dealLabel(s.code(), s.customerName())

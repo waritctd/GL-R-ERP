@@ -112,21 +112,6 @@ public class DeliveryRequestRepository {
             new MapSqlParameterSource().addValue("id", id).addValue("p", pickup));
     }
 
-    /** The order's owner, keyer and the person who sent the round: the sales people to tell (the trip notices' rule). */
-    public java.util.Set<Long> salesPeople(long id) {
-        var ids = new java.util.LinkedHashSet<Long>();
-        jdbc.query("""
-            SELECT t.created_by, t.keyed_by, r.requested_by FROM sales.delivery_request r
-              JOIN sales.ticket t ON t.ticket_id = r.ticket_id WHERE r.delivery_request_id = :id
-            """, Map.of("id", id), rs -> {
-                for (int i = 1; i <= 3; i++) {
-                    long v = rs.getLong(i);
-                    if (!rs.wasNull()) ids.add(v);
-                }
-            });
-        return ids;
-    }
-
     public boolean onOpenTrip(long id) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
             SELECT EXISTS (SELECT 1 FROM sales.delivery_trip_round WHERE delivery_request_id = :id AND state = 'PLANNED')

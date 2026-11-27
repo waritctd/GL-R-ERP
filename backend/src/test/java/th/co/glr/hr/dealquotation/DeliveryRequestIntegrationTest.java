@@ -753,6 +753,8 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         assertThat(rounds.setPickup(rid, true, manager).customerPickup()).isTrue();
 
         refusal(() -> rounds.recordDelivery(rid, new th.co.glr.hr.ticket.RoundDeliveryRequest(null, true, null, "  ", null, null), manager), HttpStatus.BAD_REQUEST);
+        refusal(() -> ticketService.completeDelivery(ticket, new th.co.glr.hr.ticket.CompleteDeliveryRequest(null, null), salesActor),
+            HttpStatus.BAD_REQUEST); // the deal-level path reaches the same pickup round
         rounds.recordDelivery(rid, new th.co.glr.hr.ticket.RoundDeliveryRequest(null, true, null, "คุณสมชาย", null, null), manager);
         assertThat(notices(salesActor.id(), "DELIVERY_TRIP")).singleElement().satisfies(m -> assertThat(m).contains("คุณสมชาย"));
         assertThat(rounds.list(ticket, salesActor).rounds().get(0).collected().by()).isEqualTo("คุณสมชาย");

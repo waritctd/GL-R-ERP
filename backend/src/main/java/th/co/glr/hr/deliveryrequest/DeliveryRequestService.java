@@ -238,29 +238,12 @@ public class DeliveryRequestService {
                 throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
             }
         }
-        String collector = request == null || request.recipientName() == null ? "" : request.recipientName().trim();
-        if (round.customerPickup() && collector.isEmpty()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ระบุชื่อผู้มารับของ");
-        }
         ticketService.recordRoundDelivery(round.ticketId(), rid, request, actor);
-        if (round.customerPickup()) {
-            tellPickup(round, collector, actor);
-        }
         if (WarehouseStaff.is(actor)) {
             boolean grant = holdsGrant(actor);
             return toDto(rounds.findById(rid).orElseThrow(), summary(round.ticketId()), false, true, grant, voidCtx(round.ticketId(), grant));
         }
         return listFor(round.ticketId(), actor).rounds().stream().filter(d -> d.id() == rid).findFirst().orElseThrow();
-    }
-
-    /** The order's sales people hear that the customer collected the goods (TicketService leaves its own notice out for a pickup round). */
-    private void tellPickup(DeliveryRequestRepository.Row round, String collector, UserPrincipal actor) {
-        TicketSummaryDto s = summary(round.ticketId());
-        String message = displayCode(s) + " รอบส่งที่ " + round.roundNo() + " · " + buyerName(s, round.quotationNumber())
-            + " · ลูกค้ามารับของแล้ว โดย " + collector + " · บันทึกโดย " + actor.name();
-        rounds.salesPeople(round.id()).stream().filter(id -> id != actor.id()).forEach(id ->
-            notifications.notifyEmployeeAtLinkTitled(id, "DELIVERY_TRIP", "ลูกค้ามารับของแล้ว", message,
-                "/tickets/" + round.ticketId() + "?tab=ship"));
     }
 
     /** The warehouse manager switches an INVOICED round with goods left between pickup and delivery (the customer changed
